@@ -1,0 +1,153 @@
+---
+import { isCurrent, withBase } from '../lib/notes';
+
+const path = Astro.url.pathname;
+const nav = [
+  { href: '/',        label: '笔记' },
+  { href: '/tags/',   label: '标签' },
+  { href: '/about/',  label: '关于' },
+];
+---
+
+<header class="site">
+  <div class="wrap bar">
+    <a class="brand" href={withBase('/')}>
+      <span class="stamp" aria-hidden="true">記</span>
+      <span class="brand-text">
+        <b>笔记本</b>
+        <em class="hand">notes &amp; scraps</em>
+      </span>
+    </a>
+
+    <nav aria-label="主导航">
+      {nav.map((item) => (
+        <a href={withBase(item.href)} class:list={['nav-link', { on: isCurrent(path, item.href) }]}>
+          {item.label}
+        </a>
+      ))}
+    </nav>
+
+    <button id="theme-toggle" type="button" class="toggle" aria-label="切换深浅色">
+      <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+        <g class="sun"><circle cx="12" cy="12" r="4.2" /><path d="M12 2.6v2M12 19.4v2M2.6 12h2M19.4 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M18.7 5.3l-1.4 1.4M6.7 17.3l-1.4 1.4" /></g>
+        <g class="moon"><path d="M20 13.4A8 8 0 1 1 10.6 4a6.4 6.4 0 0 0 9.4 9.4Z" /></g>
+      </svg>
+    </button>
+  </div>
+</header>
+
+<script>
+  function initToggle() {
+    const btn = document.getElementById('theme-toggle');
+    if (!btn || btn.dataset.bound) return;
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', () => {
+      const root = document.documentElement;
+      const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      const current = root.dataset.theme ?? (systemDark ? 'dark' : 'light');
+      const next = current === 'dark' ? 'light' : 'dark';
+      root.dataset.theme = next;
+      try { localStorage.setItem('theme', next); } catch (e) {}
+    });
+  }
+  initToggle();
+  document.addEventListener('astro:after-swap', initToggle);
+</script>
+
+<style>
+  .site {
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    border-bottom: 1px solid var(--rule);
+    background: color-mix(in srgb, var(--paper) 82%, transparent);
+    backdrop-filter: saturate(1.4) blur(10px);
+  }
+  .bar {
+    display: flex;
+    align-items: center;
+    gap: 1.25rem;
+    min-height: 62px;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: .6rem;
+    margin-right: auto;
+    text-decoration: none;
+  }
+  /* 朱砂印章 */
+  .stamp {
+    display: grid;
+    place-items: center;
+    width: 30px; height: 30px;
+    font-family: var(--font-serif);
+    font-size: 16px;
+    color: #fff;
+    background: var(--accent);
+    border-radius: 3px;
+    transform: rotate(-4deg);
+    box-shadow: var(--lift-1);
+    transition: transform .25s cubic-bezier(.2,.9,.3,1.3);
+  }
+  .brand:hover .stamp { transform: rotate(4deg) scale(1.06); }
+
+  .brand-text { display: flex; flex-direction: column; line-height: 1.15; }
+  .brand-text b { font-family: var(--font-serif); font-size: 1.02rem; font-weight: 600; }
+  .brand-text em { font-style: normal; font-size: .82rem; }
+
+  nav { display: flex; gap: .35rem; }
+  .nav-link {
+    position: relative;
+    padding: .3rem .6rem;
+    font-size: .9rem;
+    color: var(--ink-soft);
+    text-decoration: none;
+    border-radius: 3px;
+    transition: color .2s ease;
+  }
+  .nav-link:hover { color: var(--ink); }
+  /* 手绘感下划线：hover 时从左侧扫出 */
+  .nav-link::after {
+    content: '';
+    position: absolute;
+    left: .5rem; right: .5rem; bottom: .1rem;
+    height: 2px;
+    background: var(--accent);
+    border-radius: 2px;
+    transform: scaleX(0);
+    transform-origin: 0 50%;
+    transition: transform .28s cubic-bezier(.2,.8,.3,1);
+  }
+  .nav-link:hover::after { transform: scaleX(1); }
+  .nav-link.on { color: var(--ink); }
+  .nav-link.on::after { transform: scaleX(1); }
+
+  .toggle {
+    display: grid;
+    place-items: center;
+    width: 34px; height: 34px;
+    padding: 0;
+    color: var(--ink-soft);
+    background: transparent;
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    cursor: pointer;
+    transition: color .2s, border-color .2s, transform .2s;
+  }
+  .toggle:hover { color: var(--ink); border-color: var(--rule-strong); transform: rotate(-8deg); }
+  .toggle .moon { display: none; }
+  :global(:root[data-theme='dark']) .toggle .sun { display: none; }
+  :global(:root[data-theme='dark']) .toggle .moon { display: block; }
+  @media (prefers-color-scheme: dark) {
+    :global(:root:not([data-theme='light'])) .toggle .sun { display: none; }
+    :global(:root:not([data-theme='light'])) .toggle .moon { display: block; }
+  }
+
+  @media (max-width: 560px) {
+    .brand-text em { display: none; }
+    .bar { gap: .6rem; }
+    .nav-link { padding: .3rem .45rem; font-size: .85rem; }
+  }
+</style>

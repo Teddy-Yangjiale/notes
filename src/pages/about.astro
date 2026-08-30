@@ -1,0 +1,53 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { withBase } from '../lib/notes';
+---
+
+<BaseLayout title="关于" description="关于这个笔记本和写它的人">
+  <div class="wrap wrap--narrow">
+    <p class="hand kicker rise" style="--i:0">about —</p>
+    <h1 class="rise" style="--i:1">关于这个本子</h1>
+
+    <div class="prose rise" style="--i:2">
+      <p>
+        这里是我放 markdown 笔记的地方。写在本地，推到 GitHub，自动就出现在这一页的隔壁。
+      </p>
+
+      <h2>为什么是这样一个站</h2>
+      <p>
+        笔记软件很好用，但笔记锁在软件里就只有我自己看得到。
+        做成一个静态站，好处是文件还是我自己的 <code>.md</code>，
+        随时能搬走，也不依赖任何一家公司还开不开门。
+      </p>
+
+      <h2>怎么找东西</h2>
+      <p>
+        首页可以按标签实时筛选，<a href={withBase('/tags/')}>标签页</a> 是全部主题的总览。
+        也欢迎订阅 <a href={withBase('/rss.xml')}>RSS</a>。
+      </p>
+
+      <hr />
+      <p class="sig hand">— 随手记，慢慢补 —</p>
+    </div>
+  </div>
+</BaseLayout>
+
+<style>
+  .kicker { font-size: 1.6rem; margin-bottom: .1rem; }
+  h1 { font-size: clamp(1.7rem, 4vw, 2.4rem); margin-bottom: 1.5rem; }
+  .prose { font-size: 1.02rem; }
+  .prose > * + * { margin-top: 1.15em; }
+  .prose h2 { font-size: 1.25rem; margin-top: 2.2em; margin-bottom: .5em; }
+  .prose p { line-height: 1.85; }
+  .prose a { color: var(--accent); }
+  .prose code {
+    font-family: var(--font-mono);
+    font-size: .88em;
+    padding: .12em .38em;
+    background: var(--paper-sunk);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+  }
+  .prose hr { border: 0; border-top: 1px dashed var(--rule-strong); margin-block: 2.5em; }
+  .sig { font-size: 1.5rem; text-align: center; }
+</style>

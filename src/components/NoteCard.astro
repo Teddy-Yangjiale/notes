@@ -1,0 +1,157 @@
+---
+import { colorOf, fmtDate, swatchFor, withBase, type Note } from '../lib/notes';
+
+interface Props { note: Note; index?: number; }
+const { note, index = 0 } = Astro.props;
+const { title, date, tags, summary, pinned, draft } = note.data;
+const sw = colorOf(note);
+
+// 每张卡片一个稳定的小角度，制造"手贴上去"的不齐感
+const tilt = [(-0.9), 0.7, -0.4, 1.0, -0.7, 0.5][index % 6];
+---
+
+<article
+  class="card rise"
+  data-sw={sw}
+  data-tags={tags.join('|')}
+  style={`--i:${index % 12}; --tilt:${tilt}deg`}
+>
+  <span class="tape" aria-hidden="true"></span>
+  {pinned && <span class="pin" aria-hidden="true" title="置顶">📌</span>}
+
+  <a class="hit" href={withBase(`/${note.id}/`)} aria-label={title}></a>
+
+  <header>
+    <time datetime={date.toISOString()}>{fmtDate(date)}</time>
+    {draft && <span class="draft">草稿</span>}
+    <h2>{title}</h2>
+  </header>
+
+  {summary && <p class="summary">{summary}</p>}
+
+  {tags.length > 0 && (
+    <ul class="tags">
+      {tags.map((t) => (
+        <li>
+          <a class="tag" data-sw={swatchFor(t)} href={withBase(`/tags/${encodeURIComponent(t)}/`)}>
+            {t}
+          </a>
+        </li>
+      ))}
+    </ul>
+  )}
+</article>
+
+<style>
+  .card {
+    --sw: var(--sw-sand);
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: .55rem;
+    padding: 1.35rem 1.25rem 1.1rem;
+    background: var(--paper-card);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    box-shadow: var(--lift-1);
+    /* 只对 transform / shadow 做过渡，rise 的入场过渡由 .rise 负责 */
+    transition:
+      box-shadow .28s cubic-bezier(.2,.8,.3,1),
+      border-color .28s ease;
+  }
+  .card[data-sw='sand']  { --sw: var(--sw-sand); }
+  .card[data-sw='moss']  { --sw: var(--sw-moss); }
+  .card[data-sw='sky']   { --sw: var(--sw-sky); }
+  .card[data-sw='clay']  { --sw: var(--sw-clay); }
+  .card[data-sw='plum']  { --sw: var(--sw-plum); }
+  .card[data-sw='lilac'] { --sw: var(--sw-lilac); }
+
+  /* 和纸胶带 */
+  .tape {
+    position: absolute;
+    top: -8px;
+    left: 50%;
+    width: 74px;
+    height: 17px;
+    transform: translateX(-50%) rotate(-1.6deg);
+    background: color-mix(in srgb, var(--sw) 55%, var(--paper-card));
+    border-left: 1px dashed color-mix(in srgb, var(--sw) 75%, transparent);
+    border-right: 1px dashed color-mix(in srgb, var(--sw) 75%, transparent);
+    opacity: .85;
+    transition: transform .3s cubic-bezier(.2,.9,.3,1.2), width .3s ease;
+  }
+
+  .pin {
+    position: absolute;
+    top: .5rem; right: .6rem;
+    font-size: .85rem;
+    filter: saturate(.8);
+  }
+
+  /* 整卡可点，但标签链接仍可单独点击 */
+  .hit { position: absolute; inset: 0; z-index: 1; }
+
+  header { display: flex; flex-direction: column; gap: .3rem; }
+  time {
+    font-family: var(--font-mono);
+    font-size: .72rem;
+    letter-spacing: .04em;
+    color: var(--ink-faint);
+  }
+  .draft {
+    align-self: flex-start;
+    padding: 0 .4em;
+    font-size: .68rem;
+    color: var(--accent);
+    border: 1px dashed var(--accent);
+    border-radius: 2px;
+  }
+  h2 {
+    font-size: 1.14rem;
+    letter-spacing: .005em;
+    transition: color .2s ease;
+  }
+  .card:hover h2 { color: var(--accent); }
+
+  .summary {
+    font-size: .9rem;
+    line-height: 1.65;
+    color: var(--ink-soft);
+    display: -webkit-box;
+    -webkit-line-clamp: 4;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .35rem;
+    margin-top: auto;
+    padding: .55rem 0 0;
+    list-style: none;
+    border-top: 1px dashed var(--rule);
+  }
+  .tags li { display: contents; }
+  .tags .tag { position: relative; z-index: 2; }
+
+  /* 微翘起：hover 时抬起并回正，胶带跟着拉长一点 */
+  @media (hover: hover) {
+    .card:hover {
+      box-shadow: var(--lift-3);
+      border-color: var(--rule-strong);
+    }
+    .card.is-in:hover {
+      transform: translateY(-5px) rotate(calc(var(--tilt) * 0.25));
+      transition:
+        transform .34s cubic-bezier(.2,.9,.25,1.15),
+        box-shadow .28s ease,
+        border-color .28s ease;
+    }
+    .card:hover .tape { width: 88px; transform: translateX(-50%) rotate(.8deg); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .card, .card.is-in:hover, .tape { transition: none; transform: none; }
+  }
+</style>

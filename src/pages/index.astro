@@ -1,0 +1,198 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import NoteCard from '../components/NoteCard.astro';
+import { allNotes, allTags, swatchFor, withBase } from '../lib/notes';
+
+const notes = await allNotes();
+const tags = await allTags();
+---
+
+<BaseLayout title="笔记本" description="markdown 笔记、读书摘录与随手记录">
+  <div class="wrap">
+    <section class="intro rise" style="--i:0">
+      <p class="hand kicker">hello —</p>
+      <h1>把散落的 markdown，贴成一面墙</h1>
+      <p class="lede">
+        这里放我平时记的东西：项目笔记、读到的资料、想到一半的点子。
+        没整理完也照样贴上来，反正笔记本本来就是这样。
+      </p>
+    </section>
+
+    {tags.length > 0 && (
+      <div class="filter rise" style="--i:1" role="group" aria-label="按标签筛选">
+        <button type="button" class="chip on" data-tag="" aria-pressed="true">
+          全部 <span class="n">{notes.length}</span>
+        </button>
+        {tags.map((t) => (
+          <button
+            type="button"
+            class="chip"
+            data-tag={t.tag}
+            data-sw={swatchFor(t.tag)}
+            aria-pressed="false"
+          >
+            {t.tag} <span class="n">{t.count}</span>
+          </button>
+        ))}
+      </div>
+    )}
+
+    {notes.length === 0 ? (
+      <p class="empty">
+        还没有笔记。在 <code>src/content/notes/</code> 里丢一个 <code>.md</code> 文件就会出现在这儿。
+      </p>
+    ) : (
+      <div class="wall" id="wall">
+        {notes.map((note, i) => <NoteCard note={note} index={i} />)}
+      </div>
+    )}
+
+    <p class="nores" id="nores" hidden>这个标签下暂时没有笔记。</p>
+  </div>
+</BaseLayout>
+
+<script>
+  function initFilter() {
+    const wall = document.getElementById('wall');
+    const chips = Array.from(document.querySelectorAll<HTMLButtonElement>('.chip'));
+    const nores = document.getElementById('nores');
+    if (!wall || chips.length === 0) return;
+
+    const cards = Array.from(wall.querySelectorAll<HTMLElement>('.card'));
+
+    function apply(tag: string) {
+      let shown = 0;
+      cards.forEach((card) => {
+        const list = (card.dataset.tags ?? '').split('|').filter(Boolean);
+        const match = tag === '' || list.includes(tag);
+        if (match) {
+          // 重新编号，让筛选后的结果也按顺序错落地落下
+          card.style.setProperty('--i', String(shown % 12));
+          card.hidden = false;
+          card.classList.remove('is-out');
+          shown++;
+        } else {
+          card.classList.add('is-out');
+          card.hidden = true;
+        }
+      });
+      if (nores) nores.hidden = shown > 0;
+
+      const url = new URL(window.location.href);
+      if (tag) url.searchParams.set('tag', tag);
+      else url.searchParams.delete('tag');
+      history.replaceState(null, '', url);
+    }
+
+    function select(tag: string) {
+      chips.forEach((c) => {
+        const on = (c.dataset.tag ?? '') === tag;
+        c.classList.toggle('on', on);
+        c.setAttribute('aria-pressed', String(on));
+      });
+      apply(tag);
+    }
+
+    chips.forEach((chip) => {
+      chip.addEventListener('click', () => select(chip.dataset.tag ?? ''));
+    });
+
+    // 支持 ?tag=xxx 直接进入某个筛选状态
+    const initial = new URL(window.location.href).searchParams.get('tag') ?? '';
+    if (initial && chips.some((c) => c.dataset.tag === initial)) select(initial);
+  }
+
+  initFilter();
+  document.addEventListener('astro:after-swap', initFilter);
+</script>
+
+<style>
+  .intro { max-width: 40rem; margin-bottom: 2rem; }
+  .kicker { font-size: 1.6rem; margin-bottom: .1rem; }
+  .intro h1 {
+    font-size: clamp(1.75rem, 4.2vw, 2.6rem);
+    margin-bottom: .7rem;
+  }
+  .lede {
+    font-size: 1rem;
+    line-height: 1.8;
+    color: var(--ink-soft);
+    max-width: var(--measure);
+  }
+
+  .filter {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .4rem;
+    padding: .85rem 0 1.4rem;
+    margin-bottom: 1.6rem;
+    border-bottom: 1px dashed var(--rule);
+  }
+  .chip {
+    --sw: var(--rule-strong);
+    display: inline-flex;
+    align-items: baseline;
+    gap: .35em;
+    padding: .28rem .7rem;
+    font: inherit;
+    font-size: .84rem;
+    color: var(--ink-soft);
+    background: transparent;
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    cursor: pointer;
+    transition:
+      background .2s ease, color .2s ease, border-color .2s ease,
+      transform .22s cubic-bezier(.2,.9,.3,1.2);
+  }
+  .chip[data-sw='sand']  { --sw: var(--sw-sand); }
+  .chip[data-sw='moss']  { --sw: var(--sw-moss); }
+  .chip[data-sw='sky']   { --sw: var(--sw-sky); }
+  .chip[data-sw='clay']  { --sw: var(--sw-clay); }
+  .chip[data-sw='plum']  { --sw: var(--sw-plum); }
+  .chip[data-sw='lilac'] { --sw: var(--sw-lilac); }
+
+  .chip:hover {
+    color: var(--ink);
+    border-color: color-mix(in srgb, var(--sw) 70%, transparent);
+    transform: translateY(-1px) rotate(-.8deg);
+  }
+  .chip.on {
+    color: var(--ink);
+    background: color-mix(in srgb, var(--sw) 40%, var(--paper-card));
+    border-color: color-mix(in srgb, var(--sw) 62%, transparent);
+  }
+  .chip .n {
+    font-family: var(--font-mono);
+    font-size: .7em;
+    color: var(--ink-faint);
+  }
+  .chip.on .n { color: var(--ink-soft); }
+
+  /* 卡片墙：CSS 多栏做瀑布流，卡片不被拆断 */
+  .wall {
+    columns: 3 17rem;
+    column-gap: 1.15rem;
+  }
+  .wall > :global(.card) {
+    break-inside: avoid;
+    margin-bottom: 1.15rem;
+  }
+
+  .empty, .nores {
+    padding: 3rem 0;
+    text-align: center;
+    color: var(--ink-faint);
+  }
+  code {
+    font-family: var(--font-mono);
+    font-size: .85em;
+    padding: .1em .35em;
+    background: var(--paper-sunk);
+    border-radius: 2px;
+  }
+
+  @media (max-width: 640px) {
+    .wall { columns: 1; }
+  }
+</style>

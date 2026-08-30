@@ -1,0 +1,29 @@
+---
+import { withBase } from '../lib/notes';
+const year = new Date().getFullYear();
+---
+<footer>
+  <div class="wrap inner">
+    <p class="hand">— 写完就贴上去 —</p>
+    <p class="meta">
+      © {year} · 用 <a href="https://astro.build">Astro</a> 搭的 ·
+      <a href={withBase('/rss.xml')}>RSS</a>
+    </p>
+  </div>
+</footer>
+
+<style>
+  footer {
+    position: relative;
+    z-index: 1;
+    border-top: 1px solid var(--rule);
+    background: color-mix(in srgb, var(--paper-sunk) 55%, transparent);
+  }
+  .inner {
+    padding-block: 2rem 2.5rem;
+    text-align: center;
+  }
+  .hand { font-size: 1.5rem; margin-bottom: .35rem; }
+  .meta { font-size: .82rem; color: var(--ink-faint); }
+  .meta a { color: var(--ink-soft); }
+</style>

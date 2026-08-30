@@ -1,0 +1,344 @@
+---
+import 'katex/dist/katex.min.css';
+import { render } from 'astro:content';
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { allNotes, fmtDate, readingTime, swatchFor, withBase } from '../lib/notes';
+
+export async function getStaticPaths() {
+  const notes = await allNotes();
+  return notes.map((note, i) => ({
+    params: { slug: note.id },
+    props: {
+      note,
+      prev: notes[i + 1] ?? null,  // 更旧
+      next: notes[i - 1] ?? null,  // 更新
+    },
+  }));
+}
+
+const { note, prev, next } = Astro.props;
+const { Content, headings } = await render(note);
+const { title, date, updated, tags, summary, draft } = note.data;
+const mins = readingTime(note.body ?? '');
+const toc = headings.filter((h) => h.depth === 2 || h.depth === 3);
+---
+
+<BaseLayout title={title} description={summary} progress>
+  <article class="wrap post" data-pagefind-body>
+    <header class="head">
+      <a class="back" href={withBase('/')}>← 回到笔记墙</a>
+
+      <h1>{title}</h1>
+
+      <div class="meta">
+        <time datetime={date.toISOString()}>{fmtDate(date)}</time>
+        <span aria-hidden="true">·</span>
+        <span>约 {mins} 分钟</span>
+        {updated && (<><span aria-hidden="true">·</span><span>更新于 {fmtDate(updated)}</span></>)}
+        {draft && <span class="draft">草稿</span>}
+      </div>
+
+      {tags.length > 0 && (
+        <ul class="tags">
+          {tags.map((t) => (
+            <li>
+              <a class="tag" data-sw={swatchFor(t)} href={withBase(`/tags/${encodeURIComponent(t)}/`)}>{t}</a>
+            </li>
+          ))}
+        </ul>
+      )}
+    </header>
+
+    <div class="body">
+      {toc.length > 2 && (
+        <aside class="toc" data-pagefind-ignore>
+          <p class="toc-title hand">目录</p>
+          <nav>
+            <ul>
+              {toc.map((h) => (
+                <li class:list={[`d${h.depth}`]}>
+                  <a href={`#${h.slug}`}>{h.text}</a>
+                </li>
+              ))}
+            </ul>
+          </nav>
+        </aside>
+      )}
+
+      <div class="prose">
+        <Content />
+      </div>
+    </div>
+
+    <nav class="pager" data-pagefind-ignore>
+      {prev ? (
+        <a class="pg" href={withBase(`/${prev.id}/`)}>
+          <span class="hand">← 更早</span>
+          <b>{prev.data.title}</b>
+        </a>
+      ) : <span></span>}
+      {next && (
+        <a class="pg right" href={withBase(`/${next.id}/`)}>
+          <span class="hand">更新 →</span>
+          <b>{next.data.title}</b>
+        </a>
+      )}
+    </nav>
+  </article>
+</BaseLayout>
+
+<script>
+  // 目录高亮：正文滚动到哪个小节，就点亮哪一条
+  function initToc() {
+    const links = Array.from(document.querySelectorAll<HTMLAnchorElement>('.toc a'));
+    if (links.length === 0) return;
+    const map = new Map<string, HTMLAnchorElement>();
+    links.forEach((a) => map.set(decodeURIComponent(a.hash.slice(1)), a));
+
+    const targets = [...map.keys()]
+      .map((id) => document.getElementById(id))
+      .filter((el): el is HTMLElement => el !== null);
+
+    const spy = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((e) => {
+          if (!e.isIntersecting) return;
+          links.forEach((a) => a.classList.remove('on'));
+          map.get(e.target.id)?.classList.add('on');
+        });
+      },
+      { rootMargin: '-72px 0px -70% 0px', threshold: 0 }
+    );
+    targets.forEach((t) => spy.observe(t));
+  }
+  initToc();
+  document.addEventListener('astro:after-swap', initToc);
+</script>
+
+<style>
+  .post { width: min(100% - 2.5rem, 60rem); }
+
+  .back {
+    display: inline-block;
+    margin-bottom: 1.5rem;
+    font-size: .85rem;
+    color: var(--ink-faint);
+    text-decoration: none;
+    transition: color .2s, transform .2s;
+  }
+  .back:hover { color: var(--accent); transform: translateX(-3px); }
+
+  .head {
+    padding-bottom: 1.5rem;
+    margin-bottom: 2rem;
+    border-bottom: 1px dashed var(--rule);
+  }
+  .head h1 {
+    font-size: clamp(1.7rem, 4.2vw, 2.5rem);
+    margin-bottom: .7rem;
+    max-width: 22ch;
+  }
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .5rem;
+    font-family: var(--font-mono);
+    font-size: .76rem;
+    color: var(--ink-faint);
+  }
+  .draft {
+    padding: 0 .4em;
+    color: var(--accent);
+    border: 1px dashed var(--accent);
+    border-radius: 2px;
+  }
+  .tags { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .9rem; list-style: none; padding: 0; }
+
+  /* 目录固定在正文左侧；窄屏收到正文上方 */
+  .body {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 2rem;
+  }
+  @media (min-width: 60rem) {
+    .body { grid-template-columns: 13rem minmax(0, 1fr); gap: 3rem; }
+    .toc { position: sticky; top: 6rem; align-self: start; max-height: calc(100dvh - 8rem); overflow-y: auto; }
+  }
+
+  .toc { font-size: .84rem; }
+  .toc-title { font-size: 1.3rem; margin-bottom: .35rem; }
+  .toc ul { list-style: none; padding: 0; margin: 0; border-left: 1px solid var(--rule); }
+  .toc li.d3 a { padding-left: 1.6rem; font-size: .95em; color: var(--ink-faint); }
+  .toc a {
+    display: block;
+    padding: .22rem 0 .22rem .8rem;
+    margin-left: -1px;
+    color: var(--ink-soft);
+    text-decoration: none;
+    border-left: 2px solid transparent;
+    transition: color .2s, border-color .2s;
+  }
+  .toc a:hover { color: var(--ink); }
+  .toc a.on { color: var(--accent); border-left-color: var(--accent); }
+
+  /* ---------- 正文排版 ---------- */
+  .prose { max-width: var(--measure); font-size: 1.02rem; }
+  .prose > :global(* + *) { margin-top: 1.15em; }
+
+  .prose :global(h2),
+  .prose :global(h3),
+  .prose :global(h4) { margin-top: 2.4em; margin-bottom: .6em; scroll-margin-top: 5.5rem; }
+  .prose :global(h2) { font-size: 1.4rem; padding-bottom: .3em; border-bottom: 1px solid var(--rule); }
+  .prose :global(h3) { font-size: 1.15rem; }
+
+  .prose :global(p) { line-height: 1.85; }
+  .prose :global(strong) { font-weight: 650; }
+
+  .prose :global(a) {
+    color: var(--accent);
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 3px;
+  }
+
+  .prose :global(ul), .prose :global(ol) { padding-left: 1.3em; }
+  .prose :global(li + li) { margin-top: .35em; }
+  .prose :global(li::marker) { color: var(--ink-faint); }
+
+  /* 引用：像贴了一张便签 */
+  .prose :global(blockquote) {
+    padding: .8em 1.1em;
+    color: var(--ink-soft);
+    background: color-mix(in srgb, var(--sw-sand) 16%, var(--paper-card));
+    border-left: 3px solid var(--sw-sand);
+    border-radius: 0 var(--radius) var(--radius) 0;
+  }
+  .prose :global(blockquote p) { margin: 0; }
+
+  .prose :global(code) {
+    font-family: var(--font-mono);
+    font-size: .88em;
+    padding: .12em .38em;
+    background: var(--paper-sunk);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+  }
+  .prose :global(pre) {
+    padding: 1rem 1.15rem;
+    overflow-x: auto;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    box-shadow: var(--lift-1);
+    font-size: .86rem;
+    line-height: 1.7;
+  }
+  .prose :global(pre code) {
+    padding: 0; background: none; border: 0; font-size: inherit;
+  }
+  /* Shiki 双主题：跟随页面深浅色切换 */
+  :global(:root[data-theme='dark']) .prose :global(.astro-code),
+  :global(:root[data-theme='dark']) .prose :global(.astro-code span) {
+    color: var(--shiki-dark) !important;
+    background-color: var(--shiki-dark-bg) !important;
+  }
+  @media (prefers-color-scheme: dark) {
+    :global(:root:not([data-theme='light'])) .prose :global(.astro-code),
+    :global(:root:not([data-theme='light'])) .prose :global(.astro-code span) {
+      color: var(--shiki-dark) !important;
+      background-color: var(--shiki-dark-bg) !important;
+    }
+  }
+
+  .prose :global(img) {
+    margin-inline: auto;
+    border-radius: var(--radius);
+    border: 1px solid var(--rule);
+    background: var(--paper-card);
+    box-shadow: var(--lift-2);
+  }
+  /* 图片下面紧跟的斜体段落当作图注 */
+  .prose :global(p > img + em),
+  .prose :global(p:has(> img) + p > em:only-child) {
+    display: block;
+    margin-top: .7em;
+    font-size: .85rem;
+    font-style: normal;
+    line-height: 1.65;
+    color: var(--ink-faint);
+    text-align: center;
+  }
+
+  .prose :global(hr) {
+    border: 0;
+    border-top: 1px dashed var(--rule-strong);
+    margin-block: 2.5em;
+  }
+
+  .prose :global(table) {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: .92rem;
+  }
+  .prose :global(th), .prose :global(td) {
+    padding: .5em .7em;
+    text-align: left;
+    border: 1px solid var(--rule);
+  }
+  .prose :global(th) { background: var(--paper-sunk); font-weight: 600; }
+
+  /* 表格与宽内容各自横向滚动，页面本身不横向滚 */
+  .prose :global(:is(table, pre)) { max-width: 100%; }
+
+  /* ---------- 数学公式 (KaTeX) ---------- */
+  .prose :global(.katex) { font-size: 1.04em; }
+  .prose :global(.katex-display) {
+    margin-block: 1.6em;
+    padding: .9em .2em;
+    overflow-x: auto;
+    overflow-y: hidden;
+    background: color-mix(in srgb, var(--paper-sunk) 45%, transparent);
+    border-top: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+  }
+  .prose :global(.katex-display > .katex) { text-align: center; }
+  /* 行内公式跟正文一起换行，别把段落撑破 */
+  .prose :global(p .katex) { white-space: normal; }
+
+  /* ---------- 上下篇 ---------- */
+  .pager {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin-top: 4rem;
+    padding-top: 1.5rem;
+    border-top: 1px dashed var(--rule);
+  }
+  .pg {
+    display: flex;
+    flex-direction: column;
+    gap: .15rem;
+    padding: .85rem 1rem;
+    text-decoration: none;
+    background: var(--paper-card);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    transition: transform .25s cubic-bezier(.2,.9,.3,1.2), box-shadow .25s, border-color .25s;
+  }
+  .pg:hover {
+    transform: translateY(-3px) rotate(-.5deg);
+    box-shadow: var(--lift-2);
+    border-color: var(--rule-strong);
+  }
+  .pg.right { text-align: right; }
+  .pg .hand { font-size: 1.15rem; }
+  .pg b { font-size: .92rem; font-weight: 600; line-height: 1.45; }
+
+  @media (max-width: 560px) {
+    .pager { grid-template-columns: 1fr; }
+    .pg.right { text-align: left; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .back:hover, .pg:hover { transform: none; }
+  }
+</style>

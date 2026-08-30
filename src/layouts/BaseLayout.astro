@@ -1,0 +1,133 @@
+---
+import '../styles/global.css';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+import { withBase } from '../lib/notes';
+
+interface Props {
+  title: string;
+  description?: string;
+  /** 文章页显示阅读进度条 */
+  progress?: boolean;
+}
+
+const { title, description = '一个存放笔记与想法的地方', progress = false } = Astro.props;
+const siteName = '笔记本';
+const fullTitle = title === siteName ? title : `${title} · ${siteName}`;
+const canonical = new URL(Astro.url.pathname, Astro.site);
+---
+
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{fullTitle}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    <link rel="icon" href={withBase('/favicon.svg')} type="image/svg+xml" />
+    <link rel="alternate" type="application/rss+xml" title={siteName} href={withBase('/rss.xml')} />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content={fullTitle} />
+    <meta property="og:description" content={description} />
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;600&display=swap"
+    />
+
+    <!-- 在首帧之前定好主题，避免深浅色闪烁 -->
+    <script is:inline>
+      (function () {
+        try {
+          var saved = localStorage.getItem('theme');
+          if (saved === 'light' || saved === 'dark') {
+            document.documentElement.dataset.theme = saved;
+          }
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+
+  <body>
+    {progress && <div class="progress" aria-hidden="true"><i></i></div>}
+    <a class="skip" href="#main">跳到正文</a>
+    <Header />
+    <main id="main">
+      <slot />
+    </main>
+    <Footer />
+
+    <script>
+      // 逐个落下的入场动画：元素进入视口时才触发，返回上一页也能重放
+      const io = new IntersectionObserver(
+        (entries) => {
+          entries.forEach((entry) => {
+            if (entry.isIntersecting) {
+              entry.target.classList.add('is-in');
+              io.unobserve(entry.target);
+            }
+          });
+        },
+        { rootMargin: '0px 0px -8% 0px', threshold: 0.05 }
+      );
+
+      function bindRise() {
+        document.querySelectorAll<HTMLElement>('.rise:not(.is-in)').forEach((el) => io.observe(el));
+      }
+
+      function bindProgress() {
+        const bar = document.querySelector<HTMLElement>('.progress i');
+        if (!bar) return;
+        const update = () => {
+          const max = document.documentElement.scrollHeight - window.innerHeight;
+          bar.style.transform = `scaleX(${max > 0 ? window.scrollY / max : 0})`;
+        };
+        update();
+        window.addEventListener('scroll', update, { passive: true });
+        window.addEventListener('resize', update, { passive: true });
+      }
+
+      bindRise();
+      bindProgress();
+      // 跨页面转场后重新绑定
+      document.addEventListener('astro:after-swap', () => { bindRise(); bindProgress(); });
+    </script>
+
+    <style>
+      .skip {
+        position: absolute;
+        left: -9999px;
+        top: 0;
+        z-index: 100;
+        padding: .6rem 1rem;
+        background: var(--paper-card);
+        box-shadow: var(--lift-2);
+      }
+      .skip:focus { left: .75rem; top: .75rem; }
+
+      .progress {
+        position: fixed;
+        inset: 0 0 auto 0;
+        height: 3px;
+        z-index: 50;
+        background: transparent;
+      }
+      .progress i {
+        display: block;
+        height: 100%;
+        background: var(--accent);
+        transform-origin: 0 50%;
+        transform: scaleX(0);
+      }
+
+      main {
+        position: relative;
+        z-index: 1;
+        padding-block: clamp(2rem, 5vw, 3.5rem) 4rem;
+      }
+    </style>
+  </body>
+</html>

@@ -1,0 +1,53 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import NoteCard from '../../components/NoteCard.astro';
+import { allNotes, allTags, swatchFor, withBase } from '../../lib/notes';
+
+export async function getStaticPaths() {
+  const [notes, tags] = await Promise.all([allNotes(), allTags()]);
+  return tags.map(({ tag }) => ({
+    params: { tag },
+    props: { tag, notes: notes.filter((n) => n.data.tags.includes(tag)) },
+  }));
+}
+
+const { tag, notes } = Astro.props;
+---
+
+<BaseLayout title={`#${tag}`} description={`标签「${tag}」下的 ${notes.length} 篇笔记`}>
+  <div class="wrap">
+    <a class="back rise" style="--i:0" href={withBase('/tags/')}>← 所有标签</a>
+    <h1 class="rise" style="--i:1">
+      <span class="tag" data-sw={swatchFor(tag)}>{tag}</span>
+      <span class="count">{notes.length} 篇</span>
+    </h1>
+
+    <div class="wall">
+      {notes.map((note, i) => <NoteCard note={note} index={i} />)}
+    </div>
+  </div>
+</BaseLayout>
+
+<style>
+  .back {
+    display: inline-block;
+    margin-bottom: 1.2rem;
+    font-size: .85rem;
+    color: var(--ink-faint);
+    text-decoration: none;
+    transition: color .2s, transform .2s;
+  }
+  .back:hover { color: var(--accent); transform: translateX(-3px); }
+  h1 {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: .7rem;
+    margin-bottom: 2rem;
+  }
+  h1 .tag { font-size: 1.5rem; padding: .18em .5em; }
+  .count { font-family: var(--font-mono); font-size: .82rem; color: var(--ink-faint); }
+  .wall { columns: 3 17rem; column-gap: 1.15rem; }
+  .wall > :global(.card) { break-inside: avoid; margin-bottom: 1.15rem; }
+  @media (max-width: 640px) { .wall { columns: 1; } }
+</style>

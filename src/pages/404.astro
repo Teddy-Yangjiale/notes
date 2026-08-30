@@ -1,0 +1,31 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { withBase } from '../lib/notes';
+---
+<BaseLayout title="这一页撕掉了">
+  <div class="wrap wrap--narrow center">
+    <p class="big hand">404</p>
+    <h1>这一页大概是被撕掉了</h1>
+    <p class="lede">要么链接旧了，要么我还没写。</p>
+    <a class="home" href={withBase('/')}>← 回笔记墙翻翻</a>
+  </div>
+</BaseLayout>
+
+<style>
+  .center { text-align: center; padding-block: 4rem; }
+  .big { font-size: clamp(5rem, 18vw, 9rem); color: var(--accent-soft); line-height: .9; }
+  h1 { font-size: clamp(1.4rem, 4vw, 2rem); margin-block: 1rem .5rem; }
+  .lede { color: var(--ink-soft); margin-bottom: 2rem; }
+  .home {
+    display: inline-block;
+    padding: .55rem 1.2rem;
+    font-size: .9rem;
+    text-decoration: none;
+    background: var(--paper-card);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    box-shadow: var(--lift-1);
+    transition: transform .25s cubic-bezier(.2,.9,.3,1.2), box-shadow .25s;
+  }
+  .home:hover { transform: translateY(-2px) rotate(-1deg); box-shadow: var(--lift-2); }
+</style>

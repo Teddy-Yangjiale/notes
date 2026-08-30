@@ -1,0 +1,52 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import { allTags, swatchFor, withBase } from '../../lib/notes';
+
+const tags = await allTags();
+const max = Math.max(1, ...tags.map((t) => t.count));
+---
+
+<BaseLayout title="标签" description="按主题浏览所有笔记">
+  <div class="wrap wrap--narrow">
+    <h1 class="rise" style="--i:0">标签</h1>
+    <p class="lede rise" style="--i:1">
+      共 {tags.length} 个标签。字号越大，说明我在那个方向上记得越多。
+    </p>
+
+    <ul class="cloud rise" style="--i:2">
+      {tags.map((t, i) => (
+        <li>
+          <a
+            class="tag"
+            data-sw={swatchFor(t.tag)}
+            href={withBase(`/tags/${encodeURIComponent(t.tag)}/`)}
+            style={`font-size:${(0.82 + (t.count / max) * 0.62).toFixed(2)}rem; --r:${(i % 5) - 2}deg`}
+          >
+            {t.tag}<span class="n">{t.count}</span>
+          </a>
+        </li>
+      ))}
+    </ul>
+  </div>
+</BaseLayout>
+
+<style>
+  h1 { font-size: clamp(1.7rem, 4vw, 2.3rem); margin-bottom: .5rem; }
+  .lede { color: var(--ink-soft); margin-bottom: 2rem; }
+  .cloud {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .6rem;
+    list-style: none;
+    padding: 0;
+  }
+  .cloud .tag { transform: rotate(var(--r, 0deg)); padding: .3em .7em; }
+  .cloud .tag:hover { transform: rotate(0deg) translateY(-2px) scale(1.04); }
+  .n {
+    margin-left: .45em;
+    font-family: var(--font-mono);
+    font-size: .68em;
+    color: var(--ink-soft);
+  }
+</style>
