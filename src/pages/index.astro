@@ -1,10 +1,20 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
 import NoteCard from '../components/NoteCard.astro';
-import { allNotes, allTags, swatchFor, withBase } from '../lib/notes';
+import SeriesCard from '../components/SeriesCard.astro';
+import { allSeries, standaloneNotes, swatchFor, withBase } from '../lib/notes';
 
-const notes = await allNotes();
-const tags = await allTags();
+const series = await allSeries();
+const notes = await standaloneNotes();
+
+// 标签筛选只作用于"散记"，所以标签也只从散记里统计
+const counts = new Map<string, number>();
+for (const n of notes) {
+  for (const t of n.data.tags) counts.set(t, (counts.get(t) ?? 0) + 1);
+}
+const tags = [...counts.entries()]
+  .map(([tag, count]) => ({ tag, count }))
+  .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag, 'zh'));
 ---
 
 <BaseLayout title="笔记本" description="markdown 笔记、读书摘录与随手记录">
@@ -17,6 +27,28 @@ const tags = await allTags();
         没整理完也照样贴上来，反正笔记本本来就是这样。
       </p>
     </section>
+
+    {series.length > 0 && (
+      <section class="shelf">
+        <h2 class="shelf-title rise" style="--i:1">
+          <span class="hand">专栏</span>
+          <span class="rule"></span>
+          <span class="n">{series.length} 个合集</span>
+        </h2>
+        <div class="shelf-grid">
+          {series.map((entry, i) => <SeriesCard entry={entry} index={i} />)}
+        </div>
+      </section>
+    )}
+
+    <section class="loose">
+      {notes.length > 0 && (
+        <h2 class="shelf-title rise" style="--i:0">
+          <span class="hand">散记</span>
+          <span class="rule"></span>
+          <span class="n">{notes.length} 篇</span>
+        </h2>
+      )}
 
     {tags.length > 0 && (
       <div class="filter rise" style="--i:1" role="group" aria-label="按标签筛选">
@@ -39,7 +71,7 @@ const tags = await allTags();
 
     {notes.length === 0 ? (
       <p class="empty">
-        还没有笔记。在 <code>src/content/notes/</code> 里丢一个 <code>.md</code> 文件就会出现在这儿。
+        散记还是空的。在 <code>src/content/notes/</code> 里丢一个 <code>.md</code> 文件就会出现在这儿。
       </p>
     ) : (
       <div class="wall" id="wall">
@@ -47,7 +79,8 @@ const tags = await allTags();
       </div>
     )}
 
-    <p class="nores" id="nores" hidden>这个标签下暂时没有笔记。</p>
+      <p class="nores" id="nores" hidden>这个标签下暂时没有笔记。</p>
+    </section>
   </div>
 </BaseLayout>
 
@@ -119,6 +152,37 @@ const tags = await allTags();
     color: var(--ink-soft);
     max-width: var(--measure);
   }
+
+  /* ---------- 分区标题 ---------- */
+  .shelf-title {
+    display: flex;
+    align-items: baseline;
+    gap: .85rem;
+    margin-bottom: 1.2rem;
+  }
+  .shelf-title .hand { font-size: 1.85rem; color: var(--ink); }
+  .shelf-title .rule {
+    flex: 1;
+    height: 1px;
+    background: repeating-linear-gradient(
+      90deg, var(--rule) 0 6px, transparent 6px 11px
+    );
+  }
+  .shelf-title .n {
+    flex: none;
+    font-family: var(--font-mono);
+    font-size: .74rem;
+    color: var(--ink-faint);
+  }
+
+  .shelf { margin-bottom: 3.5rem; }
+  .shelf-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr));
+    gap: 1.6rem 1.5rem;
+  }
+
+  .loose { margin-top: .5rem; }
 
   .filter {
     display: flex;

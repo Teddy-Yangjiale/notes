@@ -1,0 +1,216 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import { allSeries, fmtDate, orderLabel, readingTime, swatchFor, withBase } from '../../lib/notes';
+
+export async function getStaticPaths() {
+  const all = await allSeries();
+  return all.map(({ series, notes }) => ({
+    params: { id: series.id },
+    props: { series, notes },
+  }));
+}
+
+const { series, notes } = Astro.props;
+
+const words = notes.reduce((sum, n) => sum + readingTime(n.body ?? ''), 0);
+const tagSet = new Set(notes.flatMap((n) => n.data.tags));
+const span = notes.length
+  ? [notes.map((n) => n.data.date.getTime())].flatMap((ds) => [Math.min(...ds), Math.max(...ds)])
+  : [];
+---
+
+<BaseLayout title={series.title} description={series.description}>
+  <div class="wrap">
+    <a class="back rise" style="--i:0" href={withBase('/')}>← 回到笔记墙</a>
+
+    <header class="head rise" data-sw={series.color} style="--i:1">
+      <span class="badge">{series.badge}</span>
+      <h1>{series.title}</h1>
+      <p class="desc">{series.description}</p>
+
+      <dl class="stats">
+        <div><dt>篇数</dt><dd>{notes.length}</dd></div>
+        <div><dt>通读约</dt><dd>{words} 分钟</dd></div>
+        {span.length === 2 && (
+          <div><dt>记于</dt><dd>{fmtDate(new Date(span[0]))}</dd></div>
+        )}
+      </dl>
+
+      {tagSet.size > 0 && (
+        <ul class="tags">
+          {[...tagSet].map((t) => (
+            <li>
+              <a class="tag" data-sw={swatchFor(t)} href={withBase(`/tags/${encodeURIComponent(t)}/`)}>{t}</a>
+            </li>
+          ))}
+        </ul>
+      )}
+    </header>
+
+    <ol class="toc" data-sw={series.color}>
+      {notes.map((n, i) => (
+        <li class="rise" style={`--i:${Math.min(i, 14)}`}>
+          <a href={withBase(`/${n.id}/`)}>
+            <span class="no">{orderLabel(n.data.order, i + 1)}</span>
+            <span class="body">
+              <span class="t">{n.data.title}</span>
+              {n.data.summary && <span class="s">{n.data.summary}</span>}
+            </span>
+            <span class="mins">{readingTime(n.body ?? '')} 分钟</span>
+          </a>
+        </li>
+      ))}
+    </ol>
+  </div>
+</BaseLayout>
+
+<style>
+  .back {
+    display: inline-block;
+    margin-bottom: 1.3rem;
+    font-size: .85rem;
+    color: var(--ink-faint);
+    text-decoration: none;
+    transition: color .2s, transform .2s;
+  }
+  .back:hover { color: var(--accent); transform: translateX(-3px); }
+
+  /* ---------- 专栏封面 ---------- */
+  .head {
+    --sw: var(--sw-sand);
+    position: relative;
+    max-width: 46rem;
+    padding: 1.6rem 1.6rem 1.4rem;
+    margin-bottom: 2.5rem;
+    background: var(--paper-card);
+    border: 1px solid var(--rule);
+    border-left: 4px solid var(--sw);
+    border-radius: var(--radius);
+    box-shadow: var(--lift-2);
+  }
+  .head[data-sw='sand']  { --sw: var(--sw-sand); }
+  .head[data-sw='moss']  { --sw: var(--sw-moss); }
+  .head[data-sw='sky']   { --sw: var(--sw-sky); }
+  .head[data-sw='clay']  { --sw: var(--sw-clay); }
+  .head[data-sw='plum']  { --sw: var(--sw-plum); }
+  .head[data-sw='lilac'] { --sw: var(--sw-lilac); }
+
+  .badge {
+    display: inline-block;
+    padding: .18em .6em .24em;
+    margin-bottom: .7rem;
+    font-family: var(--font-mono);
+    font-size: .74rem;
+    font-weight: 600;
+    letter-spacing: .06em;
+    background: color-mix(in srgb, var(--sw) 52%, var(--paper-card));
+    border: 1px solid color-mix(in srgb, var(--sw) 70%, transparent);
+    border-radius: 2px;
+    transform: rotate(-1.5deg);
+  }
+  .head h1 { font-size: clamp(1.45rem, 3.6vw, 2.05rem); margin-bottom: .6rem; }
+  .desc {
+    font-size: .95rem;
+    line-height: 1.8;
+    color: var(--ink-soft);
+    max-width: var(--measure);
+  }
+
+  .stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.6rem;
+    margin: 1.1rem 0 0;
+    padding-top: 1rem;
+    border-top: 1px dashed var(--rule);
+  }
+  .stats div { display: flex; flex-direction: column; gap: .1rem; }
+  .stats dt { font-size: .72rem; color: var(--ink-faint); }
+  .stats dd {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: .92rem;
+    color: var(--ink);
+  }
+
+  .tags { display: flex; flex-wrap: wrap; gap: .35rem; margin: 1rem 0 0; padding: 0; list-style: none; }
+
+  /* ---------- 目录 ---------- */
+  .toc {
+    --sw: var(--sw-sand);
+    max-width: 52rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    counter-reset: item;
+  }
+  .toc[data-sw='sand']  { --sw: var(--sw-sand); }
+  .toc[data-sw='moss']  { --sw: var(--sw-moss); }
+  .toc[data-sw='sky']   { --sw: var(--sw-sky); }
+  .toc[data-sw='clay']  { --sw: var(--sw-clay); }
+  .toc[data-sw='plum']  { --sw: var(--sw-plum); }
+  .toc[data-sw='lilac'] { --sw: var(--sw-lilac); }
+
+  .toc li + li { margin-top: .5rem; }
+
+  .toc a {
+    display: grid;
+    grid-template-columns: 2.6rem minmax(0, 1fr) auto;
+    align-items: baseline;
+    gap: .3rem 1rem;
+    padding: .85rem 1rem;
+    color: inherit;
+    text-decoration: none;
+    background: var(--paper-card);
+    border: 1px solid var(--rule);
+    border-left: 3px solid transparent;
+    border-radius: var(--radius);
+    box-shadow: var(--lift-1);
+    transition:
+      transform .26s cubic-bezier(.2,.9,.3,1.15),
+      box-shadow .26s ease,
+      border-color .26s ease;
+  }
+
+  .no {
+    font-family: var(--font-mono);
+    font-size: .95rem;
+    font-weight: 600;
+    color: color-mix(in srgb, var(--sw) 85%, var(--ink-faint));
+  }
+  .body { display: flex; flex-direction: column; gap: .2rem; min-width: 0; }
+  .t { font-family: var(--font-serif); font-size: 1rem; font-weight: 600; line-height: 1.45; }
+  .s {
+    font-size: .84rem;
+    line-height: 1.6;
+    color: var(--ink-soft);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .mins {
+    font-family: var(--font-mono);
+    font-size: .72rem;
+    color: var(--ink-faint);
+    white-space: nowrap;
+  }
+
+  @media (hover: hover) {
+    .toc a:hover {
+      transform: translateX(4px);
+      box-shadow: var(--lift-2);
+      border-color: var(--rule-strong);
+      border-left-color: var(--sw);
+    }
+    .toc a:hover .t { color: var(--accent); }
+  }
+
+  @media (max-width: 560px) {
+    .toc a { grid-template-columns: 2.2rem minmax(0, 1fr); }
+    .mins { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .toc a:hover, .back:hover { transform: none; }
+  }
+</style>

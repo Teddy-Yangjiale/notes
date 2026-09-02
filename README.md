@@ -28,6 +28,44 @@ python3 scripts/import.py ~/笔记/某篇.md --bundle --tags "标签"
 # --strip-toc 删掉正文里手写的目录（站点会自动生成侧边目录）
 ```
 
+## 专栏（合集）
+
+多篇成体系的笔记可以收进一个"专栏"，在首页显示为一张合集卡片，点进去是按讲次排好的目录。
+
+**开一个新专栏**：在 `src/lib/series.ts` 的 `SERIES` 数组里加一条：
+
+```ts
+{
+  id: 'cs224n',                    // 网址 /series/cs224n/
+  title: 'CS224N · 自然语言处理',
+  badge: 'CS224N',                 // 卡片上的印章代号
+  description: '一句话介绍…',
+  color: 'moss',                   // sand/moss/sky/clay/plum/lilac
+  weight: 3,                       // 首页排序
+}
+```
+
+**把笔记归进专栏**：在 front matter 里写
+
+```yaml
+series: "cs224n"
+order: 3                  # 专栏内顺序；>=90 的显示成 A/B/C（补充篇）
+shortTitle: "词向量"       # 可选，列表里用它代替长标题
+```
+
+归入专栏的笔记不再单独出现在首页"散记"区。文章页会自动加上专栏面包屑，
+上下篇也改为沿讲次走而不是按时间。
+
+**批量导入一整门课**：
+
+```bash
+python3 scripts/import_series.py <目录> --series cs336 --prefix cs336 \
+    --tags "大模型,系统" --dry-run     # 先预演，确认无误后去掉 --dry-run
+```
+
+它会从文件名解析讲次编号当 order、生成 front matter、把指向同目录其它讲的链接
+改写成站内链接，并把指向目录外的失效链接降级成纯文本。
+
 ## 部署
 
 目标地址：**https://teddy-yangjiale.github.io/notes/**

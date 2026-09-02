@@ -3,3 +3,6 @@ dist/
 .astro/
 .DS_Store
 *.log
+
+# 导入笔记的原始压缩包，留在本地备查，不进仓库
+_sources/

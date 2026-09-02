@@ -2,21 +2,52 @@
 import 'katex/dist/katex.min.css';
 import { render } from 'astro:content';
 import BaseLayout from '../layouts/BaseLayout.astro';
-import { allNotes, fmtDate, readingTime, swatchFor, withBase } from '../lib/notes';
+import { allNotes, fmtDate, notesInSeries, readingTime, swatchFor, withBase } from '../lib/notes';
+import { seriesById } from '../lib/series';
 
 export async function getStaticPaths() {
   const notes = await allNotes();
-  return notes.map((note, i) => ({
-    params: { slug: note.id },
-    props: {
-      note,
-      prev: notes[i + 1] ?? null,  // 更旧
-      next: notes[i - 1] ?? null,  // 更新
-    },
-  }));
+
+  // 专栏内的顺序表，先算好，避免每篇重复查一遍
+  const lists = new Map<string, typeof notes>();
+  for (const id of seriesById.keys()) lists.set(id, await notesInSeries(id));
+
+  return notes.map((note, i) => {
+    const sid = note.data.series;
+    const list = sid ? lists.get(sid) : undefined;
+
+    if (list && list.length > 0) {
+      // 属于专栏：上下篇沿着讲次走，并带上"第几讲 / 共几讲"
+      const k = list.findIndex((n) => n.id === note.id);
+      return {
+        params: { slug: note.id },
+        props: {
+          note,
+          prev: k > 0 ? list[k - 1] : null,
+          next: k < list.length - 1 ? list[k + 1] : null,
+          series: seriesById.get(sid!) ?? null,
+          position: k + 1,
+          total: list.length,
+        },
+      };
+    }
+
+    // 散记：按时间前后
+    return {
+      params: { slug: note.id },
+      props: {
+        note,
+        prev: notes[i + 1] ?? null,  // 更旧
+        next: notes[i - 1] ?? null,  // 更新
+        series: null,
+        position: 0,
+        total: 0,
+      },
+    };
+  });
 }
 
-const { note, prev, next } = Astro.props;
+const { note, prev, next, series, position, total } = Astro.props;
 const { Content, headings } = await render(note);
 const { title, date, updated, tags, summary, draft } = note.data;
 const mins = readingTime(note.body ?? '');
@@ -26,7 +57,17 @@ const toc = headings.filter((h) => h.depth === 2 || h.depth === 3);
 <BaseLayout title={title} description={summary} progress>
   <article class="wrap post" data-pagefind-body>
     <header class="head">
-      <a class="back" href={withBase('/')}>← 回到笔记墙</a>
+      {series ? (
+        <nav class="crumb" data-sw={series.color}>
+          <a href={withBase(`/series/${series.id}/`)}>
+            <span class="badge">{series.badge}</span>
+            <span class="name">{series.title}</span>
+          </a>
+          <span class="pos">第 {position} / {total} 篇</span>
+        </nav>
+      ) : (
+        <a class="back" href={withBase('/')}>← 回到笔记墙</a>
+      )}
 
       <h1>{title}</h1>
 
@@ -73,13 +114,13 @@ const toc = headings.filter((h) => h.depth === 2 || h.depth === 3);
     <nav class="pager" data-pagefind-ignore>
       {prev ? (
         <a class="pg" href={withBase(`/${prev.id}/`)}>
-          <span class="hand">← 更早</span>
+          <span class="hand">{series ? '← 上一篇' : '← 更早'}</span>
           <b>{prev.data.title}</b>
         </a>
       ) : <span></span>}
       {next && (
         <a class="pg right" href={withBase(`/${next.id}/`)}>
-          <span class="hand">更新 →</span>
+          <span class="hand">{series ? '下一篇 →' : '更新 →'}</span>
           <b>{next.data.title}</b>
         </a>
       )}
@@ -127,6 +168,49 @@ const toc = headings.filter((h) => h.depth === 2 || h.depth === 3);
     transition: color .2s, transform .2s;
   }
   .back:hover { color: var(--accent); transform: translateX(-3px); }
+
+  /* 专栏面包屑 */
+  .crumb {
+    --sw: var(--sw-sand);
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: .6rem 1rem;
+    margin-bottom: 1.5rem;
+  }
+  .crumb[data-sw='sand']  { --sw: var(--sw-sand); }
+  .crumb[data-sw='moss']  { --sw: var(--sw-moss); }
+  .crumb[data-sw='sky']   { --sw: var(--sw-sky); }
+  .crumb[data-sw='clay']  { --sw: var(--sw-clay); }
+  .crumb[data-sw='plum']  { --sw: var(--sw-plum); }
+  .crumb[data-sw='lilac'] { --sw: var(--sw-lilac); }
+
+  .crumb > a {
+    display: inline-flex;
+    align-items: center;
+    gap: .5rem;
+    text-decoration: none;
+    transition: transform .22s cubic-bezier(.2,.9,.3,1.2);
+  }
+  .crumb > a:hover { transform: translateX(-3px); }
+  .crumb .badge {
+    padding: .16em .55em .22em;
+    font-family: var(--font-mono);
+    font-size: .7rem;
+    font-weight: 600;
+    letter-spacing: .05em;
+    background: color-mix(in srgb, var(--sw) 52%, var(--paper-card));
+    border: 1px solid color-mix(in srgb, var(--sw) 70%, transparent);
+    border-radius: 2px;
+    transform: rotate(-1.5deg);
+  }
+  .crumb .name { font-size: .86rem; color: var(--ink-soft); }
+  .crumb > a:hover .name { color: var(--accent); }
+  .crumb .pos {
+    font-family: var(--font-mono);
+    font-size: .72rem;
+    color: var(--ink-faint);
+  }
 
   .head {
     padding-bottom: 1.5rem;

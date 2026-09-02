@@ -1,0 +1,173 @@
+---
+import { orderLabel, withBase, type SeriesWithNotes } from '../lib/notes';
+
+interface Props { entry: SeriesWithNotes; index?: number; }
+const { entry, index = 0 } = Astro.props;
+const { series, notes } = entry;
+
+// 卡片正面露出前三篇，让人一眼看出这一叠里装的是什么
+const peek = notes.slice(0, 3);
+const rest = notes.length - peek.length;
+const tilt = [-0.7, 0.6, -0.5, 0.8][index % 4];
+---
+
+<article class="stack rise" data-sw={series.color} style={`--i:${index}; --tilt:${tilt}deg`}>
+  <a class="sheet" href={withBase(`/series/${series.id}/`)}>
+    <header>
+      <span class="badge">{series.badge}</span>
+      <span class="count"><b>{notes.length}</b> 篇</span>
+    </header>
+
+    <h3>{series.title}</h3>
+    <p class="desc">{series.description}</p>
+
+    <ol class="peek">
+      {peek.map((n, i) => (
+        <li>
+          <span class="no">{orderLabel(n.data.order, i + 1)}</span>
+          <span class="t">{n.data.shortTitle ?? n.data.title}</span>
+        </li>
+      ))}
+      {rest > 0 && <li class="more">…还有 {rest} 篇</li>}
+    </ol>
+
+    <span class="go">翻开这一叠 →</span>
+  </a>
+</article>
+
+<style>
+  .stack {
+    --sw: var(--sw-sand);
+    position: relative;
+    isolation: isolate;
+  }
+  .stack[data-sw='sand']  { --sw: var(--sw-sand); }
+  .stack[data-sw='moss']  { --sw: var(--sw-moss); }
+  .stack[data-sw='sky']   { --sw: var(--sw-sky); }
+  .stack[data-sw='clay']  { --sw: var(--sw-clay); }
+  .stack[data-sw='plum']  { --sw: var(--sw-plum); }
+  .stack[data-sw='lilac'] { --sw: var(--sw-lilac); }
+
+  /* 背后垫着的两张纸 */
+  .stack::before,
+  .stack::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background: var(--paper-card);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    box-shadow: var(--lift-1);
+    transition: transform .38s cubic-bezier(.2,.85,.3,1.1);
+  }
+  .stack::before { transform: rotate(1.4deg) translate(3px, 3px); }
+  .stack::after  { transform: rotate(-1deg) translate(-2px, 6px); }
+
+  .sheet {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: .7rem;
+    height: 100%;
+    padding: 1.4rem 1.35rem 1.2rem;
+    color: inherit;
+    text-decoration: none;
+    background: var(--paper-card);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    box-shadow: var(--lift-2);
+    transform: rotate(var(--tilt, 0deg));
+    transition:
+      transform .38s cubic-bezier(.2,.9,.25,1.12),
+      box-shadow .3s ease,
+      border-color .3s ease;
+  }
+
+  header { display: flex; align-items: center; gap: .6rem; }
+
+  /* 印章式代号 */
+  .badge {
+    padding: .18em .6em .24em;
+    font-family: var(--font-mono);
+    font-size: .74rem;
+    font-weight: 600;
+    letter-spacing: .06em;
+    color: var(--ink);
+    background: color-mix(in srgb, var(--sw) 52%, var(--paper-card));
+    border: 1px solid color-mix(in srgb, var(--sw) 70%, transparent);
+    border-radius: 2px;
+    transform: rotate(-1.5deg);
+  }
+  .count { font-size: .78rem; color: var(--ink-faint); }
+  .count b { font-family: var(--font-mono); font-weight: 600; color: var(--ink-soft); }
+
+  h3 {
+    font-size: 1.16rem;
+    line-height: 1.4;
+    transition: color .2s ease;
+  }
+  .desc {
+    font-size: .87rem;
+    line-height: 1.7;
+    color: var(--ink-soft);
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  /* 露出前几篇的目录条 */
+  .peek {
+    margin: .2rem 0 0;
+    padding: .7rem 0 0;
+    list-style: none;
+    border-top: 1px dashed var(--rule);
+    font-size: .83rem;
+  }
+  .peek li {
+    display: flex;
+    gap: .55rem;
+    padding: .15rem 0;
+    color: var(--ink-soft);
+  }
+  .peek .no {
+    flex: none;
+    font-family: var(--font-mono);
+    font-size: .72rem;
+    padding-top: .15em;
+    color: color-mix(in srgb, var(--sw) 80%, var(--ink-faint));
+  }
+  .peek .t {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .peek .more { font-size: .78rem; color: var(--ink-faint); padding-left: .1rem; }
+
+  .go {
+    margin-top: auto;
+    padding-top: .8rem;
+    font-size: .84rem;
+    color: var(--ink-faint);
+    transition: color .22s ease, transform .22s ease;
+  }
+
+  /* hover：整叠纸散开一点，最上面那张回正抬起 */
+  @media (hover: hover) {
+    .stack:hover .sheet {
+      transform: rotate(calc(var(--tilt) * 0.2)) translateY(-5px);
+      box-shadow: var(--lift-3);
+      border-color: var(--rule-strong);
+    }
+    .stack:hover::before { transform: rotate(3.2deg) translate(9px, 5px); }
+    .stack:hover::after  { transform: rotate(-2.6deg) translate(-8px, 9px); }
+    .stack:hover h3 { color: var(--accent); }
+    .stack:hover .go { color: var(--accent); transform: translateX(3px); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .sheet, .stack::before, .stack::after { transition: none; }
+    .stack:hover .sheet { transform: rotate(var(--tilt, 0deg)); }
+  }
+</style>
