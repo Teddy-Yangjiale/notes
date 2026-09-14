@@ -374,6 +374,50 @@ const toc = headings.filter((h) => h.depth === 2 || h.depth === 3);
   /* 表格与宽内容各自横向滚动，页面本身不横向滚 */
   .prose :global(:is(table, pre)) { max-width: 100%; }
 
+  /* ---------- 折叠块：练习的「解析」 ---------- */
+  .prose :global(details) {
+    margin-block: 1.2em;
+    padding: 0;
+    background: color-mix(in srgb, var(--sw-moss) 10%, var(--paper-card));
+    border: 1px solid var(--rule);
+    border-left: 3px solid color-mix(in srgb, var(--sw-moss) 65%, transparent);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .prose :global(details > summary) {
+    padding: .6em 1em;
+    font-size: .9rem;
+    font-weight: 600;
+    color: var(--ink-soft);
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+    transition: color .18s ease, background .18s ease;
+  }
+  .prose :global(details > summary::-webkit-details-marker) { display: none; }
+  /* 自己画三角，展开时转 90 度 */
+  .prose :global(details > summary::before) {
+    content: '▸';
+    display: inline-block;
+    width: 1.1em;
+    color: color-mix(in srgb, var(--sw-moss) 80%, var(--ink-faint));
+    transition: transform .22s cubic-bezier(.2,.8,.3,1);
+  }
+  .prose :global(details[open] > summary::before) { transform: rotate(90deg); }
+  .prose :global(details > summary:hover) {
+    color: var(--ink);
+    background: color-mix(in srgb, var(--sw-moss) 16%, transparent);
+  }
+  .prose :global(details[open] > summary) {
+    border-bottom: 1px dashed var(--rule);
+  }
+  /* 折叠内容：内边距靠这里给，避免第一段顶着边框 */
+  .prose :global(details > *:not(summary)) {
+    margin-inline: 1em;
+  }
+  .prose :global(details > *:nth-child(2)) { margin-top: .9em; }
+  .prose :global(details > *:last-child) { margin-bottom: .9em; }
+
   /* ---------- 数学公式 (KaTeX) ---------- */
   .prose :global(.katex) { font-size: 1.04em; }
   .prose :global(.katex-display) {

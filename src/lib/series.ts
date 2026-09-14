@@ -22,6 +22,17 @@ export interface Series {
 
 export const SERIES: Series[] = [
   {
+    id: 'sta5007',
+    title: 'STA-5007 · 高级自然语言处理',
+    badge: 'STA-5007',
+    description:
+      '南科大统计与数据科学系，陈冠华老师《高级自然语言处理》课堂笔记。' +
+      '按课件逐页拆解：每页配原始截图，图下先给原文要点，再补推导细节、维度核对、' +
+      '直觉解释与易错点，配逐元素图解和带详解的练习。',
+    color: 'moss',
+    weight: 0,
+  },
+  {
     id: 'cs336',
     title: 'CS336 · 从零构建语言模型',
     badge: 'CS336',

@@ -11,6 +11,8 @@
     --draft               导成草稿(线上不发布)
     --bundle              建成 <slug>/index.md, 并把引用到的本地图片目录一起搬过来
     --strip-toc           删掉正文里手写的"目录"小节(站点会自动生成侧边目录)
+    --series / --order / --short-title
+                          把这篇归入某个专栏(见 src/lib/series.ts)
 
 做的事:
   1. 猜标题(第一个 # 一级标题, 否则用文件名), 并把它从正文里删掉,
@@ -25,6 +27,27 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEST = ROOT / "src" / "content" / "notes"
 
 IMG_RE = re.compile(r"!\[[^\]]*\]\(\s*<?([^)>\s]+)")
+
+
+def normalize_display_math(text: str) -> str:
+    """整行的 $$公式$$ 拆成三行。
+
+    remark-math 只把独立成行的 $$ 当块级公式；写成一行的话会被当作行内公式，
+    公式不会居中也不会单独成块。代码块内部原样保留。
+    """
+    out, in_fence = [], False
+    for line in text.split("\n"):
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            out.append(line)
+            continue
+        if not in_fence:
+            m = re.fullmatch(r"\s*\$\$(.+?)\$\$\s*", line)
+            if m:
+                out.extend(["$$", m.group(1).strip(), "$$"])
+                continue
+        out.append(line)
+    return "\n".join(out)
 
 
 def slugify(text: str) -> str:
@@ -130,6 +153,9 @@ def main() -> int:
     ap.add_argument("--draft", action="store_true")
     ap.add_argument("--bundle", action="store_true")
     ap.add_argument("--strip-toc", action="store_true")
+    ap.add_argument("--series", default=None, help="归入哪个专栏(见 src/lib/series.ts)")
+    ap.add_argument("--order", type=int, default=None, help="专栏内顺序")
+    ap.add_argument("--short-title", default=None, help="专栏列表里用的短标题")
     args = ap.parse_args()
 
     if not args.src.is_file():
@@ -146,7 +172,7 @@ def main() -> int:
     if args.strip_toc:
         strip_toc(lines)
 
-    body = "\n".join(lines).strip()
+    body = normalize_display_math("\n".join(lines).strip())
     summary = args.summary if args.summary is not None else make_summary(body)
     date = datetime.date.fromtimestamp(args.src.stat().st_mtime)
     tags = [t.strip() for t in args.tags.split(",") if t.strip()]
@@ -156,6 +182,12 @@ def main() -> int:
     if summary:
         fm.append(f"summary: {yaml_quote(summary)}")
     fm.append("tags: [" + ", ".join(yaml_quote(t) for t in tags) + "]")
+    if args.series:
+        fm.append(f"series: {yaml_quote(args.series)}")
+    if args.order is not None:
+        fm.append(f"order: {args.order}")
+    if args.short_title:
+        fm.append(f"shortTitle: {yaml_quote(args.short_title)}")
     if args.draft:
         fm.append("draft: true")
     fm.append("---")
