@@ -2,6 +2,7 @@
 import BaseLayout from '../layouts/BaseLayout.astro';
 import NoteCard from '../components/NoteCard.astro';
 import SeriesCard from '../components/SeriesCard.astro';
+import StarButton from '../components/StarButton.astro';
 import { allSeries, standaloneNotes, swatchFor, withBase } from '../lib/notes';
 
 const series = await allSeries();
@@ -17,15 +18,17 @@ const tags = [...counts.entries()]
   .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag, 'zh'));
 ---
 
-<BaseLayout title="笔记本" description="markdown 笔记、读书摘录与随手记录">
+<BaseLayout title="笔记本" description="杨嘉乐的学习笔记：南科大课程笔记、斯坦福公开课逐讲笔记与零散杂记">
   <div class="wrap">
     <section class="intro rise" style="--i:0">
       <p class="hand kicker">hello —</p>
-      <h1>把散落的 markdown，贴成一面墙</h1>
+      <h1>课程笔记，和一些零散的杂记</h1>
       <p class="lede">
-        这里放我平时记的东西：项目笔记、读到的资料、想到一半的点子。
-        没整理完也照样贴上来，反正笔记本本来就是这样。
-      </p>
+        这里整理了我在南科大修读课程的学习笔记、跟读斯坦福公开课时的逐讲笔记，以及一些还没归进任何专栏的零散杂记。成体系的内容收在下面的专栏里，一叠一叠翻着看就好。</p>
+      <div class="actions">
+        <StarButton label="觉得有用？点个 Star" />
+        <a class="about-link" href={withBase('/about/')}>关于我 →</a>
+      </div>
     </section>
 
     {series.length > 0 && (
@@ -71,8 +74,7 @@ const tags = [...counts.entries()]
 
     {notes.length === 0 ? (
       <p class="empty">
-        散记还是空的。在 <code>src/content/notes/</code> 里丢一个 <code>.md</code> 文件就会出现在这儿。
-      </p>
+        散记还是空的。在 <code>src/content/notes/</code> 里丢一个 <code>.md</code> 文件就会出现在这儿。</p>
     ) : (
       <div class="wall" id="wall">
         {notes.map((note, i) => <NoteCard note={note} index={i} />)}
@@ -152,6 +154,22 @@ const tags = [...counts.entries()]
     color: var(--ink-soft);
     max-width: var(--measure);
   }
+
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .75rem 1.25rem;
+    margin-top: 1.3rem;
+  }
+  .about-link {
+    display: inline-block;
+    font-size: .9rem;
+    color: var(--ink-soft);
+    text-decoration: none;
+    transition: color .2s ease, transform .2s ease;
+  }
+  .about-link:hover { color: var(--accent); transform: translateX(3px); }
 
   /* ---------- 分区标题 ---------- */
   .shelf-title {

@@ -1,33 +1,67 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
-import { withBase } from '../lib/notes';
+import StarButton from '../components/StarButton.astro';
+import { allSeries, standaloneNotes, withBase } from '../lib/notes';
+
+const EMAIL = '12411723@mail.sustech.edu.cn';
+const series = await allSeries();
+const loose = await standaloneNotes();
 ---
 
-<BaseLayout title="关于" description="关于这个笔记本和写它的人">
+<BaseLayout title="关于" description="杨嘉乐：南方科技大学计算机系本科生，关注多模态与大语言模型">
   <div class="wrap wrap--narrow">
-    <p class="hand kicker rise" style="--i:0">about —</p>
-    <h1 class="rise" style="--i:1">关于这个本子</h1>
+    <p class="hand kicker rise" style="--i:0">about me —</p>
+    <h1 class="rise" style="--i:1">你好，我是杨嘉乐</h1>
 
-    <div class="prose rise" style="--i:2">
-      <p>
-        这里是我放 markdown 笔记的地方。写在本地，推到 GitHub，自动就出现在这一页的隔壁。
-      </p>
+    <section class="card rise" style="--i:2">
+      <span class="stamp" aria-hidden="true">乐</span>
+      <p class="who">
+        南方科技大学计算机系大三在读，研究兴趣主要在<strong>多模态</strong>与<strong>大语言模型</strong>。</p>
+      <ul class="facts">
+        <li><span class="k">学校</span><span>南方科技大学（SUSTech）</span></li>
+        <li><span class="k">年级</span><span>计算机系 · 本科三年级</span></li>
+        <li><span class="k">方向</span><span>多模态 · 大语言模型</span></li>
+        <li><span class="k">邮箱</span><a href={`mailto:${EMAIL}`}>{EMAIL}</a></li>
+      </ul>
+    </section>
 
-      <h2>为什么是这样一个站</h2>
+    <div class="prose rise" style="--i:3">
+      <h2>这里有什么</h2>
       <p>
-        笔记软件很好用，但笔记锁在软件里就只有我自己看得到。
-        做成一个静态站，好处是文件还是我自己的 <code>.md</code>，
-        随时能搬走，也不依赖任何一家公司还开不开门。
-      </p>
+        这个站是我的学习笔记本，大致分三类：本校课程的课堂笔记、跟读斯坦福公开课时整理的逐讲笔记，以及一些篇幅不大、还没归进专栏的零散杂记。</p>
 
-      <h2>怎么找东西</h2>
+      {series.length > 0 && (
+        <ul class="shelf">
+          {series.map(({ series: s, notes }) => (
+            <li>
+              <a href={withBase(`/series/${s.id}/`)}>
+                <span class="badge" data-sw={s.color}>{s.badge}</span>
+                <span class="name">{s.title.replace(/^[^·]*·\s*/, '')}</span>
+                <span class="n">{notes.length} 篇</span>
+              </a>
+            </li>
+          ))}
+          {loose.length > 0 && (
+            <li>
+              <a href={withBase('/')}>
+                <span class="badge" data-sw="sand">散记</span>
+                <span class="name">零散杂记</span>
+                <span class="n">{loose.length} 篇</span>
+              </a>
+            </li>
+          )}
+        </ul>
+      )}
+
       <p>
-        首页可以按标签实时筛选，<a href={withBase('/tags/')}>标签页</a> 是全部主题的总览。
-        也欢迎订阅 <a href={withBase('/rss.xml')}>RSS</a>。
-      </p>
+        笔记以自己复习和理解为主，难免有疏漏或理解偏差。如果你发现错误、有疑问，或者也在做相近的方向想交流，都欢迎发邮件给我：<a href={`mailto:${EMAIL}`}>{EMAIL}</a>。</p>
+
+      <h2>如果对你有帮助</h2>
+      <p>顺手在 GitHub 上点个 Star 吧，这是让我继续整理下去的最好动力。</p>
+      <p class="star-row"><StarButton /></p>
 
       <hr />
-      <p class="sig hand">— 随手记，慢慢补 —</p>
+      <p class="sig hand">— 边学边记，慢慢补全 —</p>
     </div>
   </div>
 </BaseLayout>
@@ -35,19 +69,114 @@ import { withBase } from '../lib/notes';
 <style>
   .kicker { font-size: 1.6rem; margin-bottom: .1rem; }
   h1 { font-size: clamp(1.7rem, 4vw, 2.4rem); margin-bottom: 1.5rem; }
+
+  /* ---------- 名片 ---------- */
+  .card {
+    position: relative;
+    padding: 1.5rem 1.5rem 1.3rem;
+    margin-bottom: 2.4rem;
+    background: var(--paper-card);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    box-shadow: var(--lift-2);
+  }
+  .stamp {
+    position: absolute;
+    top: 1.1rem;
+    right: 1.2rem;
+    display: grid;
+    place-items: center;
+    width: 46px;
+    height: 46px;
+    font-family: var(--font-serif);
+    font-size: 24px;
+    color: var(--accent);
+    border: 2px solid var(--accent);
+    border-radius: 4px;
+    opacity: .78;
+    transform: rotate(8deg);
+  }
+  .who {
+    max-width: calc(100% - 3.8rem);
+    font-size: 1.04rem;
+    line-height: 1.8;
+  }
+  .who strong {
+    font-weight: 600;
+    background: linear-gradient(transparent 62%, color-mix(in srgb, var(--sw-sand) 55%, transparent) 62%);
+  }
+  .facts {
+    display: grid;
+    gap: .45rem;
+    margin: 1.1rem 0 0;
+    padding: 1rem 0 0;
+    list-style: none;
+    font-size: .9rem;
+    border-top: 1px dashed var(--rule);
+  }
+  .facts li { display: flex; gap: 1rem; min-width: 0; }
+  .facts .k {
+    flex: none;
+    width: 2.6rem;
+    font-size: .78rem;
+    line-height: 1.9;
+    color: var(--ink-faint);
+  }
+  .facts a {
+    color: var(--accent);
+    text-underline-offset: 3px;
+    overflow-wrap: anywhere;
+  }
+
+  /* ---------- 正文 ---------- */
   .prose { font-size: 1.02rem; }
   .prose > * + * { margin-top: 1.15em; }
   .prose h2 { font-size: 1.25rem; margin-top: 2.2em; margin-bottom: .5em; }
+  .prose h2:first-child { margin-top: 0; }
   .prose p { line-height: 1.85; }
-  .prose a { color: var(--accent); }
-  .prose code {
-    font-family: var(--font-mono);
-    font-size: .88em;
-    padding: .12em .38em;
-    background: var(--paper-sunk);
-    border: 1px solid var(--rule);
-    border-radius: 3px;
-  }
+  .prose p a { color: var(--accent); overflow-wrap: anywhere; }
   .prose hr { border: 0; border-top: 1px dashed var(--rule-strong); margin-block: 2.5em; }
   .sig { font-size: 1.5rem; text-align: center; }
+  .star-row { margin-top: .9em; }
+
+  /* 专栏速览 */
+  .shelf { display: grid; gap: .5rem; margin-block: 1.2em; padding: 0; list-style: none; }
+  .shelf a {
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    padding: .6rem .85rem;
+    color: inherit;
+    text-decoration: none;
+    background: var(--paper-card);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    transition: transform .24s cubic-bezier(.2,.9,.3,1.2), box-shadow .24s ease, border-color .24s ease;
+  }
+  .shelf a:hover { transform: translateX(4px); box-shadow: var(--lift-1); border-color: var(--rule-strong); }
+  .shelf a:hover .name { color: var(--accent); }
+  .badge {
+    --sw: var(--sw-sand);
+    flex: none;
+    min-width: 4.8rem;
+    padding: .16em .5em .2em;
+    font-family: var(--font-mono);
+    font-size: .7rem;
+    font-weight: 600;
+    text-align: center;
+    background: color-mix(in srgb, var(--sw) 50%, var(--paper-card));
+    border: 1px solid color-mix(in srgb, var(--sw) 70%, transparent);
+    border-radius: 2px;
+  }
+  .badge[data-sw='moss']  { --sw: var(--sw-moss); }
+  .badge[data-sw='sky']   { --sw: var(--sw-sky); }
+  .badge[data-sw='clay']  { --sw: var(--sw-clay); }
+  .badge[data-sw='plum']  { --sw: var(--sw-plum); }
+  .badge[data-sw='lilac'] { --sw: var(--sw-lilac); }
+  .name { flex: 1; min-width: 0; font-size: .92rem; transition: color .2s ease; }
+  .n { flex: none; font-family: var(--font-mono); font-size: .72rem; color: var(--ink-faint); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .shelf a:hover { transform: none; }
+  }
 </style>
