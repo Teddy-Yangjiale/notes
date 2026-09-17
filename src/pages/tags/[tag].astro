@@ -47,7 +47,11 @@ const { tag, notes } = Astro.props;
   }
   h1 .tag { font-size: 1.5rem; padding: .18em .5em; }
   .count { font-family: var(--font-mono); font-size: .82rem; color: var(--ink-faint); }
-  .wall { columns: 3 17rem; column-gap: 1.15rem; }
-  .wall > :global(.card) { break-inside: avoid; margin-bottom: 1.15rem; }
-  @media (max-width: 640px) { .wall { columns: 1; } }
+  /* 用 Grid 而非多栏布局，原因见 pages/index.astro 的 .wall 注释 */
+  .wall {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 17rem), 1fr));
+    align-items: start;
+    gap: 1.6rem 1.15rem;
+  }
 </style>

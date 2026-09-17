@@ -251,14 +251,15 @@ const tags = [...counts.entries()]
   }
   .chip.on .n { color: var(--ink-soft); }
 
-  /* 卡片墙：CSS 多栏做瀑布流，卡片不被拆断 */
+  /* 卡片墙：用 Grid 而不是 CSS 多栏（columns）。
+     多栏布局会把内容"分片"到各列，卡片带 transform 或溢出（顶部胶带 top:-8px）时，
+     Safari 会把第二列之后的卡片画到错误位置甚至不画，但点击区域还在原处——
+     表现为悬停时卡片消失却仍能点开；Chromium 里则会把胶带碎片画到上一列底部。 */
   .wall {
-    columns: 3 17rem;
-    column-gap: 1.15rem;
-  }
-  .wall > :global(.card) {
-    break-inside: avoid;
-    margin-bottom: 1.15rem;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 17rem), 1fr));
+    align-items: start;
+    gap: 1.6rem 1.15rem;
   }
 
   .empty, .nores {
@@ -275,6 +276,6 @@ const tags = [...counts.entries()]
   }
 
   @media (max-width: 640px) {
-    .wall { columns: 1; }
+    .wall { grid-template-columns: 1fr; }
   }
 </style>

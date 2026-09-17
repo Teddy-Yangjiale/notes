@@ -134,6 +134,10 @@ body::before {
 
 img, svg, video { display: block; max-width: 100%; height: auto; }
 
+/* 组件里写了 display:flex/grid 的元素会盖掉浏览器默认的 [hidden]{display:none}，
+   导致 el.hidden = true 不生效（首页标签筛选就踩过这个坑）。这里统一兜底。 */
+[hidden] { display: none !important; }
+
 a { color: inherit; text-decoration-color: var(--accent-soft); text-underline-offset: 3px; }
 a:hover { text-decoration-color: var(--accent); }
 
