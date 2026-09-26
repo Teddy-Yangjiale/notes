@@ -22,6 +22,29 @@ export interface Series {
 
 export const SERIES: Series[] = [
   {
+    id: 'cs323',
+    title: 'CS323 · 编译原理',
+    badge: 'CS323',
+    description:
+      '南科大 CS323 Compilers（刘烨庞老师，Fall 2026）逐讲中文笔记。' +
+      '从编译器的七个阶段讲起，沿着 正则表达式 → NFA → DFA → 上下文无关文法 这条主线，' +
+      '把每个定义、算法和易错点都配上完整推导与例子，每讲末尾附复习自测。',
+    color: 'plum',
+    weight: 0,
+  },
+  {
+    id: 'cs201',
+    title: 'CS201 · 离散数学',
+    badge: 'CS201',
+    description:
+      '南科大 CS201 Discrete Mathematics（Shan Chen 老师，Fall 2026）中文笔记。' +
+      '面向零基础：每个符号都从「它到底在说什么」讲起，' +
+      '命题逻辑 → 逻辑等价 → 谓词逻辑 → 形式证明 → 证明方法层层递进，' +
+      '课件里的练习全部附完整解答，每章末尾有符号速查与易错清单。',
+    color: 'sand',
+    weight: 1,
+  },
+  {
     id: 'sta5007',
     title: 'STA-5007 · 高级自然语言处理',
     badge: 'STA-5007',
@@ -30,7 +53,7 @@ export const SERIES: Series[] = [
       '按课件逐页拆解：每页配原始截图，图下先给原文要点，再补推导细节、维度核对、' +
       '直觉解释与易错点，配逐元素图解和带详解的练习。',
     color: 'moss',
-    weight: 0,
+    weight: 2,
   },
   {
     id: 'cs336',
@@ -40,7 +63,7 @@ export const SERIES: Series[] = [
       '斯坦福 CS336 Spring 2026 逐讲中文笔记。从 BPE 分词一路走到分布式训练、Scaling Laws、推理服务与后训练，' +
       '每讲都按"为什么需要它 → 算法怎么推 → 实现要注意什么 → 怎么判断做对了"重写过。',
     color: 'sky',
-    weight: 1,
+    weight: 3,
   },
   {
     id: 'cs329a',
@@ -50,7 +73,7 @@ export const SERIES: Series[] = [
       '斯坦福 CS329A 逐讲中文笔记。主题是推理时扩展与自我改进：验证器、工具反馈、规划、' +
       '强化学习、深度研究智能体与长时程任务评估，外加三篇补充专题。',
     color: 'clay',
-    weight: 2,
+    weight: 4,
   },
 ];
 
