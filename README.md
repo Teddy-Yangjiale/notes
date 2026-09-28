@@ -1,3 +1,7 @@
+# 访问地址
+
+**https://teddy-yangjiale.github.io/notes/**
+
 # 笔记本
 
 用 Astro 搭的个人笔记站，写 markdown、push、自动发布到 GitHub Pages。
