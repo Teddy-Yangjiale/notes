@@ -4,6 +4,9 @@ date: 2026-09-29
 summary: "我怀疑投机解码会让 RL rollout 的数值分布偏离 trainer，于是先写死判据再做实验。结果在 ±5% 内测不到任何效应——这篇把背景、动机、实验、错误与结论完整摊开。"
 tags: ["AI Infra", "投机解码", "强化学习", "LLM 推理", "实验方法"]
 color: "sky"
+series: "mlsys-failures"
+order: 9
+shortTitle: "投机解码 × RL 失配"
 ---
 
 > **TL;DR**

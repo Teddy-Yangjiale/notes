@@ -75,6 +75,17 @@ export const SERIES: Series[] = [
     color: 'clay',
     weight: 4,
   },
+  {
+    id: 'mlsys-failures',
+    title: 'MLSys 失败实验复盘',
+    badge: 'KILL',
+    description:
+      '2026 年 9 月，在四张消费级 Blackwell 显卡上连续试了九个 MLSys 方向，全部没有活下来。' +
+      '每篇按一条完整的研究链路复盘一个方向：背景原理、动机与假设、预注册判据、实验与数据、' +
+      '怎么死的、哪些测量仍然有效、犯过的错和学到的教训。',
+    color: 'lilac',
+    weight: 5,
+  },
 ];
 
 export const seriesById = new Map(SERIES.map((s) => [s.id, s]));
