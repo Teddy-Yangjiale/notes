@@ -86,9 +86,36 @@ $$
 
 权重完全相等时是 1；一条样本独占全部权重时是 $1/G$。
 
+> **ESS 这个式子是怎么来的**
+>
+> 用自归一化重要性采样估计 $\mathbb{E}_p[f]$ 时，估计量是加权平均 $\hat\mu = \sum_i \tilde w_i f_i$，其中 $\tilde w_i = w_i/\sum_j w_j$。它的方差近似为
+>
+> $$\mathrm{Var}(\hat\mu) \approx \sigma_f^2 \sum_i \tilde w_i^2$$
+>
+> 而如果我们**直接从 $p$ 采 $n$ 个等权样本**，方差是 $\sigma_f^2/n$。令两者相等解出 $n$：
+>
+> $$n = \frac{1}{\sum_i \tilde w_i^2} = \frac{\big(\sum_i w_i\big)^2}{\sum_i w_i^2}$$
+>
+> 这就是 Kish 有效样本量——**「这批不等权样本，相当于几个等权样本」**。除以 $G$ 做归一化后落在 $[1/G, 1]$。
+>
+> 直觉上它衡量的是权重的**集中程度**：由柯西–施瓦茨不等式，$(\sum w_i)^2 \le G\sum w_i^2$，等号当且仅当所有 $w_i$ 相等。所以 ESS/G 本质上是权重分布的一个「均匀度」指标，和熵、基尼系数属于同一类量。
+>
+> **这也解释了为什么它对本篇是个陷阱**（§1.6 第一个坑）：它的下界是 $1/G$ 而不是 0，$G=4$ 时「腰斩」只能从 1 掉到 0.5，可动区间被压缩了一半还多。
+
 ### 1.3 同一份 $\Delta_t$，四种聚合方式
 
 ![四种算子：序列级重要性权重把 Δ 求和后进指数，会复合；token 级 clip 逐 token 判断是否落在 0.8 到 1.2 的带内，不复合、双边；GSPO 先按长度取几何平均；draft 接受率 min(1, e^Δ) 不复合、只有 Δ<0 扣分](diagrams/fig02_four_operators.png)
+
+**🖼 怎么读这张图**
+>
+> 图分三层，**从上往下、从左往右**看：
+>
+> - **上排四个彩色方块**是四种算子，每块给出定义式、是否复合、以及**谁在用**。最后这一行是全图最该先看的——橙色那列写着「没有主流 trainer 这样用」，而它正是本项目 EXP-001 的 headline（左上角红标）。**整篇文章的死因就写在这一行里。**
+> - **中排的小字**把算子翻译成「单个 token 的 Δ 对最终价值贡献多少」：序列级是「每个 token 乘进一个因子 $e^{\Delta}$」，token 级是「带内记 1、带外记 0，一个 token 出界只影响它自己」。
+> - **下排四张小曲线**画的是这个贡献函数的形状，横轴都是 Δ（除第三张是序列的 mean Δ）。**形状差异一眼可辨**：橙色是指数（无界放大），蓝色是矩形窗（双边硬截），紫色是一根几乎看不见的细线（$\pm\epsilon$ 窄到 4e-4），绿色是「左边斜、右边封顶 1」的折线——**只有 $\Delta<0$ 扣分**。
+> - **底部粉框**是结论，也是本篇的自我否定：解析预言在数学上成立，错在选错了代表算子。
+>
+> 如果只记一件事：**看下排第四张（绿色）和第一张（橙色）的形状差别**。封顶 vs 指数，这就是 draft 用途能撑上百步而序列级 IS 几步就崩的全部原因。
 
 这篇文章的核心就在这张图里。同一份 $\Delta_t$，下游用途不同，聚合方式就不同：
 
@@ -120,7 +147,29 @@ $$
 
 逐 token 看，$\Delta_t$ 很小：lag 4 时 96.6% 的 token 在 clip 带内，lag 80 时仍有 87.0%。但一条 rollout 平均约 500 个 token，小数加起来就不小了：lag 80 时每条 rollout 的 $S = \sum_t \Delta_t$ 中位数是 −35.6，同组 4 条里权重最大的一条和第二大的一条，$S$ 的差中位数约 6.9 nat，也就是权重差近千倍。一组 4 条只剩 1 条「有效」，ESS/G 就贴到了地板 0.25。
 
-这就是 PREREG 里写下的解析预言（推导）：设每个 token 的散度量级为 $D$，序列级量的半衰期 $\propto 1/(T\cdot D)$，token 级量的半衰期 $\propto 1/D$，两者之比 $\approx O(T)$。$T \approx 500$ 时，预言比值在 $10^2$–$10^3$。**这个推导本身没有错。** 后面会看到，错在我把第一种算子当成了策略梯度的价值。
+这就是 PREREG 里写下的解析预言。它的推导如下。
+
+> **为什么复合的算子寿命 $\propto 1/(T\cdot D)$，不复合的 $\propto 1/D$**
+>
+> **设定**：把 lag $h$ 处每个 token 的对数比看作独立同分布的随机变量，$\Delta_t \sim (\mu_h, \sigma_h^2)$。策略每走一步，分布挪动一点，所以散度随 lag 大致线性增长——记单位 lag 的散度量级为 $D$，则 $\sigma_h^2 \approx D\cdot h$（$\mu_h$ 同阶，为简洁只跟踪二阶项）。
+>
+> **序列级（复合）**：$S = \sum_{t=1}^{T}\Delta_t$，由中心极限定理 $S \sim \mathcal{N}(T\mu_h,\ T\sigma_h^2)$，权重 $w = e^{S}$ 服从对数正态。对数正态权重的 ESS 有一个经典结果：
+>
+> $$\mathbb{E}[\text{ESS}/G] \approx \frac{1}{1 + (G-1)\big(e^{\mathrm{Var}(S)} - 1\big)/G} \quad\text{（随 } \mathrm{Var}(S) \text{ 单调下降）}$$
+>
+> 要它掉到 0.5，需要 $\mathrm{Var}(S) = T\sigma_h^2 = T\cdot D\cdot h$ 达到某个 $O(1)$ 常数。解出
+>
+> $$h_{1/2}^{\text{seq}} \propto \frac{1}{T\cdot D}$$
+>
+> **token 级（不复合）**：clip 存活率是 $\Pr\big[|\Delta_t| \le \ln 1.2\big]$，只依赖**单个** $\Delta_t$ 的分布，与 $T$ 无关。要它掉到 0.5，需要 $\sigma_h = D\cdot h$ 达到某个 $O(1)$ 常数（约等于 $\ln 1.2 / 0.67$，即让四分位点顶到带边）。解出
+>
+> $$h_{1/2}^{\text{tok}} \propto \frac{1}{D}$$
+>
+> **相除**：$h_{1/2}^{\text{tok}} / h_{1/2}^{\text{seq}} \approx O(T)$。$T\approx 500$ 时预言比值在 $10^2$–$10^3$。
+>
+> **关键在那个 $T$ 从哪来**：它来自「$T$ 个 $\Delta$ 先求和再进指数」这一步。求和让方差线性累积（$T\sigma^2$），指数再把方差放大成乘性的。凡是**先聚合再取指数**的算子都吃这个 $T$；凡是**逐 token 判断再平均**的算子都不吃。
+
+**这个推导本身没有错。** 后面会看到，错在我把第一种算子当成了策略梯度的价值——GRPO / PPO 用的是第二种。换句话说，**预言的是一个真实存在但没人使用的量的寿命**。
 
 ### 1.5 投机 draft 的价值：每次 verify 前进几个 token
 
@@ -614,9 +663,77 @@ A-004 在 EXP-002 之前写下了三条事前预言：
 
 ## 参考
 
-- 综述：Rollout Efficiency in RL for Reasoning LLMs [arXiv 2609.25463](https://arxiv.org/abs/2609.25463)；Generate, Filter, Control, Replay [arXiv 2605.02913](https://arxiv.org/abs/2605.02913)
-- 已在利用前提的三组工作：SPEC-RL [arXiv 2509.23232](https://arxiv.org/abs/2509.23232)；PrefixRL [arXiv 2601.18795](https://arxiv.org/abs/2601.18795)；REGEN [arXiv 2607.19450](https://arxiv.org/abs/2607.19450)
-- 梯度 / critic 用途的 staleness 工作：PNPO（Reusing Rollouts under Policy Lag）[arXiv 2608.01418](https://arxiv.org/abs/2608.01418)；Headroom-Drift Replay [arXiv 2609.03941](https://arxiv.org/abs/2609.03941)；Rollout-Level Advantage-Prioritized ER for GRPO [arXiv 2606.04560](https://arxiv.org/abs/2606.04560)；BRACE [arXiv 2609.09783](https://arxiv.org/abs/2609.09783)；Efficient RL Training with Experience Replay [arXiv 2604.08706](https://arxiv.org/abs/2604.08706)；Freshness-Aware PER [arXiv 2604.16918](https://arxiv.org/abs/2604.16918)；CERO [arXiv 2606.05606](https://arxiv.org/abs/2606.05606)；Prompt replay [arXiv 2603.21177](https://arxiv.org/abs/2603.21177)
-- 系统侧：StaleFlow [arXiv 2601.12784](https://arxiv.org/abs/2601.12784)
-- 投机解码进 RL rollout：System-Integrated SD for RL Rollouts [arXiv 2604.26779](https://arxiv.org/abs/2604.26779)；Online Draft Co-Training [arXiv 2609.07108](https://arxiv.org/abs/2609.07108)
-- 同专栏：[投机解码会悄悄改变 RL 的行为策略吗？](../spec-decoding-rl-mismatch/)（拒绝采样的无损性推导）
+按「做了什么、关键结论、和本篇什么关系」逐条展开。标 ⭐ 的三篇最接近本篇的问题。
+
+### A. 综述：先确认这块地图长什么样
+
+**Rollout Efficiency in RL for Reasoning LLMs: A Taxonomy and Future Directions** · [arXiv 2609.25463](https://arxiv.org/abs/2609.25463)
+推理导向的 RL 把训练成本的**很大一部分转移到了 rollout**。这篇综述给出分类法，强调高效 rollout 机制必须同时维持训练数据的**新鲜度、一致性和统计有效性**。
+**与本篇的关系**：这三个词正好切中本篇的题眼——「一条 rollout 能用多久」问的就是新鲜度在什么尺度上失效，而 §11.1 的死因正是我在「统计有效性」上选错了算子。
+
+**Generate, Filter, Control, Replay: A Comprehensive Survey of Rollout Strategies** · [arXiv 2605.02913](https://arxiv.org/abs/2605.02913)
+从优化视角梳理 rollout 设计。作者的出发点是：rollout 决定了优化器学到的数据，**但 rollout 设计在论文里经常被漏报**。
+**与本篇的关系**：标题的四个动词（生成、过滤、控制、复用）正好是本篇 §1.1「一条 rollout 里有什么」那张成分表的行动版本。
+
+### B. ⭐ 已经在利用「旧 rollout 还能用」这个前提的三组工作
+
+**⭐ SPEC-RL: Accelerating On-Policy RL with Speculative Rollouts** · [arXiv 2509.23232](https://arxiv.org/abs/2509.23232)
+观察到**相邻训练 epoch 的 rollout 有大量重叠**，直接把上一轮 rollout 当 draft 复用。作者明确指出已有加速方法——并行化、目标/数据侧修改、replay buffer——要么收益递减，要么引入偏差，要么**忽视了跨迭代的冗余**。
+**与本篇的关系**：**这是本篇 draft 用途那一列的现实对应物。** 它已经在用「旧 rollout 当 draft」这件事，本篇则去量它到底能撑多久（lag 80 时 τ 还保住 88.6%）。
+
+**⭐ Reuse your FLOPs: Scaling RL on Hard Problems by Conditioning on Very Off-Policy Prefixes** · [arXiv 2601.18795](https://arxiv.org/abs/2601.18795)
+难题上正确的 on-policy 轨迹稀少，策略梯度消失、学习停滞，算力被浪费。这篇复用旧的采样 FLOPs（来自此前推理或 RL 训练）作为 off-policy 轨迹，但**不去监督拟合它们**（标准 off-policy 方法那样做会导致优化不稳定），而是**条件在 off-policy 前缀上**继续采样。
+**与本篇的关系**：**这正是本篇成分表里「成功前缀 → 前缀 conditioning」那一格**，而且它用的是 *very* off-policy 的前缀——说明这条用途的半衰期确实远长于梯度用途。本篇没能测这一格，这篇给出了答案的方向。
+
+**⭐ REGEN: Replay-recycling for Expert-to-Generalist distillation with Offline RL** · [arXiv 2607.19450](https://arxiv.org/abs/2607.19450)
+大规模在线 RL 难以持续扩展到广泛任务域，尤其当把 RL 看作**不止一次性学习阶段**时。REGEN 回收 replay 数据做专家到通才的蒸馏。
+**与本篇的关系**：把「旧数据还能用多久」的时间尺度推到了极限——跨训练阶段复用。
+
+### C. 梯度 / critic 用途下的 staleness：本篇算错了的那一列
+
+**⭐ Reusing Rollouts under Policy Lag: Prefix-Normalized Policy Optimization（PNPO）** · [arXiv 2608.01418](https://arxiv.org/abs/2608.01418)
+把一批 rollout 复用于多次 learner 更新能摊薄成本，但后续更新越来越 off-policy。**关键洞察**：在某个 token 位置上，精确的 off-policy 校正必须同时考虑**当前动作**和**到达该前缀的概率**——后者正是序列级项的来源。
+**与本篇的关系**：**这篇直接命中本篇 §11.1 的死因。** 我把「序列级重要性权重」当成策略梯度的代表算子，测出半衰期 2.4 步；但 GRPO/PPO 真正用的是 token 级 clip，换成它差距就没了。PNPO 说明序列级项**确实有意义**（前缀概率），但它是一个需要专门设计的校正，不是默认算子。读到它应该更早修正我的口径。
+
+**Headroom-Drift Replay: A Primitive for Principled Replay Control in GRPO** · [arXiv 2609.03941](https://arxiv.org/abs/2609.03941)
+replay 能减轻重复生成的负担，但已有方法通常把它**嵌在更大的训练流水线里**（探索、经验重构、混合策略优化），导致 replay 本身的效果难以单独归因。这篇把它抽成一个独立原语。
+**与本篇的关系**：方法论上和本篇同构——都是「把一个纠缠在系统里的量单独拎出来量」。它做成了，本篇在算子选择上栽了。
+
+**Rollout-Level Advantage-Prioritized Experience Replay for GRPO** · [arXiv 2606.04560](https://arxiv.org/abs/2606.04560)
+每条 rollout 只用于一次梯度更新就丢弃，样本效率低。但朴素 replay 不适用，因为 **LLM 策略每步梯度就漂移很快**，存下的 rollout 很快变陈旧并破坏训练稳定性。
+**与本篇的关系**：「漂移很快」正是本篇想量化的那句话。注意它说的是策略漂移快，而本篇 §10.4 的实测是**「加长轨迹也拿不到大漂移」**——两者的差异可能来自模型规模（我用的是 Qwen3-1.7B + LoRA）和训练配置，这是 §15 里承认的局限。
+
+**BRACE: Anchored Bellman-Residual Correction for Stale Critics in Asynchronous RL** · [arXiv 2609.09783](https://arxiv.org/abs/2609.09783)
+异步 RL 带来的策略滞后会让 **critic 偏向陈旧的行为策略**。已有工作校正 actor 而不管这个偏差；经典 RL 的 off-policy 价值校正又迁移不过来，因为长时程智能体任务上短校正视界不够。
+**与本篇的关系**：本篇的成分表里没有 critic 这一行（GRPO 无 critic）。这篇提示，在有 critic 的设置下还有第五种用途，半衰期又是另一条曲线。
+
+**Efficient RL Training for LLMs with Experience Replay** · [arXiv 2604.08706](https://arxiv.org/abs/2604.08706)
+挑战「必须用新鲜 on-policy 数据」这个流行信念，系统研究 LLM 后训练里的 replay buffer 并形式化其最优用法。
+**与本篇的关系**：和本篇同一立场——旧数据未必没用，关键看用来做什么。
+
+**Freshness-Aware Prioritized Experience Replay for LLM/VLM RL** · [arXiv 2604.16918](https://arxiv.org/abs/2604.16918)
+PPO / GRPO / REINFORCE++ 这类 on-policy 算法**一次梯度更新后就丢弃全部轨迹**，样本效率很差，对多轮环境交互昂贵的智能体任务尤其浪费。
+**与本篇的关系**：「按新鲜度优先级排序」这个做法，前提就是不同轨迹的有效期不同——本篇想给这个前提提供逐用途的量化基础。
+
+**Cross-Epoch Adaptive Rollout Optimization（CERO）** · [arXiv 2606.05606](https://arxiv.org/abs/2606.05606)
+换一个维度省 rollout：不同 prompt 提供的训练信号差别很大，但多数方法给每个 prompt 固定预算。CERO 用 Beta 后验建模成功概率做自适应分配。
+
+**Prompt replay: speeding up GRPO with on-policy reuse of high-signal prompts** · [arXiv 2603.21177](https://arxiv.org/abs/2603.21177)
+一个很巧的设计：**只复用 prompt，不复用轨迹**，因而完全保持 on-policy。每步之后把中等难度的 prompt 重新插回。
+**与本篇的关系**：对应成分表里「prompt 可解性 → 采样预算」那一格——本篇标记为「未测」的那一列。它说明这一格的半衰期可能非常长，因为 prompt 的难度属性几乎不随策略变化。
+
+### D. 系统侧
+
+**StaleFlow: Staleness-Aware Data Management for Fully Disaggregated RL Post-Training** · [arXiv 2601.12784](https://arxiv.org/abs/2601.12784)
+完全分离式架构把 rollout、reward、training 三个阶段解耦到不同资源上异步执行，带来两个数据层面的问题，其一就是**异步执行导致轨迹数据陈旧**。
+**与本篇的关系**：说明「陈旧」在系统层面是被当作一等公民管理的对象，而管理它需要知道「多陈旧才算过期」——这正是本篇想提供的数字。
+
+### E. 投机解码进 RL rollout
+
+- **System-Integrated SD for RL Rollouts（NeMo-RL）** · [arXiv 2604.26779](https://arxiv.org/abs/2604.26779) —— 把 SD 当无损加速原语放进 NeMo-RL + vLLM，与那些会动分布的方法（off-policy 执行、replay、低精度）区分开。
+- **Online Draft Co-Training for SD in Large-Scale, Long-Context RL** · [arXiv 2609.07108](https://arxiv.org/abs/2609.07108) —— 在线 co-training 提升 draft 精度，并解决了 CP 不支持 branch attention、target 特征跨 PP 阶段两个工程障碍。
+
+### F. 本专栏内部
+
+- [第 9 篇：投机解码会悄悄改变 RL 的行为策略吗？](../spec-decoding-rl-mismatch/) —— 拒绝采样无损性的完整推导，本篇 §1.3 的第 ④ 种算子依赖它。
+- [第 1 篇：RL 里的投机 draft 什么时候值得维护？](../rl-spec-draft-maintenance/) —— 本篇量的是「旧 rollout 当 draft 能撑多久」，那篇量的是「专门训一个 draft 值不值」，两者是同一问题的两条路径。

@@ -109,6 +109,28 @@ $$
 
 其中 $B$ 是显存带宽，$I$ 是**算术强度**（每搬一个字节做多少次浮点运算）。$M=1$ 的 GEMV 做 $2NK$ 次运算、搬约 $NK \cdot b$ 字节权重（$b$ 是每元素字节数），所以 $I \approx 2/b$：BF16 是 1，FP8 是 2，FP4 约是 4。拿 5090 实测的 1511 GB/s 算，BF16 GEMV 的上限只有约 1.5 TFLOPS，离 238 TFLOPS 的实测峰值差两个数量级。decode 牢牢地是**访存界**。
 
+> **要多大的 batch 才能离开访存区**
+>
+> 这个数在后面反复用到，这里算一次。$M$ 个 token 一起做 GEMM 时，权重仍然只读一遍，但 FLOP 变成 $M$ 倍，所以
+>
+> $$I(M) = \frac{2MNK}{NK\cdot b} = \frac{2M}{b}$$
+>
+> 令它等于**机器平衡点** $I^\ast = P_\text{峰值}/B$（roofline 折点的横坐标），解出临界 batch
+>
+> $$M^\ast = \frac{b}{2}\cdot\frac{P_\text{峰值}}{B}$$
+>
+> 代 5090 的实测数：$B = 1511$ GB/s。
+>
+> | 精度 | $b$（字节） | $P_\text{峰值}$ | $I^\ast$ | $M^\ast$ |
+> |---|---|---|---|---|
+> | BF16 | 2 | 238 TFLOPS | 158 | **≈ 158** |
+> | NVFP4 | 0.5 | 1238 TFLOPS | 819 | **≈ 205** |
+>
+> 两个读数很重要：
+>
+> 1. **$M^\ast$ 在 150–200 量级**。单条序列的 decode（$M=1$）离它差两个数量级，所以**无论什么精度，decode 都在访存区**——这是投机解码能「免费」加宽 verify 的根本原因（见[第 3 篇](../quant-spec-interaction/)的四区制模型）。
+> 2. **低精度把 $M^\ast$ 推高了**（158 → 205）。因为 FP4 的峰值算力涨了 5.2 倍，而字节只降到 1/4，算力涨得更多。**这意味着低精度不只是省带宽，它还扩大了「投机免费」的适用范围**——这正是四区制模型里「量化与投机可能互补」那一条的来源。
+
 于是衡量 decode kernel 好不好，看的是**访存达成率**：
 
 $$
@@ -120,6 +142,18 @@ $$
 ### 2.2 启动开销地板：为什么小尺寸会制造假悬崖
 
 ![左：5090 的 roofline，M=1 的 BF16、FP8、NVFP4 GEMV 全在访存斜坡上；右：加上一个固定开销后，达成率随权重字节数爬升，带宽越高的机器掉得越狠；B200 的实测点几乎正好落在模型曲线上](diagrams/fig04_floor.png)
+
+**🖼 怎么读这张图**
+>
+> **左图（经典 roofline）**：横轴算术强度（对数），纵轴 TFLOPS（对数）。那条斜线是**访存斜坡**，斜率就是带宽 1511 GB/s；两条水平线是 BF16 和 NVFP4 的实测峰值（238 / 1238 TFLOPS）。三个圆点是 $M=1$ 的 GEMV：BF16 在 $I=1$、FP8 在 $I=2$、NVFP4 在 $I\approx 4$。
+> **三个点全都远在斜坡上、离水平段还有两个数量级**——这就是「decode 牢牢是访存界」的图形证明。注意一个反直觉的后果：**低精度在 roofline 上是往右上走的**（强度变高、可达吞吐变高），所以理论上 FP4 应该更快，这正是本篇原假设的依据。
+>
+> **右图（加上固定开销之后）**：横轴变成「一次调用要读的权重字节」（对数），纵轴是达成率 $\eta$。两条 S 形曲线是模型预测——橙色 5090（1.51 TB/s），蓝色 B200（6.40 TB/s）。三个空心圆是实测点。
+> **要看的有三件事**：①两条曲线**都**从左下角爬起来，说明小尺寸下达成率低是普遍现象；②**蓝线整体在橙线下方**——带宽越高的机器，同一个 $t_0$ 伤害越大，所以 B200 反而「更差」；③三个实测圆点**几乎正好落在曲线上**，说明这个单参数模型（只有一个 $t_0$）已经解释了全部观测。
+>
+> **底部粉框是全篇的谜底**：低精度 = 字节少 = 最先掉进地板。所以「FP4 达成率低」完全可能只是「测点太小」，和 SM120 有没有 TMEM 无关。
+>
+> 把左右两图连起来读：**左图说 FP4 理论上更好，右图说小尺寸下它必然看起来更差**——两者不矛盾，但如果只看右图就会得出错误的架构结论。
 
 真实的 kernel 调用除了搬数据，还有一段与问题规模无关的固定成本 $t_0$，包括 launch、调度，以及 kernel 里的固定工作（项目没有进一步拆分）。于是：
 
@@ -562,10 +596,87 @@ B200 上的 gemm 相位首先没过自己的质量门：52.1% 的测点不稳定
 
 ## 参考
 
-- Blackwell 微基准：[arXiv 2507.10789](https://arxiv.org/abs/2507.10789)（RTX 5080 vs H100）、[arXiv 2512.02189](https://arxiv.org/abs/2512.02189)（B200 vs H200）、[arXiv 2604.23466](https://arxiv.org/abs/2604.23466)（RTX PRO 6000、B200、H100 同一 harness）、[arXiv 2605.04178](https://arxiv.org/abs/2605.04178)（B200 解析模型）
-- 量化格式的可用性是整条栈的性质：[arXiv 2608.11693](https://arxiv.org/abs/2608.11693)
-- 单一规模会误导：[arXiv 2605.29752](https://arxiv.org/abs/2605.29752)；host 侧开销分解 TaxBreak：[arXiv 2603.12465](https://arxiv.org/abs/2603.12465)
-- 量化表征与消费级 Blackwell 部署：[arXiv 2508.16712](https://arxiv.org/abs/2508.16712)、[arXiv 2605.00519](https://arxiv.org/abs/2605.00519)、[arXiv 2601.09527](https://arxiv.org/abs/2601.09527)、[arXiv 2603.08747](https://arxiv.org/abs/2603.08747)
-- 工程渠道：Colfax Research 的 CUTLASS TMEM 教程，以及 SM12x NVFP4 blockscaled GEMM 系列（Part 1、Part 2）；zartbot《Dissecting the SM_120》；[triton-lang/triton #8182](https://github.com/triton-lang/triton/issues/8182)；[sgl-project/sglang PR #28038](https://github.com/sgl-project/sglang/pull/28038)
-- 教科书：V. Volkov, J. Demmel, *Benchmarking GPUs to Tune Dense Linear Algebra*, SC 2008；K. Goto, R. van de Geijn, *Anatomy of High-Performance Matrix Multiplication*, ACM TOMS 2008
-- 选题基地阶段撞上的工作：*Is Finer Better? The Limits of Microscaling Formats in Large Language Models*（ICLR 2026）、[arXiv 2503.24000](https://arxiv.org/abs/2503.24000)、[arXiv 2606.29708](https://arxiv.org/abs/2606.29708)、PrefixPlace [arXiv 2608.01655](https://arxiv.org/abs/2608.01655)、KVServe [arXiv 2605.13734](https://arxiv.org/abs/2605.13734)、CacheFlow [arXiv 2604.25080](https://arxiv.org/abs/2604.25080)
+下面按「这篇做了什么、关键结论、和本篇什么关系」逐条展开。标 ⭐ 的三篇是直接参与归因或推翻结论的。
+
+### A. ⭐ Blackwell 微架构：SM100 与 SM120 到底差在哪
+
+**⭐ Dissecting the NVIDIA Blackwell Architecture with Microbenchmarks** · [arXiv 2507.10789](https://arxiv.org/abs/2507.10789)
+用一套精心设计的微基准测 Blackwell 的各个子系统：内存层级、SM 执行流水线、SM sub-core，以及**支持 FP4 / FP6 的第五代 tensor core**。
+**与本篇的关系**：§1.2「SM120 与 SM100：同名，不同的数据通路」的事实基础。它把「同叫 Blackwell、内部不一样」这件事用实测钉死，而不是靠官方框图推断。
+
+**⭐ Microbenchmarking NVIDIA's Blackwell Architecture: An in-depth Architectural Analysis** · [arXiv 2512.02189](https://arxiv.org/abs/2512.02189)
+针对 **B200** 的系统性微基准，明确列出了三项架构进展：第五代 tensor core、**tensor memory（TMEM）**、解压引擎（DE），以及双芯设计。作者同时指出「量化这些改进的系统性方法仍然滞后」。
+**与本篇的关系**：TMEM 正是本篇假设的核心——我猜 SM120 因为**没有 TMEM**，FP4 在 decode 区间拿不到带宽收益。这篇给了 B200 侧 TMEM 的实测画像，是我租 B200 做对照的依据。
+
+**Evaluating CUDA Tile for AI Workloads on Hopper and Blackwell GPUs** · [arXiv 2604.23466](https://arxiv.org/abs/2604.23466)
+首个跨架构独立评测 CuTile（NVIDIA 基于 Python 的 tile 中心编程抽象），对照 cuBLAS、Triton、WMMA 和裸 SIMT，跑在 **H100 NVL、B200、RTX PRO 6000 Blackwell** 三卡上。
+**与本篇的关系**：**同一套 harness 跨三卡**这个方法论正是本篇 §2.4「归因闭合」要的东西——没有对照机，「悬崖」是架构造成的还是我的测量造成的就分不开。它也提供了 RTX PRO 6000（同为 SM120 家族）的第三方数据。
+
+**Microbenchmark-Driven Analytical Performance Modeling Across Modern GPU Architectures** · [arXiv 2605.04178](https://arxiv.org/abs/2605.04178)
+为 Blackwell（B200）和 AMD CDNA3（MI300A）建解析性能模型，Blackwell 侧显式建模了 **TMEM、异步批量拷贝（TMA）和第五代 tensor core**。出发点是「理论峰值与可达性能之间的差距在持续拉大」。
+**与本篇的关系**：§2.1 的 roofline 与达成率分析属于同一类方法。它把 TMEM 当作模型里的一个显式部件，说明这个部件的有无确实会改变性能模型的形状——这支持了本篇的原始动机，尽管最终数据没支持那个结论。
+
+### B. ⭐ 推翻/削弱本篇结论的三篇
+
+**⭐ From Roofline to Ruggedness: Decomposing and Smoothing the GEMM Performance Landscape** · [arXiv 2605.29752](https://arxiv.org/abs/2605.29752)
+开篇第一句就是本篇 §6.5 的写照：**N 方向只差 128 个元素的两个相邻 GEMM，吞吐可以差 30%**。作者称之为性能「崎岖度」（ruggedness）——roofline 分析和峰值 FLOPs 直觉都看不见它，但它主导了每一个非峰值负载。提出的框架把整个多维性能曲面当作研究对象，而不是用一个标量上界概括 GPU。
+**与本篇的关系**：**这是对「单点测量能说明架构问题」最直接的否定。** §6.5 我观察到「同一个测点，比值在 1 两侧来回翻」，当时以为是测量噪声；这篇说明那是 GEMM 性能曲面的固有性质。本篇后来把判据改成扫描而非单点，方向和它一致。
+
+**⭐ TaxBreak: Unmasking the Hidden Costs of LLM Inference Through Overhead Decomposition** · [arXiv 2603.12465](https://arxiv.org/abs/2603.12465)
+在延迟敏感的部署里，**推理时间可能被 host 侧开销主导**。已有做法只把这块成本暴露成一个聚合残差或 launch/queue 指标，不足以定位该优化哪一层。TaxBreak 用 trace 驱动的方法把 host 可见的编排开销**分解到具体执行层**。
+**与本篇的关系**：**这就是本篇真正测到的东西。** §7.1「修尺子」之后才看清，两边（5090 和 B200）测到的塌陷都是**启动开销的地板**，不是 FP4 数据通路的差异。这篇提供了把那块开销拆开的系统方法，也解释了为什么 §2.2 的「启动开销地板会制造假悬崖」不是个别现象。
+
+**⭐ Spec Sheets Are Not Kernels: An ISA- and Source-Level Audit of INT8 Availability on NVIDIA Blackwell Ultra** · [arXiv 2608.11693](https://arxiv.org/abs/2608.11693)
+NVIDIA 给 B300 标的 FP8:INT8 密集算力比约 **30:1**（H200 和 B200 都是 1:1）。作者把 INT8 W8A8 的支持沿**四层栈**追踪下去：公开规格 → PTX ISA → CUTLASS 内核库 → vLLM 与 SGLang 两大开源服务引擎，发现了一条贯穿的降级路径。
+**与本篇的关系**：题目本身就是本篇最该早点读到的一句话——**规格表不等于内核**。「某精度在这张卡上快不快」是**整条栈的性质**，不是芯片的性质。本篇一开始把 FP4 的表现当成 SM120 的架构属性，忽略了它同样可能卡在 CUTLASS 或 Triton 的内核可用性上。
+
+### C. FP4 / 量化格式：本篇测的对象
+
+**Diagnosing FP4 inference: a layer-wise and block-wise sensitivity analysis of NVFP4 and MXFP4** · [arXiv 2603.08747](https://arxiv.org/abs/2603.08747)
+FP4 是**仍然保留指数与符号**这些基本数值性质的最低精度格式，已被 Blackwell 和 AMD CDNA 采纳。这篇做逐层、逐块的敏感度分析，对比 NVFP4 与 MXFP4。
+**与本篇的关系**：§1.3「FP4 的两种格式」的详细版。它从**精度**角度比较两者，本篇从**性能**角度——两个维度合起来才能决定选哪个格式。
+
+**Systematic Characterization of LLM Quantization: A Performance, Energy, and Quality Perspective** · [arXiv 2508.16712](https://arxiv.org/abs/2508.16712)
+先做了一个全自动在线表征框架 qMeter，再在真实服务条件下系统评估各量化方法在**性能、能耗、质量**三个维度的权衡。
+**与本篇的关系**：提醒「量化好不好」至少是三维问题。本篇只测了性能这一维，而且只在 GEMM 层面——这是 §8「真的部分」里承认的局限之一。
+
+**Private LLM Inference on Consumer Blackwell GPUs: A Practical Guide for SMEs** · [arXiv 2601.09527](https://arxiv.org/abs/2601.09527)
+系统评测 **RTX 5060 Ti / 5070 Ti / 5090** 上四个开源模型的生产级推理表现，动机是中小企业既担心云 API 的数据隐私，又付不起 A100/H100。
+**与本篇的关系**：和本篇同一硬件、同一动机（消费级 Blackwell 能不能当生产力工具），但它测的是端到端服务指标。两边可以互为参照——如果它的端到端数字没有 FP4 悬崖，那本篇在 GEMM 层看到的塌陷就更可能是测量产物。
+
+**Silicon Showdown: Performance, Efficiency, and Ecosystem Barriers in Consumer-Grade LLM Inference** · [arXiv 2605.00519](https://arxiv.org/abs/2605.00519)
+对比 NVIDIA 与 Apple Silicon 两个生态在消费级硬件上跑 70B+ 模型的表现，重点在**架构内部的权衡**和**生态壁垒**。
+**与本篇的关系**：「生态壁垒」这个词和上面 Spec Sheets 那篇是一个意思——消费级卡的限制往往不在硅片，在软件栈的支持程度。
+
+### D. 选题阶段撞上的工作（KV 缓存方向）
+
+这一组是我在选题基地阶段扫描时撞上的，说明「KV 缓存 / PD 分离」这条路线已经相当拥挤，最终没有选它。
+
+**Rethinking KV Cache Compression Techniques for LLM Serving** · [arXiv 2503.24000](https://arxiv.org/abs/2503.24000)
+从**实践角度**重审主流 KV 压缩方案，追问为什么算法很多、生产落地却很少。
+
+**Demystifying the Design Space and Best Practices for Heterogeneous LLM Inference and Serving** · [arXiv 2606.29708](https://arxiv.org/abs/2606.29708)
+异构 PD 推理已经进入生产：prefill 放便宜/有货的加速器，decode 放带宽强的，KV 以混合数值格式跨混合互联传输。这篇沿四个设计维度整理设计空间，回答**哪些决策必须在 PD 边界联合做、哪些可以独立做**。
+
+**PrefixPlace: Provable Prefix KV Placement under Heterogeneous Compute and Transfer Costs** · [arXiv 2608.01655](https://arxiv.org/abs/2608.01655)
+前缀 KV 复用能免掉重复 prefill，但本地未命中时「重算」与「取副本」的相对代价随硬件、前缀深度、KV goodput 和副本位置变化，**单看命中率来放置是次优的**。提出 epoch 级规划器。
+
+**KVServe: Service-Aware KV Cache Compression for Disaggregated LLM Serving** · [arXiv 2605.13734](https://arxiv.org/abs/2605.13734)
+分离式服务把 KV 变成了跨网络和存储边界的**显式载荷**，成为端到端瓶颈。已有压缩多是静态运行时配置，而生产服务的负载组成与带宽随时间变化——KVServe 做服务感知的动态压缩。
+
+**CacheFlow: Efficient LLM Serving with 3D-Parallel KV Cache Restoration** · [arXiv 2604.25080](https://arxiv.org/abs/2604.25080)
+长上下文服务里 KV 恢复已成主导瓶颈。已有方案把恢复当成「重算 vs I/O 传输」的逐请求权衡，**没有利用跨 token、跨层的并行性**；CacheFlow 做 3D 并行的恢复。
+
+### E. 工程渠道与教科书
+
+- **Colfax Research**：CUTLASS TMEM 教程，以及 SM12x NVFP4 blockscaled GEMM 系列（Part 1、Part 2）——目前关于 SM120 上 FP4 内核怎么写、能写到多快，最实用的公开材料。
+- **zartbot《Dissecting the SM_120》**——中文社区对 SM120 数据通路的拆解。
+- [triton-lang/triton #8182](https://github.com/triton-lang/triton/issues/8182)、[sgl-project/sglang PR #28038](https://github.com/sgl-project/sglang/pull/28038)——两个直接反映「SM120 上 FP4 内核可用性」的一手工程记录，印证了 Spec Sheets 那篇的论点。
+- V. Volkov, J. Demmel, *Benchmarking GPUs to Tune Dense Linear Algebra*, SC 2008 —— 「用微基准反推硬件参数再调优」这套方法的源头。
+- K. Goto, R. van de Geijn, *Anatomy of High-Performance Matrix Multiplication*, ACM TOMS 2008 —— 解释 §2.3 里「共享内存容量怎么约束 tile 尺寸」的经典分析。
+- *Is Finer Better? The Limits of Microscaling Formats in Large Language Models*（ICLR 2026）—— 选题阶段撞上，质疑「块越细越好」这个直觉，和 §1.3 两种 FP4 格式的取舍直接相关。
+
+### F. 本专栏内部
+
+- [第 1 篇：RL 里的投机 draft 什么时候值得维护？](../rl-spec-draft-maintenance/) —— 同样的预注册纪律，以及「载体是生死线」这个共同结论。
+- [第 4 篇：量化、KV 并发和投机解码在抢同一份显存吗？](../vram-budget-composition/) —— 它的 R3-A 在同一张 5090 上测到「小 batch 时量化 GEMM 比 bf16 慢 1.8–3.4 倍」，和本篇 §2.2 的启动开销地板是同一个现象的两次独立观测。

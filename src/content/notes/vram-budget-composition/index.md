@@ -100,6 +100,18 @@ $$
 
 ![显存账（推导）：左图是不同显存上限下四种配置的最大并发，int8 线性层在 6 GiB 多出 57%、在 31 GiB 只多 5%，开投机在 6 GiB 少 19%、在 31 GiB 少 4%；右图是 6 GiB 时每一项占用的字节](diagrams/fig03_vram_budget.png)
 
+**🖼 怎么读这张图**
+>
+> 这张图是本篇假设的**全部内容**，值得逐块看。
+>
+> **左图：容量 → 并发。** 横轴显存上限，纵轴最大并发数。四条线是四种配置。关键在于它们**不是平行的**——量化权重省下的字节会被换成更多的 KV 槽位，而 KV 每条序列占的字节又依赖序列长度。所以「量化能多跑几条」这个收益**随显存上限变化**，不是常数。图上标注的「int8 线性层在 6 GiB 多出…」就是这个差值在某个截面上的读数。
+>
+> **右图：并发 → 吞吐。** 并发多不等于吞吐高——$M$ 变大之后工作点会沿 roofline 往右上移动，最终撞上算力界。
+>
+> **两图串起来才是完整的账**：量化 → 省字节 → 多并发 → 但并发的边际收益递减。**如果第二段已经饱和，第一段省下的字节就白省了**，这就是「收益符号可能翻转」的机制。
+>
+> **必须说明的是：这张图是推导，不是实测。** R3-C 只跑到 smoke 就停了，右半边那条曲线从未被量过。§6.3 记录了两处记账错误，其中「$B_\text{max}$ 的实测量的不是容量」直接影响左图的刻度。**读这张图时请把它当作一个待验证的假设，而不是结论。**
+
 一张卡的显存 $C$ 要装下：权重 $W$、draft 模型 $D$、每条序列的 KV cache、投机解码的缓冲，再留一点余量 $R$。每个 token 的 KV 字节数是
 
 $$
@@ -393,8 +405,30 @@ B = 1、2、4 和 n = 1、5 的单步时间全在 21.8–24.5 ms。权重读一�
 
 ## 参考
 
-- Budgeting Bytes：A Windowed Storage Roofline and Dual-Budget Architecture Ablations for Storage-Bound LLM Decoding，[arXiv 2609.04238](https://arxiv.org/abs/2609.04238)
-- ReSpec：Towards Optimizing Speculative Decoding in Reinforcement Learning Systems，[arXiv 2510.26475](https://arxiv.org/abs/2510.26475)
-- KV Pareto：Systems-Level Optimization of KV Cache and Model Compression for Long Context Inference，[arXiv 2512.01953](https://arxiv.org/abs/2512.01953)
-- Not All Bits Are Equal：Scale-Dependent Memory Optimization Strategies for Reasoning Models，[arXiv 2510.10964](https://arxiv.org/abs/2510.10964)
-- 同专栏：[RL 投机 rollout 的草稿头维护](../rl-spec-draft-maintenance/)、[SM120 的 FP4 悬崖](../sm120-fp4-cliff/)、[精度 × 投机的交互](../quant-spec-interaction/)、[NVFP4 符号 bug](../nvfp4-sign-bug/)、[投机解码与 RL 训练–推理失配](../spec-decoding-rl-mismatch/)
+本篇的参考不多，但每一条都对应一个本篇没做对的地方。
+
+### A. ⭐ 显存组成：本篇想问的问题，别人给了答案
+
+**⭐ Not All Bits Are Equal: Scale-Dependent Memory Optimization Strategies for Reasoning Models** · [arXiv 2510.10964](https://arxiv.org/abs/2510.10964)
+4-bit 量化被广泛当作非推理模型和零样本任务上的「显存最优选择」，但作者证明**这条通用处方在推理模型上失效**——那里**主导显存的是 KV 缓存而不是模型大小**。通过在 AIME25 和 GPQA-Diamond 上跨 1700 个推理场景的系统实验，得到一个**随规模变化的权衡**。
+**与本篇的关系**：**这篇直接回答了本篇 §1.3「显存账：容量 → 并发 → 吞吐」想建立的那件事**，而且做得系统得多（1700 个场景 vs 本篇停在 smoke）。它的核心结论——权衡的符号随模型规模翻转——正是本篇假设「量化的收益符号会随容量压力翻转」的一个已被验证的版本。
+
+**⭐ KV Pareto: Systems-Level Optimization of KV Cache and Model Compression for Long Context Inference** · [arXiv 2512.01953](https://arxiv.org/abs/2512.01953)
+长上下文推理中 KV 缓存随序列长度线性增长造成显存瓶颈。KV 缓存量化、chunked prefill、模型权重量化这些单项优化各有前景，但它们的**联合效应和边缘部署下的最优配置仍然研究不足**。
+**与本篇的关系**：**「联合效应」四个字就是本篇的选题。** 它把这个联合优化做成了 Pareto 前沿，而本篇 R3-C 只跑到 smoke 就停了。读到它之后，本篇剩下的贡献空间基本清零。
+
+**Budgeting Bytes: A Windowed Storage Roofline and Dual-Budget Architecture Ablations for Storage-Bound LLM Decoding** · [arXiv 2609.04238](https://arxiv.org/abs/2609.04238)
+一个很硬的立论：**廉价硬件上的自回归解码，瓶颈不是 FLOPs，而是每生成一个 token 必须跨越内存层级中最慢那一层的字节数**。作者把 bytes-per-token 当作一等设计轴，并按「取址确定性」给参数分类——参数的取址在 token 前向的哪个时点变得已知（A0：采样时；A1：之前……）。
+**与本篇的关系**：**这是对本篇 §1.1「decode 阶段的 GEMM：M 就是 batch」最有力的补充。** 本篇只看到「小 M 时 GEMM 被固定成本主导」，这篇给出了一个更一般的框架：真正该记账的单位是字节，而不是 FLOPs。如果早点用这个视角，§5.4「它在小 M 下测到的到底是什么」会更快得出结论。
+
+### B. 投机解码侧
+
+**ReSpec: Towards Optimizing Speculative Decoding in RL Systems** · [arXiv 2510.26475](https://arxiv.org/abs/2510.26475)
+指出朴素把 SD 塞进 RL 的三个缺口，第一条就是**大 batch 下加速收益递减**。
+**与本篇的关系**：本篇假设「投机解码和 KV 并发在抢同一份显存」——投机要占额外显存放 draft 和候选树，而这会挤压 KV 能容纳的并发数。ReSpec 的第一条缺口是同一枚硬币的另一面：并发上去之后，投机本身也不划算了。
+
+### C. 本专栏内部
+
+- [第 2 篇：消费级 Blackwell 的 FP4「架构悬崖」是真的吗？](../sm120-fp4-cliff/) —— **和本篇 R3-A 测到的是同一个现象**：小尺寸下「量化比 bf16 慢」是调用路径的固定成本，不是量化的性质。两篇在不同时间、用不同 harness 独立撞上同一个坑。
+- [第 5 篇：NVFP4 真会让投机解码的接受率暴跌 92% 吗？](../nvfp4-sign-bug/) —— 另一个「测到的不是你以为的那个量」的案例。
+- [第 3 篇：把 target 量化成 FP8 / INT8，投机解码的接受率会变吗？](../quant-spec-interaction/) —— 本篇的四区制/显存压力模型在那篇里以性能区制的形式出现。

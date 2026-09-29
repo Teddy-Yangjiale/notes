@@ -416,10 +416,53 @@ verl 这边的权重同步是分桶进行的：FSDP 聚合出来的张量按名�
 
 ## 参考
 
-- verl（HybridFlow，EuroSys 2025）：[github.com/verl-project/verl](https://github.com/verl-project/verl)
-- verl PR [#8014](https://github.com/verl-project/verl/pull/8014)：drop redundant tied lm_head.weight from bucketed weight-transfer（closed，未合并）
-- verl issue：[#2803](https://github.com/volcengine/verl/issues/2803)（5090 上 FSDP 报 peer access is not supported）、[#3271](https://github.com/verl-project/verl/issues/3271)（LoRA / vLLM v1 兼容）
-- vLLM issue：[#35432](https://github.com/vllm-project/vllm/issues/35432)（RTX 50 系 `no kernel image`）、[#50288](https://github.com/vllm-project/vllm/issues/50288)（RTX 5090 的 NVFP4 KV cache）、[#31085](https://github.com/vllm-project/vllm/issues/31085)（SM120 退回 Marlin）
-- NCCL issue：[#1637](https://github.com/NVIDIA/nccl/issues/1637)
-- SM120 实测指南：[notwitcheer/sm120-field-guide](https://github.com/notwitcheer/sm120-field-guide)
-- 同专栏：[SM120 的 FP4「悬崖」](../sm120-fp4-cliff/)、[rollout 半衰期](../rollout-half-life/)、[相似律风洞](../llm-serving-similitude/)、[投机解码失配](../spec-decoding-rl-mismatch/)
+这一篇是工程复盘，没有 arXiv 论文可引；下面把每条工程线索的**来龙去脉**写清楚——它是什么、报什么错、为什么和本篇相关。
+
+### A. ⭐ verl 本体：HybridFlow 那篇论文解释了权重同步为什么是硬骨头
+
+**verl（HybridFlow，EuroSys 2025）** · [github.com/verl-project/verl](https://github.com/verl-project/verl)
+verl 的核心设计是 **hybrid controller**：把 RL 数据流的「控制流」和「计算流」分开——控制流用单进程描述算法（谁先跑、数据往哪送），计算流交给各自的后端（训练用 FSDP/Megatron，生成用 vLLM/SGLang）。
+**与本篇的关系**：**这个设计直接解释了 §7 为什么死在权重同步。** 训练后端和生成后端是**两套独立的并行布局**：FSDP 把参数按 rank 切片，vLLM 用自己的张量并行切法。每步训练之后必须把 FSDP 的分片权重**重新聚合、再按 vLLM 的切法分发**——这一步既要跨进程通信，又要匹配两边的 dtype 和 layout。§1 那张迭代图里最细的那根箭头，工程上是最粗的一根。
+
+### B. 权重同步：本篇八次启动全部死在这里
+
+**verl PR [#8014](https://github.com/verl-project/verl/pull/8014)** —— *drop redundant tied lm_head.weight from bucketed weight-transfer*（已关闭，未合并）
+问题是：当模型的 `lm_head` 与 embedding **权重绑定（tied）**时，分桶传输会把同一份张量传两次，其中一次的形状/所有权对不上。
+**与本篇的关系**：**这是我自己提的 PR**，也是 §7 里绕过的那一关。它没被合并说明上游认为有更根本的修法，但对 SM120 这条边缘路径，它是当时唯一能让流程往前走一步的补丁。
+
+**verl issue [#2803](https://github.com/volcengine/verl/issues/2803)** —— 5090 上 FSDP 报 `peer access is not supported`
+消费级卡**没有 NVLink**，多卡之间走 PCIe，且 RTX 50 系在驱动层面不开放 P2P（peer-to-peer）直连访问。FSDP 默认假设 GPU 之间可以 P2P。
+**与本篇的关系**：**这是「消费级卡不是小号数据中心卡」最硬的一条证据。** §2 讲 SM120 是「软件栈的边缘平台」，这条 issue 是最具体的例子——不是性能差一点，而是一个被上游默认存在的能力**根本不存在**。
+
+**verl issue [#3271](https://github.com/verl-project/verl/issues/3271)** —— LoRA 与 vLLM v1 的兼容问题
+**与本篇的关系**：我用 LoRA 是为了在 32GB 显存里塞下训练，但 LoRA 让权重同步更复杂——要同步的不再是完整权重，而是基座 + 适配器，两边对「什么是当前权重」的理解必须一致。
+
+**NCCL issue [#1637](https://github.com/NVIDIA/nccl/issues/1637)**
+NCCL 是所有跨卡集合通信的底座。权重同步、FSDP 的 all-gather 都走它。
+**与本篇的关系**：当 P2P 不可用时，NCCL 的回退路径（走 host 内存中转）的行为和性能是另一套，很多上游代码没有在这条路径上测过。
+
+### C. vLLM 在 SM120 上的三道坎
+
+**vLLM issue [#35432](https://github.com/vllm-project/vllm/issues/35432)** —— RTX 50 系 `no kernel image is available for execution on the device`
+最典型的新架构问题：预编译的 wheel 里**没有包含 sm_120 的 cubin**，运行时找不到对应架构的内核。
+**与本篇的关系**：§6「把 verl 装到能用的栈上」花掉的大部分时间就在这类问题上——不是代码不对，是**二进制里没有你这张卡的那一份**。
+
+**vLLM issue [#31085](https://github.com/vllm-project/vllm/issues/31085)** —— SM120 退回 Marlin
+Marlin 是一个高性能的 INT4 权重量化 GEMM 内核。「退回 Marlin」意味着 SM120 上**更新的量化路径不可用**，只能走这条较老的。
+**与本篇的关系**：和[第 2 篇](../sm120-fp4-cliff/)引用的 *Spec Sheets Are Not Kernels* 是同一个现象的两次独立观测——**某个精度在某张卡上能不能用，是整条软件栈的性质，不是芯片的性质**。
+
+**vLLM issue [#50288](https://github.com/vllm-project/vllm/issues/50288)** —— RTX 5090 的 NVFP4 KV cache
+**与本篇的关系**：NVFP4 KV cache 是省显存最直接的手段，对 32GB 的 5090 尤其关键。它在 SM120 上的状态，直接决定了能塞下多大的 batch——也就决定了 §7 的 GRPO 能不能跑起来。
+
+### D. 社区一手材料
+
+**[notwitcheer/sm120-field-guide](https://github.com/notwitcheer/sm120-field-guide)** —— SM120 实测指南
+社区维护的「哪些库的哪个版本在 SM120 上能跑」的对照表。
+**与本篇的关系**：§6 的版本组合基本是照着它试的。这类文档的存在本身说明了一件事：**在边缘平台上，「装得上」是一个需要专门知识的独立问题**，而这份知识目前只存在于社区记录里，不在任何官方文档中。
+
+### E. 本专栏内部
+
+- [第 2 篇：消费级 Blackwell 的 FP4「架构悬崖」是真的吗？](../sm120-fp4-cliff/) —— 同一张卡、同一个「边缘平台」处境，那篇测性能，本篇测能不能跑起来。
+- [第 6 篇：一条 rollout 能用多久](../rollout-half-life/) —— 本篇如果跑通，它就是那篇的实验载体；跑不通，那篇只能退到 LoRA-GRPO 的离线轨迹上做。**这是本篇 §9「跨项目副作用」最直接的一条。**
+- [第 8 篇：能把一张降频的消费卡当成风洞吗？](../llm-serving-similitude/) —— 同样从「手上只有消费级卡」这个约束出发，那篇想把约束变成方法，本篇想把约束解除。
+- [第 9 篇：投机解码会悄悄改变 RL 的行为策略吗？](../spec-decoding-rl-mismatch/) —— 本篇要搭的 verl + vLLM 栈，正是那篇要在上面做失配测量的环境。

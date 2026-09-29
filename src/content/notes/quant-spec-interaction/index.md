@@ -87,11 +87,35 @@ $$
 \tau = 1 + \bar\alpha + \bar\alpha^2 + \dots + \bar\alpha^K = \frac{1 - \bar\alpha^{K+1}}{1 - \bar\alpha}.
 $$
 
-本项目 K = 5（推导：ᾱ = 0.8256 时 τ = 3.918，与 trace 记录一致）。τ 对 α 的敏感度用弹性表示（推导）：
+> **τ 这个式子怎么来的**
+>
+> 设第 $i$ 个 draft token 被接受的事件为 $A_i$，独立同概率 $\bar\alpha$。**前 $k$ 个都被接受**的概率是 $\bar\alpha^k$。一轮 verify 发出的 token 数 $N$ 满足
+>
+> $$N = 1 + \#\{\text{被接受的 draft token}\}$$
+>
+> 那个 $1$ 是**必定前进的一步**：即使第一个 draft 就被拒，target 也会在那个位置重采一个 token（这正是拒绝采样保证无损的机制）。于是
+>
+> $$\mathbb{E}[N] = 1 + \sum_{k=1}^{K}\Pr[\text{前 } k \text{ 个都接受}] = 1 + \sum_{k=1}^{K}\bar\alpha^k = \sum_{k=0}^{K}\bar\alpha^k = \frac{1-\bar\alpha^{K+1}}{1-\bar\alpha}$$
+>
+> 用的是「非负整数随机变量的期望等于尾概率之和」这个恒等式 $\mathbb{E}[N]=\sum_k \Pr[N>k]$。
+>
+> **两个边界值值得记住**：$\bar\alpha\to 1$ 时 $\tau\to K+1$（全接受，一轮走完整条 draft）；$\bar\alpha\to 0$ 时 $\tau\to 1$（等于没投机）。所以 $\tau$ 的**可用区间是 $[1, K+1]$ 而不是 $[0, K+1]$**——这正是 [第 6 篇](../rollout-half-life/) §1.6 提到的「下界不是 0」那个坑。
+
+本项目 K = 5（ᾱ = 0.8256 时 τ = 3.918，与 trace 记录一致）。τ 对 α 的敏感度用弹性表示：
 
 $$
 \frac{\Delta\tau}{\tau} \approx e \cdot \frac{\Delta\bar\alpha}{\bar\alpha}, \qquad e = \frac{\sum_{k=0}^{K} k\,\bar\alpha^k}{\sum_{k=0}^{K} \bar\alpha^k}.
 $$
+
+> **弹性式子的推导**
+>
+> 令 $f(\bar\alpha)=\sum_{k=0}^{K}\bar\alpha^k$。弹性的定义是对数导数：
+>
+> $$e = \frac{\mathrm{d}\ln\tau}{\mathrm{d}\ln\bar\alpha} = \frac{\bar\alpha}{f}\cdot\frac{\mathrm{d}f}{\mathrm{d}\bar\alpha} = \frac{\bar\alpha \sum_{k=1}^{K} k\,\bar\alpha^{k-1}}{\sum_{k=0}^{K}\bar\alpha^k} = \frac{\sum_{k=0}^{K} k\,\bar\alpha^{k}}{\sum_{k=0}^{K}\bar\alpha^{k}}$$
+>
+> 最后那个形式有一个漂亮的读法：**它就是「接受链长度」在几何权重 $\bar\alpha^k$ 下的加权平均**，即 $\mathbb{E}[k]$。所以弹性 = 平均接受了几个 token。
+>
+> 这立刻给出两个极限：$\bar\alpha\to 1$ 时各项权重相等，$e\to K/2$（$K=5$ 给 2.5）；$\bar\alpha\to 0$ 时只有 $k=0$ 项存活，$e\to 0$。
 
 ᾱ 高时，接受链长，α 的小变化会被放大；ᾱ 低时，链一两步就断，τ 反而迟钝。本项目的两个工作点上，teacher 口径 e = 1.95，递归口径 e = 0.61（推导）。这意味着预注册的两条门槛并不等价：teacher 口径下「τ 变 5%」大约只需要「α 变 2.6%」，递归口径下却需要 α 变 8.2%。§6 还会用到这一点。
 
@@ -161,6 +185,19 @@ $$
 
 ![四区制示意：横轴是每个 kernel 要读的权重字节，纵轴是每步处理的 token 数；精度把工作点往左推，投机 verify 把工作点往上推；右侧是每个区制里投机与量化各自值多少的推导](diagrams/fig05_regimes.png)
 
+**🖼 怎么读这张图**
+>
+> 横轴是**每个 kernel 要读的权重字节**（往左 = 精度更低），纵轴是**每步处理的 token 数 M**（往上 = batch 更大或投机 verify 更宽）。平面被切成四块，每块由不同的瓶颈主导。
+>
+> 关键是看**两个旋钮把工作点往哪个方向推**：
+>
+> - **量化 = 往左推**（字节少）。在 HBM 区往左走是省时间的；但一直往左会掉进**左下角的 launch 地板**——那里字节再少也不省时间，因为耗时由 kernel 启动的固定开销决定。[第 2 篇](../sm120-fp4-cliff/)和[第 4 篇](../vram-budget-composition/)都是在这个角落里测出了假信号。
+> - **投机 = 往上推**（verify 一次处理 $(K+1)M$ 个位置）。在带宽区往上走几乎免费——这是投机能加速的**全部前提**；越过右上的算力界之后，往上走要按比例付钱。
+>
+> 所以两个旋钮的交互符号，取决于**推完之后落在哪一块**：在 HBM 区它们互相替代（量化削弱投机的相对收益），在算力区可能互补（低精度 tensor core 把算力界抬高，让投机重新划算）。
+>
+> 图右侧那一列就是每个区制里这两笔账各值多少的推导。
+
 α 只是投机收益的一半。另一半是时间：一次 target 前向要多久、draft 要多久。这部分在本项目里**一次也没有测**，这里只把命题需要的推导讲清楚；实测和这套框架的来历见 [第 2 篇](../sm120-fp4-cliff/)。
 
 一次前向的耗时，由四种瓶颈里最慢的那个决定：
@@ -170,13 +207,28 @@ $$
 3. **HBM**：权重装不进 L2，每一步都要从显存搬一遍。时间 ≈ 权重字节 ÷ HBM 带宽，与这一步处理几个 token 几乎无关。
 4. **算力**：每步 token 数 M 足够大，时间 ≈ FLOP ÷ 峰值算力，与 M 成正比。
 
-投机解码的净加速比（推导）：
+投机解码的净加速比：
 
 $$
 S = \frac{\tau \cdot t_T(M)}{t_T\big((K+1)M\big) + K \cdot t_D(M)}
 $$
 
-其中 $t_T$、$t_D$ 是 target 和 draft 一次前向的耗时。两个旋钮在这张图上的作用方向不同：
+其中 $t_T$、$t_D$ 是 target 和 draft 一次前向的耗时。
+
+> **这个式子怎么来的**
+>
+> **分母 = 一轮投机的实际耗时。** 一轮里发生两件事：draft 自回归地跑 $K$ 步（每步处理 $M$ 个序列，共 $K\cdot t_D(M)$）；target 做**一次**前向验证，但要同时算 $K+1$ 个位置（原位置 + $K$ 个 draft 位置），所以批维度是 $(K+1)M$，耗时 $t_T((K+1)M)$。
+>
+> **分子 = 同样产出用非投机解码要花的时间。** 一轮投机平均发出 $\tau$ 个 token，而非投机每发一个 token 要一次 target 前向 $t_T(M)$，所以是 $\tau\cdot t_T(M)$。
+>
+> 两者相除就是加速比。**两个特例可以自检**：
+>
+> - $K=0$（不投机）：$\tau=1$，$S = t_T(M)/t_T(M) = 1$ ✓
+> - **带宽区**（$t_T$ 与 batch 几乎无关，$t_T((K+1)M)\approx t_T(M)$），令 $c = t_D/t_T$：
+>   $$S \approx \frac{\tau}{1 + Kc}$$
+>   这就是正文反复出现的 $1+Kc$。**它成立的前提是「verify 几乎免费」**——一旦离开带宽区，$t_T((K+1)M)$ 会涨到约 $(K+1)t_T(M)$，分母变成 $(K+1) + Kc$，而分子最多 $K+1$，$S$ 掉到 1 以下，**投机开始亏本**。
+>
+> 这正是「符号随区制翻转」的数学来源：**同一个 $\tau$，在带宽区给加速，在算力区给减速**。两个旋钮在这张图上的作用方向不同：
 
 - **精度往左推**：权重字节变少。在 HBM 区，量化 target 让 $t_T$ 变小，但 draft 没变，于是 draft 的相对成本 $c = t_D / t_T$ 变大，$S \approx \tau/(1 + Kc)$ 变小——**量化和投机互相替代**。如果字节少到进了 launch 地板，量化就不再省时间。
 - **投机往上推**：verify 一次处理 $(K+1)M$ 个位置。在带宽区这几乎免费，这是投机能加速的前提；一旦越过算力界，verify 的代价约为 K+1 倍，投机开始亏。低精度 tensor core 把算力界往上推，又可能让投机重新划算——**互补**。
@@ -524,9 +576,54 @@ S1 的两条 NVFP4 臂一开始就崩了：E2M1 格点张量建在 CPU 上，权
 
 ## 参考
 
-- 投机解码：Leviathan 等，[arXiv 2211.17192](https://arxiv.org/abs/2211.17192)；Chen 等，[arXiv 2302.01318](https://arxiv.org/abs/2302.01318)；EAGLE，[arXiv 2401.15077](https://arxiv.org/abs/2401.15077)
-- Qwen Bebop（RL 里的投机解码与接受率分解）：[arXiv 2606.12370](https://arxiv.org/abs/2606.12370)
-- ReSpec：[arXiv 2510.26475](https://arxiv.org/abs/2510.26475)
-- 量化模型当 draft：QSpec [arXiv 2410.11305](https://arxiv.org/abs/2410.11305)、ML-SpecQD [arXiv 2503.13565](https://arxiv.org/abs/2503.13565)、SpecQuant [arXiv 2609.21704](https://arxiv.org/abs/2609.21704)
-- OmniPilot：[arXiv 2607.01579](https://arxiv.org/abs/2607.01579)
-- 同专栏：[第 1 篇 · RL 投机 draft 维护](../rl-spec-draft-maintenance/)、[第 2 篇 · SM120 的 FP4 悬崖](../sm120-fp4-cliff/)、[第 5 篇 · NVFP4 丢符号](../nvfp4-sign-bug/)、[第 9 篇 · 投机解码与 RL 失配](../spec-decoding-rl-mismatch/)
+按「做了什么、关键结论、和本篇什么关系」逐条展开。标 ⭐ 的三篇最接近本篇的机制链。
+
+### A. 投机解码的地基
+
+**Fast Inference from Transformers via Speculative Decoding** · [arXiv 2211.17192](https://arxiv.org/abs/2211.17192)
+投机解码原始论文。两条观察：困难任务里嵌着能被小模型近似的简单子任务；配合改造过的采样方法，并行算出的多个 token 与逐个采样**在分布上完全等价**。
+**与本篇的关系**：§1.2 的 $\alpha = \sum_x \min(p,q) = 1 - \mathrm{TV}(p,q)$ 就来自这里的接受规则。本篇整条机制链的第一环——「权重精度改变 $p$ → 改变 TV → 改变 $\alpha$」——成立的前提就是这个恒等式。
+
+**Accelerating LLM Decoding with Speculative Sampling** · [arXiv 2302.01318](https://arxiv.org/abs/2302.01318)
+DeepMind 同期独立工作，措辞上明确无损性成立于 *within hardware numerics*。
+**与本篇的关系**：这条限定说明**数值精度本来就会动分布**，本篇要问的正是「动到什么程度」。
+
+**EAGLE: Speculative Sampling Requires Rethinking Feature Uncertainty** · [arXiv 2401.15077](https://arxiv.org/abs/2401.15077)
+两条关键观察：在**特征层（次顶层）**做自回归比在 token 层更直接；但特征层自回归**固有的不确定性**限制了性能。EAGLE 的做法是把这份不确定性显式建模进去。
+**与本篇的关系**：本篇用 EAGLE 式 draft。§8.2 测到「量化扰动比 draft 与 target 的固有差距小一个数量级以上」——那个「固有差距」的来源正是这篇讲的特征不确定性。这也是为什么量化这一环的信号被淹没了。
+
+### B. ⭐ 量化 × 投机：本篇的正题
+
+**⭐ QSpec: Speculative Decoding with Complementary Quantization Schemes** · [arXiv 2410.11305](https://arxiv.org/abs/2410.11305)
+激活–权重联合量化能做高效低精度解码，但在**多步推理任务上性能下降明显**。QSpec 把效率与质量解耦：用两套**互补的**量化方案——低精度的那套当 draft 快速生成，高精度的那套做验证。
+**与本篇的关系**：**这是「量化会不会影响 α」这个问题的正面答案之一**——它不但影响，而且这个影响可以被设计成收益（让量化模型当 draft）。本篇问的是反方向：量化 **target** 会怎样。两者合起来才是完整的二维空间。
+
+**⭐ ML-SpecQD: Multi-Level Speculative Decoding with Quantized Drafts** · [arXiv 2503.13565](https://arxiv.org/abs/2503.13565)
+典型 SD 里 draft 是全精度的小模型。这篇用**量化后的模型当 draft**，并做成多级结构（draft 自己也有 draft）。效果高度依赖接受率。
+**与本篇的关系**：和 QSpec 同一方向——量化进 draft 侧。本篇 §8.1 的「自体 cast」实验（把同一个模型量化后和自己比）在设计上和它同源，只是目的相反：我是想孤立出量化扰动的大小，它是想利用这个扰动换速度。
+
+**⭐ SpecQuant: Speculative Decoding with Multi-Parent Quantization for Adaptive LLM Inference** · [arXiv 2609.21704](https://arxiv.org/abs/2609.21704)
+消费级硬件上跑本地 LLM 受算力和显存限制。量化、投机解码、自适应推理这几项加速技术通常需要**重训、逐架构调优或额外的 draft 模型**；SpecQuant 是一个**免训练**框架，把它们组合起来。
+**与本篇的关系**：「三者组合」正是本篇假设的那个交互空间。它用工程方式利用这个交互，本篇想先测清楚交互的**符号和量级**——而 §7.4 的结论是，在 8-bit 上这个量级小到（Δα ≤ 0.21%）不值得建模。
+
+### C. RL 场景下的投机（本篇机制链的下游）
+
+**ReSpec: Towards Optimizing Speculative Decoding in RL Systems** · [arXiv 2510.26475](https://arxiv.org/abs/2510.26475)
+点出三个缺口：大 batch 下加速递减、actor 持续更新导致 drafter 陈旧、drafter 引起策略退化。
+**与本篇的关系**：第一条与本篇 §3 的「四区制性能模型」直接相关——投机的收益强烈依赖所处区制，而量化会改变模型落在哪个区制。这正是本篇假设「影响符号会随区制翻转」的由来。
+
+**Breaking Entropy Bounds: MTP with Rejection Sampling（Qwen Bebop）** · [arXiv 2606.12370](https://arxiv.org/abs/2606.12370)
+系统研究 MTP 在后训练里的行为，并从熵的角度解释接受率的上界。
+**与本篇的关系**：「接受率有熵上界」这个结论提示，$\alpha$ 的可动空间本身有限——这是本篇测到 Δα 很小的一个可能解释。
+
+### D. 部署决策：区制模型的现实版本
+
+**OmniPilot: An Uncertainty-Aware LLM Inference Advisor for Heterogeneous GPU Clusters** · [arXiv 2607.01579](https://arxiv.org/abs/2607.01579)
+在共享异构集群上服务 LLM，用户必须在投入机时**之前**就选好 GPU 型号、张量并行度和精度。难点在于有效吞吐、启动成功率、集群需求与利用率都在持续波动，**静态配置配方抓不住这些**。
+**与本篇的关系**：**「精度」在这里是一个和 GPU 型号、并行度并列的部署决策变量**——这正是本篇想给出定量依据的地方。如果量化真能通过 α 影响端到端吞吐，这类顾问系统就该把这一项建模进去；本篇的阴性结果说明（至少在 8-bit 上）不必。
+
+### E. 本专栏内部
+
+- [第 5 篇：NVFP4 真会让投机解码的接受率暴跌 92% 吗？](../nvfp4-sign-bug/) —— **本篇 4-bit 臂的全部数据都被那篇描述的丢符号 bug 污染了**，两篇必须对照着读。
+- [第 1 篇：RL 里的投机 draft 什么时候值得维护？](../rl-spec-draft-maintenance/) —— 同样以 α 为核心观测量，那篇关心它随策略漂移怎么掉，本篇关心它随权重精度怎么动。
+- [第 4 篇：量化、KV 并发和投机解码在抢同一份显存吗？](../vram-budget-composition/) —— 本篇的四区制模型在那篇里以显存预算的形式再次出现。

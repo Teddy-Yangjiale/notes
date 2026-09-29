@@ -95,6 +95,22 @@ $$
 
 ![同一个模型、同一串 token 的三条数值路径：trainer 一次前向覆盖全部位置；自回归 decode 每步一个位置；投机 verify 每次 K+1 个位置，被拒位置作废](diagrams/fig03_three_paths.png)
 
+**🖼 怎么读这张图（本篇最该看懂的一张）**
+>
+> 三条路径**输入完全相同**——同一份权重、同一串 token——但走的算子不同：
+>
+> | 路径 | 怎么算 | 并行形状 |
+> |---|---|---|
+> | **trainer 一次前向** | teacher forcing，所有位置一次算完 | 整条序列并行 |
+> | **自回归 decode** | 每次只算 1 个新位置，历史走 KV cache | 逐 token 串行 |
+> | **投机 verify** | 一次算 $K+1$ 个位置 | 小批并行 |
+>
+> **三条路径在数学上应当给出同一个 logprob，在浮点下不会。** 原因是归约顺序不同：矩阵乘的累加次序随并行形状变化，而浮点加法**不满足结合律**。
+>
+> 所以本篇问的不是「有没有差异」（一定有），而是**「投机这条路径带来的额外差异，是否大于 decode 与 trainer 本来就有的差异」**。图里要盯的是**两两之间的差**，不是任何单条路径的绝对值。
+>
+> 这也解释了实验设计为什么必须**同时**跑三条：只比投机和 trainer，测到的差异里混着「自回归 vs 一次前向」这个本来就存在的成分，归因不了。
+
 **事实 A：decode 路径与 prefill 路径的数值不同。** 这在工程渠道里早有记录：
 
 - [vLLM #54035](https://github.com/vllm-project/vllm/issues/54035)：H100 的 FA3 kernel 在 decode 形状下用 `kBlockN=96`，在 prefill 形状下用 `kBlockN=192`，online softmax 的归约顺序因此不同。这个 issue 里有两类数字，**不能混着比**：
@@ -385,14 +401,66 @@ A-004 撤回了 A-003 的错误诊断，把整轮扩大样本（包括所有 off
 
 ## 参考
 
-- NVIDIA NeMo RL 投机 rollout：[arXiv 2604.26779](https://arxiv.org/abs/2604.26779)；[研究博客](https://research.nvidia.com/labs/nemotron/rl-speculative-decoding/)
-- Qwen Bebop（MTP + 拒绝采样加速 RL）：[arXiv 2606.12370](https://arxiv.org/abs/2606.12370)
-- VeXact（训练–推理失配诊断）：[arXiv 2605.14220](https://arxiv.org/abs/2605.14220)
-- CIS（校准重要性采样）：[arXiv 2609.32444](https://arxiv.org/abs/2609.32444)
-- 有限精度下投机解码的无损性：[arXiv 2609.15504](https://arxiv.org/abs/2609.15504)
-- batch 投机解码的正确性取证：[arXiv 2510.22876](https://arxiv.org/abs/2510.22876)
-- MarginGate：[arXiv 2605.30218](https://arxiv.org/abs/2605.30218)；LLM-42：[arXiv 2601.17768](https://arxiv.org/abs/2601.17768)
-- Thinking Machines，[Defeating Nondeterminism in LLM Inference](https://thinkingmachines.ai/blog/defeating-nondeterminism-in-llm-inference/)
-- vLLM issue：[#54035](https://github.com/vllm-project/vllm/issues/54035)、[#49918](https://github.com/vllm-project/vllm/issues/49918)、[#55524](https://github.com/vllm-project/vllm/issues/55524)
-- 工程博客：[AMD ROCm logprob 调试](https://rocm.blogs.amd.com/software-tools-optimization/logprob-debug/README.html)；[slime / Miles 失配教程](https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/slime/mismatch/blog-en.md)；[ServiceNow：Correctness Before Corrections](https://huggingface.co/blog/ServiceNow-AI/correctness-before-corrections)
-- 选题阶段撞上的工作：PrefixPlace [2608.01655](https://arxiv.org/abs/2608.01655)、Marconi [2411.19379](https://arxiv.org/abs/2411.19379)、KVServe [2605.13734](https://arxiv.org/abs/2605.13734)、CacheFlow [2604.25080](https://arxiv.org/abs/2604.25080)、KV 压缩再思考 [2503.24000](https://arxiv.org/abs/2503.24000)、py-kvcache [2609.11744](https://arxiv.org/abs/2609.11744)
+按「做了什么、关键结论、和本篇什么关系」逐条展开。标 ⭐ 的四篇直接界定了本篇要测的那个效应存不存在。
+
+### A. ⭐ 训练–推理失配：本篇假设的直接对手
+
+**⭐ Diagnosing Training Inference Mismatch in LLM Reinforcement Learning（VeXact）** · [arXiv 2605.14220](https://arxiv.org/abs/2605.14220)
+现代 RL 系统把 rollout 生成和策略优化**分在两个引擎里**，两者本应对同一序列给出完全相同的 token 概率。但实现差异会让**同一份权重下两边算出不同的值**，这就是 Training-Inference Mismatch（TIM）。TIM 难以检查，因为它和 off-policy 漂移、以及各种稳定化机制**纠缠在一起**。
+**与本篇的关系**：这篇定义了本篇要问的那个问题的「基线版本」——两个引擎本身就有失配。本篇追问的是它的一个特例：**再加上投机解码，失配会不会变大**。「纠缠」这个词也解释了为什么本篇必须先冻结判据：不先把 off-policy 漂移分离出来，测到的任何差异都归因不明。
+
+**⭐ Rethinking Training-Inference Mismatch in LLM RL: Where It Arises and How to Correct It（CIS）** · [arXiv 2609.32444](https://arxiv.org/abs/2609.32444)
+同一问题的后续：rollout 由推理引擎采样、梯度由训练引擎计算，两个引擎给同样的 token **不同的概率**。提出**校准重要性采样（CIS）**来在策略更新里吸收这个差异。
+**与本篇的关系**：给出了「失配存在时怎么修」的方案。本篇的结论是「在 ±5% 内测不到投机带来的额外失配」——如果本篇测出了效应，CIS 就是现成的修法；测不到，说明投机这一项不需要单独校正。
+
+**⭐ Evaluating Losslessness in Speculative Decoding Under Finite-Precision Inference** · [arXiv 2609.15504](https://arxiv.org/abs/2609.15504)
+投机解码的「无损」通常在**算法层**定义：验证过程保证精确保留自回归参考模型的输出轨迹。但实际神经推理用的是**有限精度浮点**，而离散的 token 选择会**放大微小的数值差异**。
+**与本篇的关系**：**这是本篇的理论核心。** §2 推导无损性时，那句「within hardware numerics」的限定就是这篇要量化的东西。本篇实测「±5% 内没有效应」，和它从原理上指出的「差异存在但可能很小」是一致的。
+
+**⭐ Correctness Forensics for Batch Speculative Decoding: Diagnosing the Ragged Tensor Problem** · [arXiv 2510.22876](https://arxiv.org/abs/2510.22876)
+推理优化通常**只用吞吐评测，不验证输出正确性**。作者对批量投机解码做取证分析，发现多个广泛使用的实现会**静默产生损坏输出**（重复 token、`<unk>` 符号），同时报告有竞争力的速度——这些失败连 ROUGE 这类指标都看不出来。根因是 **ragged tensor 问题**：batch 内各序列接受长度不同导致的变长张量处理。
+**与本篇的关系**：这是对本篇方法论最重要的一条警示——**不能只看速度，必须验证分布**。它也提示本篇的阴性结果有一个前提：我用的那个实现恰好没有这类 bug。§5 的自检就是为了排除这种可能。
+
+### B. 投机解码进 RL：本篇的场景
+
+**Accelerating RL Post-Training Rollouts via System-Integrated Speculative Decoding（NVIDIA NeMo-RL）** · [arXiv 2604.26779](https://arxiv.org/abs/2604.26779)
+把投机解码当作**无损加速原语**放进 NeMo-RL + vLLM。作者特意把它和那些「改变 rollout 或优化区制」的方法（off-policy 执行、replay、低精度生成）区分开——后者会动分布，投机解码不会。
+**与本篇的关系**：这是本篇怀疑的对象。它声称无损，本篇去验这个声称在真实数值下还成不成立。也见 [研究博客](https://research.nvidia.com/labs/nemotron/rl-speculative-decoding/)。
+
+**Breaking Entropy Bounds: Accelerating RL Training via MTP with Rejection Sampling（Qwen Bebop）** · [arXiv 2606.12370](https://arxiv.org/abs/2606.12370)
+系统研究 MTP 在后训练里的行为，给出把 MTP 整合进 RL 的实践配方，并从熵的角度解释接受率上界。
+**与本篇的关系**：另一个「投机进 RL」的生产级实现。它关心的是加速效果，本篇关心的是分布保真——两者是同一件事的两面。
+
+### C. 确定性与批不变性：失配的另一个来源
+
+**LLM-42: Enabling Determinism in LLM Inference with Verified Speculation** · [arXiv 2601.17768](https://arxiv.org/abs/2601.17768)
+同一 prompt 在不同运行下可能给出不同输出。系统层面的根因是**浮点非结合性**叠加**动态 batching**，以及归约顺序随 batch size 变化的 GPU 内核。直接关掉动态 batching 能消除非确定性，但吞吐会严重下降；LLM-42 用「带验证的投机」来同时拿到确定性和吞吐。
+**与本篇的关系**：非常关键的一条——它说明**同一个 batch size 的变化就足以改变 token 概率**，与投机解码无关。本篇如果不控制 batch，测到的「投机导致的失配」可能只是 batch 效应。这也是 §4 判据里要固定 batch 的原因。
+
+**MarginGate: Sparse Margin-Triggered Verification for Batch-Invariant LLM Inference** · [arXiv 2605.30218](https://arxiv.org/abs/2605.30218)
+温度为 0 的 BF16 推理常被当作可复现的，但**同一请求单独解码和放进大 batch 解码可能吐出不同 token**。已有修法（批不变算子、LLM-42 的逐 token 验证）在大多数步骤本来就稳定时也要付出代价。MarginGate 发现 batch 引起的 token 翻转是**稀疏**的，于是只对翻转的 token 做验证。
+**与本篇的关系**：「翻转是稀疏的」这个实测结论，和本篇「±5% 内测不到效应」互相支持——数值差异真实存在，但影响到最终 token 的比例很低。
+
+### D. 选题阶段撞上的工作（KV 缓存方向）
+
+这一组是选题基地阶段扫描时撞上的，说明 KV 缓存这条路线已经很拥挤，最终没选。
+
+- **Marconi: Prefix Caching for the Era of Hybrid LLMs** · [arXiv 2411.19379](https://arxiv.org/abs/2411.19379) —— 混合模型（Attention + 循环层/SSM）的独特性质让前缀缓存这类优化难以直接套用，Marconi 处理这个问题。
+- **Rethinking KV Cache Compression Techniques for LLM Serving** · [arXiv 2503.24000](https://arxiv.org/abs/2503.24000) —— 从实践角度重审主流 KV 压缩，追问为什么算法多、落地少。
+- **KVServe** · [arXiv 2605.13734](https://arxiv.org/abs/2605.13734) —— 分离式服务把 KV 变成跨网络的显式载荷；已有压缩是静态配置，而生产负载随时间变化。
+- **CacheFlow** · [arXiv 2604.25080](https://arxiv.org/abs/2604.25080) —— 长上下文里 KV 恢复成为主导瓶颈，已有方案没利用跨 token、跨层的并行性。
+- **PrefixPlace** · [arXiv 2608.01655](https://arxiv.org/abs/2608.01655) —— 前缀 KV 复用时，「重算 vs 取副本」的相对代价随硬件和前缀深度变化，只看命中率来放置是次优的。
+- **py-kvcache** · [arXiv 2609.11744](https://arxiv.org/abs/2609.11744) —— 在 vLLM 上表征 GPU / CPU / NVMe 三级外部 KV 缓存。一个反直觉的结论：**前缀短或 GPU 快时，重算比从外部缓存加载更快**。
+
+### E. 工程一手材料
+
+- Thinking Machines，[Defeating Nondeterminism in LLM Inference](https://thinkingmachines.ai/blog/defeating-nondeterminism-in-llm-inference/) —— 把「批不变性」这个概念讲清楚的那篇博客，本篇 §2 的数值路径分析受它影响很大。
+- vLLM issue [#54035](https://github.com/vllm-project/vllm/issues/54035)、[#49918](https://github.com/vllm-project/vllm/issues/49918)、[#55524](https://github.com/vllm-project/vllm/issues/55524) —— 三条与投机解码数值行为直接相关的一手记录。
+- [AMD ROCm logprob 调试](https://rocm.blogs.amd.com/software-tools-optimization/logprob-debug/README.html) —— 跨厂商看同一类问题。
+- [slime / Miles 失配教程](https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/slime/mismatch/blog-en.md) —— 中文社区对 TIM 最系统的工程笔记。
+- [ServiceNow：Correctness Before Corrections](https://huggingface.co/blog/ServiceNow-AI/correctness-before-corrections) —— 论点与 §D 的 Correctness Forensics 一致：先验正确性，再谈修正。
+
+### F. 本专栏内部
+
+- [第 1 篇：RL 里的投机 draft 什么时候值得维护？](../rl-spec-draft-maintenance/) —— 它的 §5.8「无损性闭环」依赖本篇 §2 的推导。
+- [第 6 篇：一条 rollout 能用多久，取决于谁来用吗？](../rollout-half-life/) —— 同一份逐 token 对数比 $\Delta_t$，本篇用它衡量失配，第 6 篇用它衡量陈旧。

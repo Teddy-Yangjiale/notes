@@ -138,6 +138,16 @@ out = E2M1[idx] * s                                        # 符号再也没有�
 
 ![左：负权重清零后每个线性层都成了非负矩阵，秩 1 的全 1 方向分量压过其余方向，不同上下文的隐藏状态被推向同一方向；实测 100 道题的生成结尾只有 1 种。右：α 是 p 与 q 的重合面积；正常模型的 α 随位置从 0.5505 升到 0.8954，「死」模型四个桶都是 0.0644](diagrams/fig03_collapse_alpha.png)
 
+**🖼 怎么读这张图**
+>
+> **左半边**讲「模型为什么死」：负权重清零后，每个线性层都变成**非负矩阵**。非负矩阵有一个很强的性质——它的主奇异方向接近全 1 向量 $u$（Perron–Frobenius 的直觉版本）。于是矩阵可以拆成「秩 1 的 $\mu uu^\top$ + 零均值噪声」，而图上要看的就是**这两部分的量级比**：817σ vs 53σ，相差 15 倍。任何输入经过它都被投影到同一个方向上，28 层叠下来，**不同上下文的隐藏状态收敛到同一点**。
+>
+> **右半边**讲「这件事在 α 上留下什么指纹」：α 是 $p$ 与 $q$ 两条分布的重合面积。正常模型的 α 随位置**从 0.5505 爬到 0.8954**（上下文越多，draft 越好猜）；坏模型四个桶**全是 0.0644**，一条水平线。
+>
+> **关键在于「平」这个特征，而不是「低」。** 低只说明退化严重，平说明 $p_t$ 已经不随上下文变化了——也就是模型不再看输入。这是把「量化损伤」和「模型死亡」区分开的判据，也是 §3.4 那组天然对照（只量化 target / 都量化 / 只量化 draft）能定位 bug 的原因。
+>
+> 如果只记一件事：**看到一个指标在所有分桶上小数点后四位完全相同，先怀疑尺子，不要急着解释现象。**
+
 这一节是推导，我没有在服务器上逐层验证。
 
 设某一行权重近似 $w \sim \mathcal{N}(0, \sigma^2)$，均值为 0。负数清零之后，$w' = \max(w, 0)$，这一行的均值变成
@@ -488,8 +498,31 @@ Idea A'' 的原始文档我在服务器和本地都没有找到。它的主张�
 
 ## 参考
 
-- 投机解码与拒绝采样：Leviathan et al., *Fast Inference from Transformers via Speculative Decoding*，[arXiv 2211.17192](https://arxiv.org/abs/2211.17192)
-- EAGLE（以倒数第二层特征为输入的 draft head）：[arXiv 2401.15077](https://arxiv.org/abs/2401.15077)
-- NVFP4 格式（E2M1、16 元素块、E4M3 块缩放 + FP32 张量缩放）：NVIDIA 技术博客，[Introducing NVFP4 for Efficient and Accurate Low-Precision Inference](https://developer.nvidia.com/blog/introducing-nvfp4-for-efficient-and-accurate-low-precision-inference/)
-- MX 格式（MXFP4 的 32 元素块与 2 的幂缩放）：*Microscaling Data Formats for Deep Learning*，[arXiv 2310.10537](https://arxiv.org/abs/2310.10537)
-- 本专栏相关篇目：[第 1 篇 · 草稿头维护](../rl-spec-draft-maintenance/)、[第 2 篇 · SM120 FP4](../sm120-fp4-cliff/)、[第 3 篇 · 量化 × 投机解码交互（S1）](../quant-spec-interaction/)、[第 6 篇 · rollout 半衰期](../rollout-half-life/)、[第 9 篇 · 投机解码 × RL 失配](../spec-decoding-rl-mismatch/)
+本篇的主体是一个 bug 的机制分析，参考不多，但每一条都直接支撑推导的某一步。
+
+### A. 数值格式：bug 发生的地方
+
+**⭐ Microscaling Data Formats for Deep Learning（MX 格式规范）** · [arXiv 2310.10537](https://arxiv.org/abs/2310.10537)
+评估 Microscaling（MX）数据格式：**每块一个缩放因子 + 块内窄浮点/整数类型**。作者强调 MX 是在硬件效率、模型精度、用户改动成本这三者之间取平衡。
+**与本篇的关系**：**§2.2「NVFP4：16 元素块 + FP8 缩放」的规范来源。** 理解「块 + 缩放」这个两级结构，才能看懂 §3.1 那三行代码错在哪——错的不是 E2M1 的量化本身，而是**缩放/反缩放这一步把符号丢了**。这也解释了为什么 §3.2 里「所有负权重变成 0」而不是「变成错误的负数」。
+
+### B. 投机解码：被这个 bug 污染的观测量
+
+**Fast Inference from Transformers via Speculative Decoding** · [arXiv 2211.17192](https://arxiv.org/abs/2211.17192)
+投机解码原始论文，给出接受规则与无损性证明。
+**与本篇的关系**：§1.1 的 $\alpha$ 与 $\tau$ 定义来自这里。理解 $\alpha = \sum_x \min(p,q)$ 这个形式，才能看懂 §3.4 的推导——**为什么一个「死」模型的 α 会和位置无关**：当 $p$ 塌缩成一个与上下文无关的固定分布时，$\min(p,q)$ 的期望自然不随位置变化。这个「位置无关」正是识破 bug 的关键信号。
+
+**EAGLE: Speculative Sampling Requires Rethinking Feature Uncertainty** · [arXiv 2401.15077](https://arxiv.org/abs/2401.15077)
+在特征层而非 token 层做自回归，并显式处理特征层自回归的固有不确定性。
+**与本篇的关系**：本篇用的 draft 是 EAGLE 式的。§3.5「保护 lm_head 零变化本来想说明什么」——那个设计的意图是隔离「特征通路被量化」与「输出头被量化」两条影响路径，而 EAGLE 的结构正好让这两条路径可分。
+
+### C. 量化方法：预注册时的对照组
+
+**GPTQ、AWQ** —— 权重量化的两个标准基线（本篇正文提到但未展开实验）。
+**与本篇的关系**：预注册的边界扫描原本要在这两者与 NVFP4 之间找「准确率几乎不掉、接受率却大跌」的窗口。bug 修复后 α 只降 3.1%，**这个窗口是空的**，扫描失去了对象。
+
+### D. 本专栏内部
+
+- [第 3 篇：把 target 量化成 FP8 / INT8，投机解码的接受率会变吗？](../quant-spec-interaction/) —— **那篇的 4-bit 臂用的就是本篇描述的这个坏量化器，数据全部作废。** 两篇是同一条机制链上的上下游，必须对照读。
+- [第 4 篇：量化、KV 并发和投机解码在抢同一份显存吗？](../vram-budget-composition/) —— 另一个被「假量化器/固定成本」误导的例子：那篇 R3-A 测到的「量化 GEMM 慢 1.8–3.4 倍」同样不是量化本身的性质。
+- [第 2 篇：消费级 Blackwell 的 FP4「架构悬崖」是真的吗？](../sm120-fp4-cliff/) —— 同一时期、同一套 FP4 格式，但测的是性能而非精度；那篇的死因（测在启动开销地板上）和本篇的死因（测在坏量化器上）属于同一类：**先确认尺子是对的，再读数**。

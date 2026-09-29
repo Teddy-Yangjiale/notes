@@ -111,6 +111,16 @@ $$
 
 ![左：示意 τ_rec = 2.5、ρ = 0.95 时，一次维护之后每步节省 b_h 逐步衰减，累计节省追上 150 秒成本的翻转点 H* 在 5080 标定下是 8 步、5090 标定下是 12 步；右：要回本，每步收益保留率 ρ 至少要多大，随 τ_rec 和 1+Kc 变化，实测的 v3、v5 分别需要 ρ 大于 0.956 和 0.994](diagrams/fig04_payback.png)
 
+**🖼 怎么读这张图**
+>
+> **左图是回本曲线**。一次「维护」（重训 draft）要先付一笔固定成本，之后每一步省下 $b_h$ 的墙钟。但 $b_h$ 会随策略漂移**按 $\rho^h$ 衰减**——draft 越来越跟不上 target。所以累计节省是一条**逐渐变平的曲线**，而成本是一条水平线；两者的交点就是**回本步数**。
+>
+> 要看的是这条曲线**会不会与成本线相交**：若 $\rho$ 太小（漂移快），曲线在追上之前就趋平，**永远回不了本**；若衰减慢，交点很早出现，维护就该做。
+>
+> **右图把它变成一张判定表**：横轴漂移速度、纵轴单次维护成本，平面被分成「值得维护 / 不值得」两块。
+>
+> **本项目卡在哪里**：这张图需要两个输入——真实的 $\tau_\text{rec}$ 和真实的 $\rho$。§5 显示两者都拿不到：真实投机的接受长度过不了预设门槛（$\tau$ 太低），而我能造出的 RL 设置里策略几乎不漂移（$\rho\approx 1$）。**曲线的两个参数都测不出来，图就只能停在示意。**
+
 把一次维护当作一笔会折旧的投资。它在关键路径上暴露的成本是 $C_\text{exposed}$；之后第 $h$ 步 rollout 省下的墙钟是 $b_h$（注意是秒，不是接受率）；训练还剩 $H$ 步。这次维护的净价值是
 
 $$
@@ -499,12 +509,114 @@ v5 好不容易修出来的 τ_rec = 1.58，在 5090 上被开销吃光了。拆
 
 ## 参考
 
-- 投机解码与拒绝采样：Leviathan et al. [arXiv 2211.17192](https://arxiv.org/abs/2211.17192)；Chen et al. [arXiv 2302.01318](https://arxiv.org/abs/2302.01318)；EAGLE-3 [arXiv 2503.01840](https://arxiv.org/abs/2503.01840)
-- Qwen Bebop（熵界、端到端 TV 损失、RL 前训练一次）：[arXiv 2606.12370](https://arxiv.org/abs/2606.12370)
-- NVIDIA NeMo-RL 投机 rollout：[arXiv 2604.26779](https://arxiv.org/abs/2604.26779)
-- 在线维护 draft：TLT [arXiv 2511.16665](https://arxiv.org/abs/2511.16665)；FastGRPO [arXiv 2509.21792](https://arxiv.org/abs/2509.21792)；ReSpec [arXiv 2510.26475](https://arxiv.org/abs/2510.26475)；OnlineSPEC [arXiv 2603.12617](https://arxiv.org/abs/2603.12617)；Online Draft Co-Training [arXiv 2609.07108](https://arxiv.org/abs/2609.07108)；MTP-RL（ACL 2026 Findings）
-- 上下文与覆盖：DAS [arXiv 2511.13841](https://arxiv.org/abs/2511.13841)；SRT [arXiv 2601.09083](https://arxiv.org/abs/2601.09083)；SPEC-RL [arXiv 2509.23232](https://arxiv.org/abs/2509.23232)
-- 必要性与放置：SpecActor [arXiv 2511.16193](https://arxiv.org/abs/2511.16193)
-- 决策与成本门控：SpecBlock [arXiv 2605.07243](https://arxiv.org/abs/2605.07243)；BubbleSpec [arXiv 2605.08862](https://arxiv.org/abs/2605.08862)；WAR [arXiv 2607.17299](https://arxiv.org/abs/2607.17299)；CERO [arXiv 2606.05606](https://arxiv.org/abs/2606.05606)；EfficientRollout [arXiv 2606.18967](https://arxiv.org/abs/2606.18967)；TIDE [arXiv 2602.05145](https://arxiv.org/abs/2602.05145)；PAFT [arXiv 2609.24205](https://arxiv.org/abs/2609.24205)
-- 损失函数与测量学：LK Losses [arXiv 2602.23881](https://arxiv.org/abs/2602.23881)；Speculative Decoding: Performance or Illusion? [arXiv 2601.11580](https://arxiv.org/abs/2601.11580)
-- 本专栏：[第 2 篇：SM120 的 FP4「悬崖」](../sm120-fp4-cliff/)；[第 9 篇：投机解码会悄悄改变 RL 的行为策略吗？](../spec-decoding-rl-mismatch/)
+下面每条都写清楚「这篇做了什么、关键结论是什么、和本篇什么关系」。标 ⭐ 的是直接决定本项目命运的四篇。
+
+### A. 投机解码的地基
+
+**Fast Inference from Transformers via Speculative Decoding** · [arXiv 2211.17192](https://arxiv.org/abs/2211.17192)
+投机解码的原始论文（Leviathan et al.）。核心观察有两条：困难的语言建模任务里往往嵌着能被小模型近似的简单子任务；配合一套改造过的采样方法，可以让并行计算出的多个 token **在分布上与逐个采样完全等价**。这就是「无损」的来源。
+**与本篇的关系**：§1.2 的拒绝采样推导直接来自这里。本篇所有「维护 draft 能省多少」的讨论，前提都是接受/拒绝这一步不改变输出分布——否则省下的时间就不是白捡的。
+
+**Accelerating Large Language Model Decoding with Speculative Sampling** · [arXiv 2302.01318](https://arxiv.org/abs/2302.01318)
+DeepMind 同期的独立工作。关键措辞是它的 modified rejection sampling *preserves the distribution of the target model **within hardware numerics***——无损性是在硬件数值精度**之内**成立的。
+**与本篇的关系**：这句限定是[第 9 篇](../spec-decoding-rl-mismatch/)整篇文章的起点，也是 §5.8「无损性闭环」要验的东西。两篇论文同时给出同一个算法，说明这个想法在当时是「悬在空中等人摘」的。
+
+**EAGLE-3: Scaling up Inference Acceleration of LLMs via Training-Time Test** · [arXiv 2503.01840](https://arxiv.org/abs/2503.01840)
+EAGLE 系列在特征层而非 token 层做自回归，复用 target 顶层特征。EAGLE-3 解决的问题很具体：**给 EAGLE 加训练数据，收益很快饱和**。作者把瓶颈归到「特征预测」这个约束上，去掉它并引入训练时测试（training-time test）来对齐多步草拟的行为。
+**与本篇的关系**：§1.4 讲的「训练口径与推理口径不一致」就是 EAGLE-3 要修的那个问题。本项目用的 draft 头是 EAGLE 式的，它的 α 上限、以及「多步草拟时误差累积」的行为都由这条线决定。
+
+### B. ⭐ 决定本项目命运的四篇
+
+**⭐ Breaking Entropy Bounds: Accelerating RL Training via MTP with Rejection Sampling（Qwen Bebop）** · [arXiv 2606.12370](https://arxiv.org/abs/2606.12370)
+**这篇直接回答了本项目想问的问题，是终止的主因。** 它系统研究了 MTP 在后训练里的行为：很多工作观察到**RL 训练过程中 MTP 接受率会显著退化**，导致加速有限；Bebop 给出把 MTP 整合进 RL 的实践配方，并从熵的角度解释了接受率的上界。
+**与本篇的关系**：我想测「draft 什么时候值得维护」，而 Bebop 已经给出了「要不要维护、怎么维护」的答案。§6 三次判决里，这一篇是让主张从「测回本边界」收缩到无处可去的那一击。
+
+**⭐ ReSpec: Towards Optimizing Speculative Decoding in Reinforcement Learning Systems** · [arXiv 2510.26475](https://arxiv.org/abs/2510.26475)
+明确点出了朴素地把 SD 塞进 RL 的**三个缺口**：大 batch 下加速收益递减、actor 持续更新导致 **drafter staleness**、以及 drafter 会引起策略退化。
+**与本篇的关系**：第二条就是本篇的整个主题（漂移让 α 掉，于是需要维护）。第一条是我在 §5.7 撞上的「1+Kc 随服务栈移动」——大 batch 下投机的收益本来就在缩水，维护的回本窗口也跟着变窄。
+
+**⭐ FastGRPO: Accelerating Policy Optimization via Concurrency-aware Speculative Decoding and Online Draft Learning** · [arXiv 2509.21792](https://arxiv.org/abs/2509.21792)
+把两件事合在一起做：按并发度自适应地决定要不要投机，以及**在线学习 draft**。它给出的正是本项目想要的那条「维护」路径的一个完整实现。
+**与本篇的关系**：我的主张「维护能省多少墙钟、多久回本」在这里已经被当作工程默认项实现了。它和 Bebop 一起构成了 novelty 下移的两块石头。
+
+**⭐ Speculative Decoding: Performance or Illusion?** · [arXiv 2601.11580](https://arxiv.org/abs/2601.11580)
+第一份在**生产级引擎（vLLM）**上系统评测 SD 的工作，覆盖 n-gram / EAGLE / EAGLE-3 / Draft-Model / MTP 多种变体，跨不同负载、模型规模和 batch size。它的出发点就是质疑：过去的评测大多基于研究原型和**不切实际的小 batch**。
+**与本篇的关系**：这是 §5.7「同卡基线：1+Kc 随服务栈移动」的外部佐证。我在自己机器上量到的那条基线之所以会动，正是因为它依赖服务栈和 batch——而我最初把它当成了常数。这也是本篇「载体是生死线」这个结论的来源。
+
+### C. 在线维护 draft：本项目想做的事，别人已经做了
+
+**Taming the Long-Tail: Efficient Reasoning RL Training with Adaptive Drafter（TLT）** · [arXiv 2511.16665](https://arxiv.org/abs/2511.16665)
+瞄准推理 RL 的**长尾**问题：少数极长回答主导了执行时间。TLT 用自适应 drafter 无损地加速这类训练。
+**与本篇的关系**：它和下面几篇共同说明——「在 RL 里持续更新 draft」这件事已经有多个完整系统，本项目再做只能是复现。
+
+**When Drafts Evolve: Speculative Decoding Meets Online Learning** · [arXiv 2603.12617](https://arxiv.org/abs/2603.12617)
+指出一个「已存在但没被利用」的信号：**投机解码本身就在持续产生验证反馈**，这个反馈量化了 draft 与 target 的偏离程度。把它当作在线学习的监督信号，就能让 draft 边服务边改进。
+**与本篇的关系**：这正是「维护」最廉价的实现方式——不需要额外的 target 前向，反馈是免费的副产品。我在 §1.6 算回本边界时，成本项假设的是「重新训练 draft 要单独花算力」；这篇说明那个假设本身就偏保守。
+
+**TIDE: Temporal Incremental Draft Engine for Self-Improving LLM Inference** · [arXiv 2602.05145](https://arxiv.org/abs/2602.05145)
+把在线 draft 适配做进服务引擎内部：复用 target 推理时已经产生的中间隐状态作为训练信号，**不增加额外的 target 计算和服务时开销**。
+**与本篇的关系**：和上一篇同一思路的工程化版本。两篇合起来把「维护成本」压到接近零，这让我原本要测的「回本时间」这个量失去了意义。
+
+**Online Draft Co-Training for Speculative Decoding in Large-Scale, Long-Context RL Post-Training** · [arXiv 2609.07108](https://arxiv.org/abs/2609.07108)
+把在线 co-training 推到大模型 + 长上下文的规模，解决了两个具体的并行化障碍：**标准因果上下文并行（CP）不支持 branch attention**，以及 target 特征跨流水并行（PP）阶段分布。
+**与本篇的关系**：说明这条路线已经走到了「解决大规模工程细节」的阶段，而不是「还在验证想法」的阶段。
+
+### D. 用历史 rollout 当 draft：另一条绕开维护的路
+
+**SPEC-RL: Accelerating On-Policy RL with Speculative Rollouts** · [arXiv 2509.23232](https://arxiv.org/abs/2509.23232)
+观察到**相邻训练 epoch 的 rollout 有大量重叠**，于是直接把上一轮的 rollout 当 draft 复用，跳过重复生成。
+**与本篇的关系**：这是「不维护 draft 也能拿到投机收益」的思路——draft 不是一个需要训练的模型，而是历史数据。[第 6 篇](../rollout-half-life/)量的就是这条路上 draft 用途能撑多久。
+
+**SRT: Accelerating RL via Speculative Rollout with Tree-Structured Cache** · [arXiv 2601.09083](https://arxiv.org/abs/2601.09083)
+同一思路的 **model-free** 版本：把同一 prompt 在历次训练步产生的续写存进每 prompt 的树形缓存，当前策略直接拿这棵树做 draft，并持续刷新缓存。
+**与本篇的关系**：「model-free」三个字很关键——它连 draft 模型都不需要，自然也不存在「要不要维护」的问题。这是对本篇选题的一种釜底抽薪。
+
+**Beat the long tail: Distribution-Aware Speculative Decoding for RL Training（DAS）** · [arXiv 2511.13841](https://arxiv.org/abs/2511.13841)
+同时利用两件事：rollout 长度的**长尾分布**（少数长生成主导墙钟），以及历史 rollout 里**跨 epoch 稳定的 prompt 级模式**。
+**与本篇的关系**：长尾这个角度本篇没有覆盖。它提示「维护 draft」未必是提升墙钟的最优杠杆——把资源花在长尾那几条上可能更划算。
+
+### E. 系统侧：投机在 RL 里的放置与调度
+
+**Accelerating RL Post-Training Rollouts via System-Integrated Speculative Decoding（NVIDIA NeMo-RL）** · [arXiv 2604.26779](https://arxiv.org/abs/2604.26779)
+把 SD 当作**无损加速原语**放进 NeMo-RL + vLLM，强调它与那些「改变 rollout 或优化区制」的方法（off-policy 执行、replay、低精度生成）不同——**不改变 target 的输出分布**。
+**与本篇的关系**：这是本项目最初设想的载体形态。「无损」这个定位也是 §5.8 要闭环验证的性质。
+
+**Fast LLM Post-training via Decoupled and Fastest-of-N Speculation（SpecActor）** · [arXiv 2511.16193](https://arxiv.org/abs/2511.16193)
+两个机制：**解耦的投机方法**绕开草拟本身的计算瓶颈，以及 fastest-of-N 的选择策略。
+**与本篇的关系**：属于「怎么把投机放进 RL 系统」这一层的工作，和「draft 质量要不要维护」是正交的两个维度。
+
+**BubbleSpec: Turning Long-Tail Bubbles into Speculative Rollout Drafts** · [arXiv 2605.08862](https://arxiv.org/abs/2605.08862)
+同步 RL 里，数据并行各 rank 的长尾会让快的 GPU 空等慢的。已有方案（partial rollout、异步 RL）都以**牺牲严格同步性**为代价；BubbleSpec 反过来，把这些气泡用来做投机草拟。
+**与本篇的关系**：一个很漂亮的「免费算力」论证——维护 draft 的成本如果能落在本来就空闲的气泡里，回本时间可以趋近于零。这再次削弱了本篇要测的那个量。
+
+**EfficientRollout: System-Aware Self-Speculative Decoding for RL Rollouts** · [arXiv 2606.18967](https://arxiv.org/abs/2606.18967)
+用 **self-speculative**（模型自己当自己的 draft）来处理 rollout 长尾，强调系统感知。
+**与本篇的关系**：self-speculative 意味着没有独立的 draft 模型，「维护」这个动作本身不存在。
+
+**WAR: Workload-Aware Rollouts for Synchronous Agentic RL** · [arXiv 2607.17299](https://arxiv.org/abs/2607.17299)
+针对智能体 RL 的长时程 rollout（动辄几万 token），联合优化解码与调度。核心观察是**最优的 rollout 优化策略取决于运行时负载**。
+**与本篇的关系**：又一条「载体依赖」的证据，和 §5.7 的结论一致——脱离具体负载谈「投机能省多少」是没有意义的。
+
+**Cross-Epoch Adaptive Rollout Optimization（CERO）** · [arXiv 2606.05606](https://arxiv.org/abs/2606.05606)
+换一个角度省 rollout：大多数方法给每个 prompt 固定的 rollout 预算，但不同 prompt 提供的训练信号差别很大。CERO 用 Beta 后验建模每个 prompt 的成功概率，做**自适应预算分配**。
+**与本篇的关系**：提醒「省 rollout 墙钟」有多条互相竞争的路径，投机只是其中一条，未必是杠杆最大的那条。
+
+### F. 训练目标与能效
+
+**LK Losses: Direct Acceptance Rate Optimization for Speculative Decoding** · [arXiv 2602.23881](https://arxiv.org/abs/2602.23881)
+一个容易被忽略的错配：训练 draft 时标准做法是最小化 **KL 散度**，但真正想要的是**最大化接受率**。两者全局最优点相同，可小 draft 容量有限，往往收敛到「KL 降下去了但接受率没最大化」的次优解。
+**与本篇的关系**：这直指 §1.4「训练口径 vs 推理口径」。我在 §5.2 撞到的那个静默杀手——d₀ 基线的 α 上不去——很可能就属于这一类：优化的目标不是我真正在乎的那个量。
+
+**SpecBlock: Block-Iterative Speculative Decoding with Dynamic Tree Drafting** · [arXiv 2605.07243](https://arxiv.org/abs/2605.07243)
+把两类 drafter 的短板摊开：自回归 drafter（如 EAGLE-3）保住了路径内依赖，但**每层树深要调用一次 drafter**，草拟本身占掉可观延迟；并行 drafter 一次前向预测多个位置，但各位置互相看不见，产出 verifier 一看就否的路径。
+**与本篇的关系**：解释了 §1.6 回本公式里「草拟成本」那一项为什么不能当成小量——它和树深成正比。
+
+**PAFT: 相位感知的 GPU 调频** · [arXiv 2609.24205](https://arxiv.org/abs/2609.24205)
+训练流水线里的瓶颈期其实是**节能机会**：PAFT 按相位动态调频，在几乎不损失性能的前提下降低能耗。
+**与本篇的关系**：和本篇主题相隔较远，是选题阶段扫描「rollout 阶段还能怎么省」时收进来的。它的思路——把空闲/瓶颈期当资源而非损失——和 BubbleSpec 同源。
+
+### G. 本专栏内部
+
+- [第 2 篇：消费级 Blackwell 的 FP4「架构悬崖」是真的吗？](../sm120-fp4-cliff/) —— 同一套「先冻结判据再测」的纪律，以及租对照机做归因闭合的做法。
+- [第 6 篇：一条 rollout 能用多久，取决于谁来用吗？](../rollout-half-life/) —— 把「历史 rollout 当 draft」这条路量化到了半衰期尺度，是 D 组那几篇的实测版。
+- [第 9 篇：投机解码会悄悄改变 RL 的行为策略吗？](../spec-decoding-rl-mismatch/) —— 拒绝采样无损性的完整推导，本篇 §5.8 依赖它。
