@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1060" height="560" viewBox="0 0 1060 560" font-family="Microsoft YaHei, sans-serif">
+  <defs>
+    <marker id="arr3" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 z" fill="#6C6157"/></marker>
+  </defs>
+  <rect width="1060" height="560" fill="#F6F2E8"/>
+  <text x="30" y="42" font-size="24" font-weight="bold" fill="#2E2822">投机解码：draft → verify，把串行变并行</text>
+  <line x1="30" y1="56" x2="1030" y2="56" stroke="#CFC4AC" stroke-width="2"/>
+
+  <!-- 流程 -->
+  <rect x="30" y="82" width="240" height="120" rx="12" fill="#A8BE86" opacity="0.9"/>
+  <text x="150" y="122" text-anchor="middle" font-size="18" font-weight="bold" fill="#2E2822">① 草稿</text>
+  <text x="150" y="152" text-anchor="middle" font-size="14" fill="#2E2822">便宜的草稿机制</text>
+  <text x="150" y="176" text-anchor="middle" font-size="14" fill="#2E2822">一次猜 k 个 token</text>
+  <rect x="330" y="82" width="240" height="120" rx="12" fill="#92B7D1" opacity="0.9"/>
+  <text x="450" y="122" text-anchor="middle" font-size="18" font-weight="bold" fill="#2E2822">② 并行验证</text>
+  <text x="450" y="152" text-anchor="middle" font-size="14" fill="#2E2822">大模型一次前向</text>
+  <text x="450" y="176" text-anchor="middle" font-size="14" fill="#2E2822">同时验证全部 k 个</text>
+  <rect x="630" y="82" width="240" height="120" rx="12" fill="#E9C97E" opacity="0.9"/>
+  <text x="750" y="122" text-anchor="middle" font-size="18" font-weight="bold" fill="#2E2822">③ 拒绝采样</text>
+  <text x="750" y="152" text-anchor="middle" font-size="14" fill="#2E2822">接受前缀 + 重采样</text>
+  <text x="750" y="176" text-anchor="middle" font-size="14" fill="#2E2822">输出分布严格不变</text>
+  <rect x="900" y="82" width="130" height="120" rx="12" fill="#C0522E"/>
+  <text x="965" y="132" text-anchor="middle" font-size="18" font-weight="bold" fill="#FFFDF7">加速</text>
+  <text x="965" y="162" text-anchor="middle" font-size="16" fill="#FFFDF7">2–3×</text>
+  <line x1="270" y1="142" x2="330" y2="142" stroke="#6C6157" stroke-width="2" marker-end="url(#arr3)"/>
+  <line x1="570" y1="142" x2="630" y2="142" stroke="#6C6157" stroke-width="2" marker-end="url(#arr3)"/>
+  <line x1="870" y1="142" x2="900" y2="142" stroke="#6C6157" stroke-width="2" marker-end="url(#arr3)"/>
+
+  <!-- 草稿器演进 -->
+  <text x="30" y="252" font-size="17" font-weight="bold" fill="#2E2822">草稿器演进：干掉独立草稿模型</text>
+  <line x1="80" y1="330" x2="1000" y2="330" stroke="#9A9084" stroke-width="2" marker-end="url(#arr3)"/>
+  <circle cx="180" cy="330" r="8" fill="#E9C97E"/>
+  <circle cx="420" cy="330" r="8" fill="#A8BE86"/>
+  <circle cx="660" cy="330" r="8" fill="#92B7D1"/>
+  <circle cx="900" cy="330" r="8" fill="#C98FA0"/>
+  <text x="180" y="306" text-anchor="middle" font-size="14" font-weight="bold" fill="#2E2822">2022–23 奠基</text>
+  <text x="180" y="360" text-anchor="middle" font-size="13" fill="#6C6157">draft-verify 范式确立</text>
+  <text x="180" y="380" text-anchor="middle" font-size="13" fill="#6C6157">SpecInfer 树状投机</text>
+  <text x="420" y="306" text-anchor="middle" font-size="14" font-weight="bold" fill="#2E2822">2023–24 自草稿</text>
+  <text x="420" y="360" text-anchor="middle" font-size="13" fill="#6C6157">Medusa 多头 · EAGLE 特征层</text>
+  <text x="420" y="380" text-anchor="middle" font-size="13" fill="#6C6157">Lookahead 免训练</text>
+  <text x="660" y="306" text-anchor="middle" font-size="14" font-weight="bold" fill="#2E2822">2024–25 复制路线</text>
+  <text x="660" y="360" text-anchor="middle" font-size="13" fill="#6C6157">n-gram 检索零成本</text>
+  <text x="660" y="380" text-anchor="middle" font-size="13" fill="#6C6157">TriForce 长上下文层级</text>
+  <text x="900" y="306" text-anchor="middle" font-size="14" font-weight="bold" fill="#2E2822">2025–26 控制信号</text>
+  <text x="900" y="360" text-anchor="middle" font-size="13" fill="#6C6157">SwitchSD 意图切换</text>
+  <text x="900" y="380" text-anchor="middle" font-size="13" fill="#6C6157">投机渗透进 RL rollout</text>
+
+  <!-- 开放问题 -->
+  <rect x="30" y="415" width="1000" height="115" rx="12" fill="#FFFDF7" stroke="#E0D8C6" stroke-width="2"/>
+  <text x="55" y="447" font-size="16" font-weight="bold" fill="#C0522E">开放问题</text>
+  <text x="55" y="477" font-size="14" fill="#2E2822">· 异构/跨设备投机：草稿与验证物理分离时的延迟掩盖与最优草稿长度</text>
+  <text x="55" y="501" font-size="14" fill="#2E2822">· 大 batch 下收益递减甚至为负 —— 调度器需感知「何时该关投机」</text>
+  <text x="55" y="525" font-size="14" fill="#2E2822">· 草稿器服务化（多租户共享 / 热切换）、与 KV 压缩/前缀缓存的组合效应</text>
+</svg>

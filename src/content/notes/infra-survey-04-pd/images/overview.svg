@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1060" height="560" viewBox="0 0 1060 560" font-family="Microsoft YaHei, sans-serif">
+  <defs>
+    <marker id="arr4" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 z" fill="#C0522E"/></marker>
+  </defs>
+  <rect width="1060" height="560" fill="#F6F2E8"/>
+  <text x="30" y="42" font-size="24" font-weight="bold" fill="#2E2822">PD 分离：两个池子，中间传 KV</text>
+  <line x1="30" y1="56" x2="1030" y2="56" stroke="#CFC4AC" stroke-width="2"/>
+
+  <!-- Prefill 池 -->
+  <rect x="30" y="85" width="330" height="230" rx="14" fill="#92B7D1" opacity="0.9"/>
+  <text x="195" y="125" text-anchor="middle" font-size="20" font-weight="bold" fill="#FFFDF7">Prefill 池</text>
+  <text x="195" y="165" text-anchor="middle" font-size="15" fill="#FFFDF7">算力 bound</text>
+  <text x="195" y="195" text-anchor="middle" font-size="15" fill="#FFFDF7">大矩阵乘 · MFU 高</text>
+  <text x="195" y="235" text-anchor="middle" font-size="15" fill="#FFFDF7">可配算力强的卡</text>
+  <text x="195" y="275" text-anchor="middle" font-size="15" fill="#FFFDF7">负责 TTFT</text>
+
+  <!-- 传输 -->
+  <rect x="420" y="130" width="220" height="140" rx="14" fill="#E9C97E" opacity="0.95"/>
+  <text x="530" y="172" text-anchor="middle" font-size="18" font-weight="bold" fill="#2E2822">KV 传输</text>
+  <text x="530" y="205" text-anchor="middle" font-size="14" fill="#2E2822">RDMA / NIXL</text>
+  <text x="530" y="231" text-anchor="middle" font-size="14" fill="#2E2822">网络是核心开销</text>
+  <line x1="360" y1="200" x2="420" y2="200" stroke="#C0522E" stroke-width="3" marker-end="url(#arr4)"/>
+  <line x1="640" y1="200" x2="700" y2="200" stroke="#C0522E" stroke-width="3" marker-end="url(#arr4)"/>
+
+  <!-- Decode 池 -->
+  <rect x="700" y="85" width="330" height="230" rx="14" fill="#DFA07C" opacity="0.9"/>
+  <text x="865" y="125" text-anchor="middle" font-size="20" font-weight="bold" fill="#FFFDF7">Decode 池</text>
+  <text x="865" y="165" text-anchor="middle" font-size="15" fill="#FFFDF7">访存 bound</text>
+  <text x="865" y="195" text-anchor="middle" font-size="15" fill="#FFFDF7">逐 token 读权重</text>
+  <text x="865" y="235" text-anchor="middle" font-size="15" fill="#FFFDF7">可配带宽强的卡</text>
+  <text x="865" y="275" text-anchor="middle" font-size="15" fill="#FFFDF7">负责 TPOT</text>
+
+  <!-- 为什么分 -->
+  <rect x="30" y="340" width="500" height="92" rx="12" fill="#FFFDF7" stroke="#E0D8C6" stroke-width="2"/>
+  <text x="55" y="372" font-size="16" font-weight="bold" fill="#C0522E">为什么要分</text>
+  <text x="55" y="400" font-size="14" fill="#2E2822">混部时 prefill 尖峰拉高 TPOT，两阶段互相干扰</text>
+  <text x="55" y="422" font-size="14" fill="#2E2822">分离后 goodput 最高提升 7.4×（DistServe）</text>
+
+  <!-- 核心问题 -->
+  <rect x="560" y="340" width="470" height="92" rx="12" fill="#FFFDF7" stroke="#E0D8C6" stroke-width="2"/>
+  <text x="585" y="372" font-size="16" font-weight="bold" fill="#C0522E">核心问题</text>
+  <text x="585" y="400" font-size="14" fill="#2E2822">KV 传输开销 · P:D 池比例 · 请求路由 · SLO 保证</text>
+  <text x="585" y="422" font-size="14" fill="#2E2822">规模越大、SLO 越严，分离越占优</text>
+
+  <!-- 时间线 -->
+  <line x1="80" y1="495" x2="980" y2="495" stroke="#9A9084" stroke-width="2" marker-end="url(#arr4)"/>
+  <circle cx="200" cy="495" r="8" fill="#92B7D1"/>
+  <circle cx="450" cy="495" r="8" fill="#A8BE86"/>
+  <circle cx="700" cy="495" r="8" fill="#E9C97E"/>
+  <circle cx="920" cy="495" r="8" fill="#C98FA0"/>
+  <text x="200" y="478" text-anchor="middle" font-size="14" font-weight="bold" fill="#2E2822">2024 奠基三篇</text>
+  <text x="200" y="522" text-anchor="middle" font-size="13" fill="#6C6157">Splitwise / DistServe</text>
+  <text x="450" y="478" text-anchor="middle" font-size="14" font-weight="bold" fill="#2E2822">2025 生产化</text>
+  <text x="450" y="522" text-anchor="middle" font-size="13" fill="#6C6157">Mooncake · Dynamo · llm-d</text>
+  <text x="700" y="478" text-anchor="middle" font-size="14" font-weight="bold" fill="#2E2822">2025–26 深化</text>
+  <text x="700" y="522" text-anchor="middle" font-size="13" fill="#6C6157">算子级分离 · 混批之争</text>
+  <text x="920" y="478" text-anchor="middle" font-size="14" font-weight="bold" fill="#2E2822">2026 新轴</text>
+  <text x="920" y="522" text-anchor="middle" font-size="13" fill="#6C6157">功率维度 · 异构切分</text>
+</svg>

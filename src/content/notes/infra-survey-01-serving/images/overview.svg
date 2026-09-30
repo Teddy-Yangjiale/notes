@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1060" height="560" viewBox="0 0 1060 560" font-family="Microsoft YaHei, sans-serif">
+  <defs>
+    <marker id="arr" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 z" fill="#6C6157"/></marker>
+  </defs>
+  <rect width="1060" height="560" fill="#F6F2E8"/>
+  <text x="30" y="42" font-size="24" font-weight="bold" fill="#2E2822">LLM 推理服务与调度：两个阶段、一条主线</text>
+  <line x1="30" y1="56" x2="1030" y2="56" stroke="#CFC4AC" stroke-width="2"/>
+
+  <!-- Prefill vs Decode -->
+  <rect x="30" y="80" width="470" height="180" rx="12" fill="#FFFDF7" stroke="#E0D8C6" stroke-width="2"/>
+  <rect x="30" y="80" width="470" height="38" rx="12" fill="#92B7D1"/>
+  <text x="265" y="106" text-anchor="middle" font-size="18" font-weight="bold" fill="#FFFDF7">Prefill 预填充</text>
+  <text x="55" y="148" font-size="15" fill="#2E2822">并行处理整段 prompt，产出首 token</text>
+  <text x="55" y="178" font-size="15" fill="#2E2822">瓶颈：算力（大矩阵乘，MFU 高）</text>
+  <text x="55" y="208" font-size="15" fill="#2E2822">延迟指标：TTFT（首 token 延迟）</text>
+  <text x="55" y="238" font-size="15" fill="#C0522E">特征：单次很长，随输入长度增长</text>
+
+  <rect x="560" y="80" width="470" height="180" rx="12" fill="#FFFDF7" stroke="#E0D8C6" stroke-width="2"/>
+  <rect x="560" y="80" width="470" height="38" rx="12" fill="#DFA07C"/>
+  <text x="795" y="106" text-anchor="middle" font-size="18" font-weight="bold" fill="#FFFDF7">Decode 解码</text>
+  <text x="585" y="148" font-size="15" fill="#2E2822">逐 token 自回归生成其余输出</text>
+  <text x="585" y="178" font-size="15" fill="#2E2822">瓶颈：显存带宽（每步读全部权重）</text>
+  <text x="585" y="208" font-size="15" fill="#2E2822">延迟指标：TPOT（token 间延迟）</text>
+  <text x="585" y="238" font-size="15" fill="#C0522E">特征：单步很短，但必须连续</text>
+
+  <!-- 调度主线 -->
+  <rect x="30" y="290" width="1000" height="130" rx="12" fill="#FFFDF7" stroke="#E0D8C6" stroke-width="2"/>
+  <text x="55" y="322" font-size="17" font-weight="bold" fill="#2E2822">调度演进主线</text>
+  <line x1="80" y1="380" x2="980" y2="380" stroke="#9A9084" stroke-width="2" marker-end="url(#arr)"/>
+  <circle cx="160" cy="380" r="8" fill="#E9C97E"/>
+  <circle cx="400" cy="380" r="8" fill="#A8BE86"/>
+  <circle cx="640" cy="380" r="8" fill="#92B7D1"/>
+  <circle cx="880" cy="380" r="8" fill="#C98FA0"/>
+  <text x="160" y="358" text-anchor="middle" font-size="14" font-weight="bold" fill="#2E2822">2022 Orca</text>
+  <text x="160" y="408" text-anchor="middle" font-size="13" fill="#6C6157">迭代级调度</text>
+  <text x="160" y="428" text-anchor="middle" font-size="13" fill="#6C6157">（连续批处理原型）</text>
+  <text x="400" y="358" text-anchor="middle" font-size="14" font-weight="bold" fill="#2E2822">2023–24 引擎战争</text>
+  <text x="400" y="408" text-anchor="middle" font-size="13" fill="#6C6157">vLLM 分页 · SGLang 前缀树</text>
+  <text x="400" y="428" text-anchor="middle" font-size="13" fill="#6C6157">chunked prefill 混批</text>
+  <text x="640" y="358" text-anchor="middle" font-size="14" font-weight="bold" fill="#2E2822">2024–25 多租户</text>
+  <text x="640" y="408" text-anchor="middle" font-size="13" fill="#6C6157">公平排队 · 语义变量</text>
+  <text x="640" y="428" text-anchor="middle" font-size="13" fill="#6C6157">多 LoRA 并发</text>
+  <text x="880" y="358" text-anchor="middle" font-size="14" font-weight="bold" fill="#2E2822">2025–26 测量学</text>
+  <text x="880" y="408" text-anchor="middle" font-size="13" fill="#6C6157">冷启动 / 性能漂移</text>
+  <text x="880" y="428" text-anchor="middle" font-size="13" fill="#6C6157">细粒度可观测</text>
+
+  <!-- 核心矛盾 -->
+  <rect x="30" y="445" width="1000" height="80" rx="12" fill="#EDE7D9" stroke="#CFC4AC" stroke-width="2"/>
+  <text x="55" y="478" font-size="16" font-weight="bold" fill="#C0522E">核心矛盾</text>
+  <text x="180" y="478" font-size="15" fill="#2E2822">有限显存（权重 + KV cache）与算力下，最大化吞吐</text>
+  <text x="180" y="506" font-size="15" fill="#2E2822">同时守住 TTFT / TPOT 双 SLO —— 一切调度技术都围绕这一点展开</text>
+</svg>

@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1060" height="560" viewBox="0 0 1060 560" font-family="Microsoft YaHei, sans-serif">
+  <defs>
+    <marker id="arr9" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 z" fill="#6C6157"/></marker>
+  </defs>
+  <rect width="1060" height="560" fill="#F6F2E8"/>
+  <text x="30" y="42" font-size="24" font-weight="bold" fill="#2E2822">分布式训练：五种切分 + 容错</text>
+  <line x1="30" y1="56" x2="1030" y2="56" stroke="#CFC4AC" stroke-width="2"/>
+
+  <!-- 五种并行 -->
+  <text x="30" y="95" font-size="17" font-weight="bold" fill="#2E2822">切分策略谱系</text>
+  <rect x="30" y="110" width="190" height="100" rx="12" fill="#E9C97E"/>
+  <text x="125" y="150" text-anchor="middle" font-size="18" font-weight="bold" fill="#2E2822">DP</text>
+  <text x="125" y="180" text-anchor="middle" font-size="13" fill="#2E2822">数据并行</text>
+  <text x="125" y="200" text-anchor="middle" font-size="12" fill="#2E2822">ZeRO 状态切分</text>
+  <rect x="238" y="110" width="190" height="100" rx="12" fill="#A8BE86"/>
+  <text x="333" y="150" text-anchor="middle" font-size="18" font-weight="bold" fill="#2E2822">TP</text>
+  <text x="333" y="180" text-anchor="middle" font-size="13" fill="#2E2822">张量并行</text>
+  <text x="333" y="200" text-anchor="middle" font-size="12" fill="#2E2822">Megatron column/row</text>
+  <rect x="446" y="110" width="190" height="100" rx="12" fill="#92B7D1"/>
+  <text x="541" y="150" text-anchor="middle" font-size="18" font-weight="bold" fill="#2E2822">PP</text>
+  <text x="541" y="180" text-anchor="middle" font-size="13" fill="#2E2822">流水线并行</text>
+  <text x="541" y="200" text-anchor="middle" font-size="12" fill="#2E2822">GPipe 1F1B</text>
+  <rect x="654" y="110" width="190" height="100" rx="12" fill="#DFA07C"/>
+  <text x="749" y="150" text-anchor="middle" font-size="18" font-weight="bold" fill="#2E2822">EP</text>
+  <text x="749" y="180" text-anchor="middle" font-size="13" fill="#2E2822">专家并行</text>
+  <text x="749" y="200" text-anchor="middle" font-size="12" fill="#2E2822">all-to-all 通信</text>
+  <rect x="862" y="110" width="168" height="100" rx="12" fill="#C98FA0"/>
+  <text x="946" y="150" text-anchor="middle" font-size="18" font-weight="bold" fill="#2E2822">CP</text>
+  <text x="946" y="180" text-anchor="middle" font-size="13" fill="#2E2822">上下文并行</text>
+  <text x="946" y="200" text-anchor="middle" font-size="12" fill="#2E2822">Ring / Ulysses</text>
+
+  <!-- 2025-26 -->
+  <text x="30" y="278" font-size="17" font-weight="bold" fill="#2E2822">2025–26 前沿：容错成为第一主题</text>
+  <rect x="30" y="294" width="500" height="130" rx="12" fill="#FFFDF7" stroke="#E0D8C6" stroke-width="2"/>
+  <text x="55" y="326" font-size="15" font-weight="bold" fill="#C0522E">从 checkpoint 到内存内恢复</text>
+  <text x="55" y="356" font-size="14" fill="#2E2822">AccelPact：引用重绑定 + 带外共识恢复</text>
+  <text x="55" y="382" font-size="14" fill="#2E2822">零 I/O，goodput 提升 1.2–1.7×</text>
+  <text x="55" y="408" font-size="14" fill="#2E2822">周期 checkpoint 真实成本：延迟 +656%</text>
+
+  <rect x="560" y="294" width="470" height="130" rx="12" fill="#FFFDF7" stroke="#E0D8C6" stroke-width="2"/>
+  <text x="585" y="326" font-size="15" font-weight="bold" fill="#C0522E">正确性验证</text>
+  <text x="585" y="356" font-size="14" fill="#2E2822">Mycroft：集合通信依赖追踪定位根因</text>
+  <text x="585" y="382" font-size="14" fill="#2E2822">TrainVerify：等价性形式化验证</text>
+  <text x="585" y="408" font-size="14" fill="#2E2822">静默错误（SDC）主动自动检查</text>
+
+  <!-- 开放问题 -->
+  <rect x="30" y="450" width="1000" height="80" rx="12" fill="#EDE7D9" stroke="#CFC4AC" stroke-width="2"/>
+  <text x="55" y="480" font-size="15" font-weight="bold" fill="#C0522E">开放问题</text>
+  <text x="55" y="506" font-size="14" fill="#2E2822">静默错误端到端验证成本高 · 弹性训练与 3D 并行组合僵硬 · checkpoint/内存恢复的统一选择模型</text>
+  <text x="55" y="526" font-size="14" fill="#6C6157">开放训练复现成为新现象：训练基础设施本身（FP8 优化器、课程式上下文扩展）被详细公开</text>
+</svg>

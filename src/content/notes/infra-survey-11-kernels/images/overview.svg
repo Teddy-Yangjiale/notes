@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1060" height="560" viewBox="0 0 1060 560" font-family="Microsoft YaHei, sans-serif">
+  <defs>
+    <marker id="arrB" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 z" fill="#6C6157"/></marker>
+  </defs>
+  <rect width="1060" height="560" fill="#F6F2E8"/>
+  <text x="30" y="42" font-size="24" font-weight="bold" fill="#2E2822">GPU 算子与编译器：kernel 的自动生成</text>
+  <line x1="30" y1="56" x2="1030" y2="56" stroke="#CFC4AC" stroke-width="2"/>
+
+  <!-- 编译栈 -->
+  <text x="30" y="95" font-size="17" font-weight="bold" fill="#2E2822">从高层表达到底层 kernel</text>
+  <rect x="30" y="112" width="230" height="80" rx="10" fill="#E9C97E"/>
+  <text x="145" y="145" text-anchor="middle" font-size="16" font-weight="bold" fill="#2E2822">模型/张量表达</text>
+  <text x="145" y="172" text-anchor="middle" font-size="13" fill="#2E2822">PyTorch · JAX</text>
+  <rect x="300" y="112" width="230" height="80" rx="10" fill="#A8BE86"/>
+  <text x="415" y="145" text-anchor="middle" font-size="16" font-weight="bold" fill="#2E2822">编译器/DSL</text>
+  <text x="415" y="172" text-anchor="middle" font-size="13" fill="#2E2822">TVM · Triton · TileLang</text>
+  <rect x="570" y="112" width="230" height="80" rx="10" fill="#92B7D1"/>
+  <text x="685" y="145" text-anchor="middle" font-size="16" font-weight="bold" fill="#2E2822">调度搜索</text>
+  <text x="685" y="172" text-anchor="middle" font-size="13" fill="#2E2822">Ansor 自动调优 · 超优化</text>
+  <rect x="840" y="112" width="190" height="80" rx="10" fill="#DFA07C"/>
+  <text x="935" y="145" text-anchor="middle" font-size="16" font-weight="bold" fill="#2E2822">Kernel</text>
+  <text x="935" y="172" text-anchor="middle" font-size="13" fill="#2E2822">CUDA · PTX</text>
+  <line x1="260" y1="152" x2="300" y2="152" stroke="#6C6157" stroke-width="2" marker-end="url(#arrB)"/>
+  <line x1="530" y1="152" x2="570" y2="152" stroke="#6C6157" stroke-width="2" marker-end="url(#arrB)"/>
+  <line x1="800" y1="152" x2="840" y2="152" stroke="#6C6157" stroke-width="2" marker-end="url(#arrB)"/>
+
+  <!-- 演进 -->
+  <text x="30" y="252" font-size="17" font-weight="bold" fill="#2E2822">生态演进</text>
+  <line x1="80" y1="330" x2="1000" y2="330" stroke="#9A9084" stroke-width="2" marker-end="url(#arrB)"/>
+  <circle cx="180" cy="330" r="8" fill="#E9C97E"/>
+  <circle cx="420" cy="330" r="8" fill="#A8BE86"/>
+  <circle cx="660" cy="330" r="8" fill="#92B7D1"/>
+  <circle cx="900" cy="330" r="8" fill="#C98FA0"/>
+  <text x="180" y="306" text-anchor="middle" font-size="14" font-weight="bold" fill="#2E2822">2018–22 编译器</text>
+  <text x="180" y="360" text-anchor="middle" font-size="13" fill="#6C6157">TVM 开山 · Ansor 搜索</text>
+  <text x="180" y="380" text-anchor="middle" font-size="13" fill="#6C6157">Triton 改变生态</text>
+  <text x="420" y="306" text-anchor="middle" font-size="14" font-weight="bold" fill="#2E2822">2022–24 Attention</text>
+  <text x="420" y="360" text-anchor="middle" font-size="13" fill="#6C6157">FlashAttention 范式</text>
+  <text x="420" y="380" text-anchor="middle" font-size="13" fill="#6C6157">FlashInfer · DeepGEMM</text>
+  <text x="660" y="306" text-anchor="middle" font-size="14" font-weight="bold" fill="#2E2822">2024–25 超优化</text>
+  <text x="660" y="360" text-anchor="middle" font-size="13" fill="#6C6157">Mirage 微内核搜索</text>
+  <text x="660" y="380" text-anchor="middle" font-size="13" fill="#6C6157">KPerfIR 性能 IR 化</text>
+  <text x="900" y="306" text-anchor="middle" font-size="14" font-weight="bold" fill="#2E2822">2025–26 AI 写 kernel</text>
+  <text x="900" y="360" text-anchor="middle" font-size="13" fill="#6C6157">LLM agent 自我改进</text>
+  <text x="900" y="380" text-anchor="middle" font-size="13" fill="#6C6157">megakernel 统一抽象</text>
+
+  <!-- 开放问题 -->
+  <rect x="30" y="415" width="1000" height="115" rx="12" fill="#FFFDF7" stroke="#E0D8C6" stroke-width="2"/>
+  <text x="55" y="447" font-size="16" font-weight="bold" fill="#C0522E">开放问题</text>
+  <text x="55" y="477" font-size="14" fill="#2E2822">· NVFP4 等新数值格式的社区 kernel 生态刚起步（厂商 kernel 之外几乎空白）</text>
+  <text x="55" y="501" font-size="14" fill="#2E2822">· LLM 生成 kernel 的正确性验证缺乏标准流程（数值等价、边界情况）</text>
+  <text x="55" y="525" font-size="14" fill="#2E2822">· 搜索型编译器与手写库（CUTLASS）在 attention 之外仍有较大差距</text>
+</svg>

@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1060" height="560" viewBox="0 0 1060 560" font-family="Microsoft YaHei, sans-serif">
+  <defs>
+    <marker id="arr7" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 z" fill="#6C6157"/></marker>
+  </defs>
+  <rect width="1060" height="560" fill="#F6F2E8"/>
+  <text x="30" y="42" font-size="24" font-weight="bold" fill="#2E2822">显存卸载：三层存储之间的搬运调度</text>
+  <line x1="30" y1="56" x2="1030" y2="56" stroke="#CFC4AC" stroke-width="2"/>
+
+  <!-- 金字塔 -->
+  <rect x="380" y="90" width="300" height="80" rx="10" fill="#92B7D1"/>
+  <text x="530" y="125" text-anchor="middle" font-size="18" font-weight="bold" fill="#FFFDF7">GPU HBM</text>
+  <text x="530" y="152" text-anchor="middle" font-size="13" fill="#FFFDF7">16–32 GB · ~1 TB/s</text>
+  <rect x="310" y="185" width="440" height="80" rx="10" fill="#A8BE86"/>
+  <text x="530" y="220" text-anchor="middle" font-size="18" font-weight="bold" fill="#FFFDF7">CPU DRAM</text>
+  <text x="530" y="247" text-anchor="middle" font-size="13" fill="#FFFDF7">百 GB 级 · ~50 GB/s</text>
+  <rect x="240" y="280" width="580" height="80" rx="10" fill="#DFA07C"/>
+  <text x="530" y="315" text-anchor="middle" font-size="18" font-weight="bold" fill="#FFFDF7">NVMe SSD</text>
+  <text x="530" y="342" text-anchor="middle" font-size="13" fill="#FFFDF7">TB 级 · ~5 GB/s（顺序读）</text>
+
+  <!-- 三个核心问题 -->
+  <rect x="30" y="90" width="280" height="270" rx="12" fill="#FFFDF7" stroke="#E0D8C6" stroke-width="2"/>
+  <text x="170" y="125" text-anchor="middle" font-size="17" font-weight="bold" fill="#C0522E">三个核心问题</text>
+  <text x="55" y="165" font-size="15" font-weight="bold" fill="#2E2822">放置策略</text>
+  <text x="55" y="190" font-size="13" fill="#6C6157">什么放哪一层</text>
+  <text x="55" y="235" font-size="15" font-weight="bold" fill="#2E2822">传输调度</text>
+  <text x="55" y="260" font-size="13" fill="#6C6157">何时搬、怎么掩盖延迟</text>
+  <text x="55" y="305" font-size="15" font-weight="bold" fill="#2E2822">负载感知</text>
+  <text x="55" y="330" font-size="13" fill="#6C6157">哪些权重/KV 被频繁用</text>
+
+  <rect x="860" y="90" width="170" height="270" rx="12" fill="#EDE7D9" stroke="#CFC4AC" stroke-width="2"/>
+  <text x="945" y="125" text-anchor="middle" font-size="15" font-weight="bold" fill="#C0522E">标志系统</text>
+  <text x="945" y="165" text-anchor="middle" font-size="13" fill="#2E2822">llama.cpp</text>
+  <text x="945" y="195" text-anchor="middle" font-size="13" fill="#2E2822">FlexGen</text>
+  <text x="945" y="225" text-anchor="middle" font-size="13" fill="#2E2822">PowerInfer</text>
+  <text x="945" y="255" text-anchor="middle" font-size="13" fill="#2E2822">Fiddler</text>
+  <text x="945" y="285" text-anchor="middle" font-size="13" fill="#2E2822">kTransformers</text>
+  <text x="945" y="315" text-anchor="middle" font-size="13" fill="#2E2822">SSD-LLaMA</text>
+
+  <!-- 前沿 -->
+  <rect x="30" y="390" width="1000" height="140" rx="12" fill="#FFFDF7" stroke="#E0D8C6" stroke-width="2"/>
+  <text x="55" y="422" font-size="16" font-weight="bold" fill="#C0522E">2025–26 前沿</text>
+  <text x="55" y="452" font-size="14" fill="#2E2822">· 张量级（比层/专家更细）混合放置 + 负载感知动态迁移 + 异步协同（ATSInfer）</text>
+  <text x="55" y="478" font-size="14" fill="#2E2822">· SSD 原生推理：稀疏激活预测预取（SSD-LLaMA）；KV 分层与外部缓存 break-even 刻画</text>
+  <text x="55" y="504" font-size="14" fill="#2E2822">· 异构编排：NPU/GPU/CPU 功能流水线；新型硬件：PIM、CXL、晶圆级芯片</text>
+  <text x="55" y="528" font-size="14" fill="#6C6157">开放问题：权重/KV/激活三类对象的联合放置、预取准确性 vs 带宽浪费、统一内存（UMA）调度</text>
+</svg>

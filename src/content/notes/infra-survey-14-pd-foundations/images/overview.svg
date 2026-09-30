@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1060" height="520" viewBox="0 0 1060 520" font-family="Microsoft YaHei, sans-serif">
+  <defs>
+    <marker id="arrE" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 z" fill="#6C6157"/></marker>
+  </defs>
+  <rect width="1060" height="520" fill="#F6F2E8"/>
+  <text x="30" y="42" font-size="24" font-weight="bold" fill="#2E2822">奠基五篇：谁先谁后、各解决了什么</text>
+  <line x1="30" y1="56" x2="1030" y2="56" stroke="#CFC4AC" stroke-width="2"/>
+
+  <!-- 时间线 -->
+  <line x1="80" y1="120" x2="1000" y2="120" stroke="#9A9084" stroke-width="2" marker-end="url(#arrE)"/>
+  <circle cx="180" cy="120" r="9" fill="#E9C97E"/>
+  <circle cx="400" cy="120" r="9" fill="#A8BE86"/>
+  <circle cx="620" cy="120" r="9" fill="#92B7D1"/>
+  <circle cx="840" cy="120" r="9" fill="#C98FA0"/>
+  <text x="180" y="98" text-anchor="middle" font-size="15" font-weight="bold" fill="#2E2822">Splitwise · ISCA'24</text>
+  <text x="180" y="152" text-anchor="middle" font-size="13" fill="#6C6157">首次系统提出阶段拆分</text>
+  <text x="180" y="172" text-anchor="middle" font-size="13" fill="#6C6157">2.35× 吞吐（同成本）</text>
+  <text x="400" y="98" text-anchor="middle" font-size="15" font-weight="bold" fill="#2E2822">DistServe · OSDI'24</text>
+  <text x="400" y="152" text-anchor="middle" font-size="13" fill="#6C6157">goodput 指标 + 资源联合优化</text>
+  <text x="400" y="172" text-anchor="middle" font-size="13" fill="#6C6157">7.4× 请求率（同 SLO）</text>
+  <text x="620" y="98" text-anchor="middle" font-size="15" font-weight="bold" fill="#2E2822">Sarathi · OSDI'24</text>
+  <text x="620" y="152" text-anchor="middle" font-size="13" fill="#6C6157">chunked prefill 混批竞争路线</text>
+  <text x="620" y="172" text-anchor="middle" font-size="13" fill="#6C6157">2.6–5.6× 服务容量</text>
+  <text x="840" y="98" text-anchor="middle" font-size="15" font-weight="bold" fill="#2E2822">Mooncake · FAST'25</text>
+  <text x="840" y="152" text-anchor="middle" font-size="13" fill="#6C6157">KVCache 为中心的生产架构</text>
+  <text x="840" y="172" text-anchor="middle" font-size="13" fill="#6C6157">真实负载多处理 75% 请求</text>
+
+  <!-- 三个专题 -->
+  <text x="30" y="238" font-size="17" font-weight="bold" fill="#2E2822">三个必须讲清的专题</text>
+  <rect x="30" y="254" width="325" height="150" rx="12" fill="#FFFDF7" stroke="#E0D8C6" stroke-width="2"/>
+  <text x="192" y="288" text-anchor="middle" font-size="16" font-weight="bold" fill="#C0522E">① 成立的前提条件</text>
+  <text x="192" y="318" text-anchor="middle" font-size="13" fill="#2E2822">SLO 形状 · 两池喂饱</text>
+  <text x="192" y="342" text-anchor="middle" font-size="13" fill="#2E2822">网络可隐藏 · 长输入</text>
+  <text x="192" y="366" text-anchor="middle" font-size="13" fill="#2E2822">异构/功耗只是红利</text>
+  <text x="192" y="390" text-anchor="middle" font-size="13" fill="#6C6157">缺一条都可能不如混部</text>
+  <rect x="375" y="254" width="325" height="150" rx="12" fill="#FFFDF7" stroke="#E0D8C6" stroke-width="2"/>
+  <text x="537" y="288" text-anchor="middle" font-size="16" font-weight="bold" fill="#C0522E">② 与混批的争论结论</text>
+  <text x="537" y="318" text-anchor="middle" font-size="13" fill="#2E2822">chunked prefill 是分离的</text>
+  <text x="537" y="342" text-anchor="middle" font-size="13" fill="#2E2822">内部组件而非对手</text>
+  <text x="537" y="366" text-anchor="middle" font-size="13" fill="#2E2822">判据是 SLO 形状</text>
+  <text x="537" y="390" text-anchor="middle" font-size="13" fill="#6C6157">不是规模本身</text>
+  <rect x="720" y="254" width="310" height="150" rx="12" fill="#FFFDF7" stroke="#E0D8C6" stroke-width="2"/>
+  <text x="875" y="288" text-anchor="middle" font-size="16" font-weight="bold" fill="#C0522E">③ goodput 口径</text>
+  <text x="875" y="318" text-anchor="middle" font-size="13" fill="#2E2822">同时满足 TTFT+TPOT SLO</text>
+  <text x="875" y="342" text-anchor="middle" font-size="13" fill="#2E2822">的最大请求率</text>
+  <text x="875" y="366" text-anchor="middle" font-size="13" fill="#2E2822">跨论文比较前必须校准</text>
+  <text x="875" y="390" text-anchor="middle" font-size="13" fill="#6C6157">否则数字不可比</text>
+
+  <rect x="30" y="428" width="1000" height="62" rx="12" fill="#EDE7D9" stroke="#CFC4AC" stroke-width="2"/>
+  <text x="55" y="456" font-size="15" font-weight="bold" fill="#C0522E">还有两篇</text>
+  <text x="180" y="456" font-size="14" fill="#2E2822">TetriInfer：分离 + 两级调度 + 长度预测（资源少用 38%）</text>
+  <text x="180" y="480" font-size="14" fill="#2E2822">Sarathi-Serve：留在同一张卡上的竞争路线，是理解分离代价的镜子</text>
+</svg>

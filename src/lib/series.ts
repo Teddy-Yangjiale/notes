@@ -76,6 +76,18 @@ export const SERIES: Series[] = [
     weight: 4,
   },
   {
+    id: 'ai-infra-survey',
+    title: 'AI Infra 前沿调研 2026',
+    badge: 'INFRA',
+    description:
+      '面向 LLM 系统的十二方向文献综述：推理服务与调度、KV Cache、投机解码、PD 分离、MoE、' +
+      '量化低精度、显存卸载、长上下文、分布式训练、RL 后训练、GPU 算子编译器、Agent 基础设施。' +
+      '每个方向按「问题定义 → 历史脉络 → 2025–2026 前沿 → 开放问题 → 论文速查」展开，' +
+      '并附 PD 分离三部曲、KV 准入决策全链路讲解与顶会论文清单。每篇配可视化图解。',
+    color: 'sky',
+    weight: 6,
+  },
+  {
     id: 'mlsys-failures',
     title: 'MLSys 失败实验复盘',
     badge: 'KILL',

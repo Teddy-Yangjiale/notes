@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1060" height="560" viewBox="0 0 1060 560" font-family="Microsoft YaHei, sans-serif">
+  <defs>
+    <marker id="arr8" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 z" fill="#6C6157"/></marker>
+  </defs>
+  <rect width="1060" height="560" fill="#F6F2E8"/>
+  <text x="30" y="42" font-size="24" font-weight="bold" fill="#2E2822">长上下文与高效注意力：三条技术路线</text>
+  <line x1="30" y1="56" x2="1030" y2="56" stroke="#CFC4AC" stroke-width="2"/>
+
+  <!-- 问题 -->
+  <rect x="30" y="80" width="1000" height="58" rx="12" fill="#EDE7D9" stroke="#CFC4AC" stroke-width="2"/>
+  <text x="55" y="106" font-size="15" font-weight="bold" fill="#C0522E">问题</text>
+  <text x="140" y="106" font-size="15" fill="#2E2822">注意力计算/显存随序列长度平方增长；Agent 时代输入动辄 100K–1M token（代码库、工具输出、长对话）</text>
+  <text x="140" y="130" font-size="14" fill="#6C6157">长上下文推理 = 高效注意力 kernel + 稀疏化 + KV 管理 + 上下文并行 的系统组合拳</text>
+
+  <!-- 三条路线 -->
+  <rect x="30" y="165" width="320" height="240" rx="14" fill="#92B7D1" opacity="0.9"/>
+  <text x="190" y="205" text-anchor="middle" font-size="18" font-weight="bold" fill="#FFFDF7">① Kernel 革命</text>
+  <text x="190" y="240" text-anchor="middle" font-size="14" fill="#FFFDF7">FlashAttention 1/2/3</text>
+  <text x="190" y="266" text-anchor="middle" font-size="14" fill="#FFFDF7">分块 + online softmax</text>
+  <text x="190" y="292" text-anchor="middle" font-size="14" fill="#FFFDF7">显存 O(N²) → O(N)</text>
+  <text x="190" y="330" text-anchor="middle" font-size="14" fill="#FFFDF7">Ring Attention 环状传输</text>
+  <text x="190" y="356" text-anchor="middle" font-size="14" fill="#FFFDF7">上下文并行（CP）原型</text>
+  <text x="190" y="386" text-anchor="middle" font-size="13" fill="#FFFDF7">2022 – 2024</text>
+
+  <rect x="370" y="165" width="320" height="240" rx="14" fill="#A8BE86" opacity="0.9"/>
+  <text x="530" y="205" text-anchor="middle" font-size="18" font-weight="bold" fill="#FFFDF7">② 稀疏注意力</text>
+  <text x="530" y="240" text-anchor="middle" font-size="14" fill="#FFFDF7">滑窗 / 检索式 / 数据驱动</text>
+  <text x="530" y="266" text-anchor="middle" font-size="14" fill="#FFFDF7">H2O · Quest · MInference</text>
+  <text x="530" y="302" text-anchor="middle" font-size="14" fill="#FFFDF7">原生可训练稀疏：</text>
+  <text x="530" y="328" text-anchor="middle" font-size="14" fill="#FFFDF7">NSA · MoBA · DSA</text>
+  <text x="530" y="358" text-anchor="middle" font-size="13" fill="#FFFDF7">推理期技巧 → 架构原生</text>
+  <text x="530" y="386" text-anchor="middle" font-size="13" fill="#FFFDF7">2023 – 2025</text>
+
+  <rect x="710" y="165" width="320" height="240" rx="14" fill="#C98FA0" opacity="0.9"/>
+  <text x="870" y="205" text-anchor="middle" font-size="18" font-weight="bold" fill="#FFFDF7">③ 线性注意力复兴</text>
+  <text x="870" y="240" text-anchor="middle" font-size="14" fill="#FFFDF7">Mamba / SSM → Mamba-2</text>
+  <text x="870" y="266" text-anchor="middle" font-size="14" fill="#FFFDF7">状态对偶理论统一</text>
+  <text x="870" y="302" text-anchor="middle" font-size="14" fill="#FFFDF7">RWKV-6 · Gated DeltaNet</text>
+  <text x="870" y="328" text-anchor="middle" font-size="14" fill="#FFFDF7">Kimi Linear 全面超越</text>
+  <text x="870" y="358" text-anchor="middle" font-size="13" fill="#FFFDF7">KV 问题消失，检索精度有限</text>
+  <text x="870" y="386" text-anchor="middle" font-size="13" fill="#FFFDF7">2024 – 2026 · 混合化共识</text>
+
+  <!-- 前沿 -->
+  <rect x="30" y="430" width="1000" height="100" rx="12" fill="#FFFDF7" stroke="#E0D8C6" stroke-width="2"/>
+  <text x="55" y="462" font-size="16" font-weight="bold" fill="#C0522E">2025–26 前沿</text>
+  <text x="55" y="490" font-size="14" fill="#2E2822">按需召回（recall head 决定何时读全量 KV）· 长上下文稀疏 serving · 动态上下文并行（DCP）· 上下文复用</text>
+  <text x="55" y="516" font-size="14" fill="#6C6157">开放问题：稀疏模式的负载相关性、训练-推理一致性、线性注意力 serving 系统、消费级长上下文系统栈</text>
+</svg>

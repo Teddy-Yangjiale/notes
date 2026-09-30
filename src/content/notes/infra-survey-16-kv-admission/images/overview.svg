@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1060" height="560" viewBox="0 0 1060 560" font-family="Microsoft YaHei, sans-serif">
+  <defs>
+    <marker id="arrG" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 z" fill="#6C6157"/></marker>
+  </defs>
+  <rect width="1060" height="560" fill="#F6F2E8"/>
+  <text x="30" y="42" font-size="24" font-weight="bold" fill="#2E2822">KV 准入决策：命中何时不比重算快？</text>
+  <line x1="30" y1="56" x2="1030" y2="56" stroke="#CFC4AC" stroke-width="2"/>
+
+  <!-- 核心不等式 -->
+  <rect x="30" y="80" width="1000" height="86" rx="12" fill="#EDE7D9" stroke="#CFC4AC" stroke-width="2"/>
+  <text x="530" y="115" text-anchor="middle" font-size="19" font-weight="bold" fill="#C0522E">命中更快 ⟺ T_load（可复用前缀）&lt; T_recompute（可复用前缀）</text>
+  <text x="530" y="148" text-anchor="middle" font-size="14" fill="#2E2822">一次「命中」没省掉计算，只是把浮点运算换成了查表+存储读取+CPU 中转+H2D 拷贝+同步</text>
+
+  <!-- 三个翻转条件 -->
+  <text x="30" y="212" font-size="17" font-weight="bold" fill="#2E2822">不等式翻转的三种情况</text>
+  <rect x="30" y="228" width="325" height="110" rx="12" fill="#92B7D1" opacity="0.9"/>
+  <text x="192" y="262" text-anchor="middle" font-size="15" font-weight="bold" fill="#FFFDF7">① 可复用前缀太短</text>
+  <text x="192" y="292" text-anchor="middle" font-size="13" fill="#FFFDF7">加载路径的固定开销</text>
+  <text x="192" y="316" text-anchor="middle" font-size="13" fill="#FFFDF7">摊不掉</text>
+  <rect x="375" y="228" width="325" height="110" rx="12" fill="#A8BE86" opacity="0.9"/>
+  <text x="537" y="262" text-anchor="middle" font-size="15" font-weight="bold" fill="#FFFDF7">② 存储带宽不够</text>
+  <text x="537" y="292" text-anchor="middle" font-size="13" fill="#FFFDF7">搬运速率低于 prefill</text>
+  <text x="537" y="316" text-anchor="middle" font-size="13" fill="#FFFDF7">生产 KV 的速率</text>
+  <rect x="720" y="228" width="310" height="110" rx="12" fill="#DFA07C" opacity="0.9"/>
+  <text x="875" y="262" text-anchor="middle" font-size="15" font-weight="bold" fill="#FFFDF7">③ 并发加载太多</text>
+  <text x="875" y="292" text-anchor="middle" font-size="13" fill="#FFFDF7">带宽被共享，每请求</text>
+  <text x="875" y="316" text-anchor="middle" font-size="13" fill="#FFFDF7">有效带宽跌破门槛</text>
+
+  <!-- 拥塞视角 -->
+  <rect x="30" y="362" width="530" height="100" rx="12" fill="#FFFDF7" stroke="#E0D8C6" stroke-width="2"/>
+  <text x="55" y="394" font-size="16" font-weight="bold" fill="#C0522E">这是拥塞问题，不是阈值问题</text>
+  <text x="55" y="422" font-size="14" fill="#2E2822">N_max = BW / Φkv：并发加载超过上界后</text>
+  <text x="55" y="446" font-size="14" fill="#2E2822">边际缓存命中的收益为负，且随上下文变长被放大</text>
+
+  <!-- 策略谱系 -->
+  <rect x="580" y="362" width="450" height="100" rx="12" fill="#FFFDF7" stroke="#E0D8C6" stroke-width="2"/>
+  <text x="605" y="394" font-size="16" font-weight="bold" fill="#C0522E">策略设计空间 L0 → L6</text>
+  <text x="605" y="422" font-size="14" fill="#2E2822">命中就加载 → 固定阈值 → 自适应 → 并发感知</text>
+  <text x="605" y="446" font-size="14" fill="#2E2822">→ 外部性感知 → +预取 → +保留/驱逐联合</text>
+
+  <!-- 三个论断 -->
+  <rect x="30" y="482" width="1000" height="50" rx="12" fill="#EDE7D9" stroke="#CFC4AC" stroke-width="2"/>
+  <text x="55" y="512" font-size="14" fill="#2E2822">核心论断：并发上界存在（H1）· 逐请求独立阈值必然次优（H2）· 参数 (O, BW, Φkv) 可在线自标定（H3）</text>
+</svg>

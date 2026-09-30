@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1060" height="560" viewBox="0 0 1060 560" font-family="Microsoft YaHei, sans-serif">
+  <defs>
+    <marker id="arr6" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 z" fill="#6C6157"/></marker>
+  </defs>
+  <rect width="1060" height="560" fill="#F6F2E8"/>
+  <text x="30" y="42" font-size="24" font-weight="bold" fill="#2E2822">量化与低精度：位宽 ↔ 精度 ↔ 真实加速</text>
+  <line x1="30" y1="56" x2="1030" y2="56" stroke="#CFC4AC" stroke-width="2"/>
+
+  <!-- 三个量化对象 -->
+  <text x="30" y="95" font-size="17" font-weight="bold" fill="#2E2822">三个压缩对象</text>
+  <rect x="30" y="110" width="320" height="86" rx="12" fill="#92B7D1" opacity="0.9"/>
+  <text x="190" y="145" text-anchor="middle" font-size="18" font-weight="bold" fill="#FFFDF7">权重 W</text>
+  <text x="190" y="175" text-anchor="middle" font-size="14" fill="#FFFDF7">W4A16 部署标准</text>
+  <rect x="370" y="110" width="320" height="86" rx="12" fill="#A8BE86" opacity="0.9"/>
+  <text x="530" y="145" text-anchor="middle" font-size="18" font-weight="bold" fill="#FFFDF7">激活 A</text>
+  <text x="530" y="175" text-anchor="middle" font-size="14" fill="#FFFDF7">W8A8 平滑量化</text>
+  <rect x="710" y="110" width="320" height="86" rx="12" fill="#E9C97E" opacity="0.95"/>
+  <text x="870" y="145" text-anchor="middle" font-size="18" font-weight="bold" fill="#2E2822">KV Cache</text>
+  <text x="870" y="175" text-anchor="middle" font-size="14" fill="#2E2822">KIVI / KV4 长上下文标配</text>
+
+  <!-- 位宽演进 -->
+  <text x="30" y="250" font-size="17" font-weight="bold" fill="#2E2822">位宽压进路线</text>
+  <line x1="80" y1="330" x2="1000" y2="330" stroke="#9A9084" stroke-width="2" marker-end="url(#arr6)"/>
+  <circle cx="180" cy="330" r="8" fill="#E9C97E"/>
+  <circle cx="420" cy="330" r="8" fill="#A8BE86"/>
+  <circle cx="660" cy="330" r="8" fill="#92B7D1"/>
+  <circle cx="900" cy="330" r="8" fill="#C98FA0"/>
+  <text x="180" y="306" text-anchor="middle" font-size="14" font-weight="bold" fill="#2E2822">2022–23 8-bit</text>
+  <text x="180" y="360" text-anchor="middle" font-size="13" fill="#6C6157">LLM.int8() 离群分解</text>
+  <text x="180" y="380" text-anchor="middle" font-size="13" fill="#6C6157">GPTQ · SmoothQuant</text>
+  <text x="420" y="306" text-anchor="middle" font-size="14" font-weight="bold" fill="#2E2822">2023–24 4-bit</text>
+  <text x="420" y="360" text-anchor="middle" font-size="13" fill="#6C6157">AWQ 激活感知保护</text>
+  <text x="420" y="380" text-anchor="middle" font-size="13" fill="#6C6157">FP8 大规模训练</text>
+  <text x="660" y="306" text-anchor="middle" font-size="14" font-weight="bold" fill="#2E2822">2024–26 2-bit</text>
+  <text x="660" y="360" text-anchor="middle" font-size="13" fill="#6C6157">QuIP# / QTIP 格码本</text>
+  <text x="660" y="380" text-anchor="middle" font-size="13" fill="#6C6157">BitNet 1.58-bit</text>
+  <text x="900" y="306" text-anchor="middle" font-size="14" font-weight="bold" fill="#2E2822">2026 硬件协同</text>
+  <text x="900" y="360" text-anchor="middle" font-size="13" fill="#6C6157">NVFP4 / MXFP4 微缩放</text>
+  <text x="900" y="380" text-anchor="middle" font-size="13" fill="#6C6157">每 16 元素 FP8 scale</text>
+
+  <!-- 核心矛盾 -->
+  <rect x="30" y="415" width="520" height="115" rx="12" fill="#FFFDF7" stroke="#E0D8C6" stroke-width="2"/>
+  <text x="55" y="447" font-size="16" font-weight="bold" fill="#C0522E">核心矛盾</text>
+  <text x="55" y="477" font-size="14" fill="#2E2822">位宽 vs 精度损失；且 kernel 能否把理论压缩</text>
+  <text x="55" y="501" font-size="14" fill="#2E2822">变成真实加速（dequantize 开销、非对齐位宽访存）</text>
+
+  <rect x="580" y="415" width="450" height="115" rx="12" fill="#EDE7D9" stroke="#CFC4AC" stroke-width="2"/>
+  <text x="605" y="447" font-size="16" font-weight="bold" fill="#C0522E">2026 质量测量学</text>
+  <text x="605" y="477" font-size="14" fill="#2E2822">量化损伤是模型相关的：同一量化器对不同</text>
+  <text x="605" y="501" font-size="14" fill="#2E2822">模型族损伤差 2.5×，不能只看单一 benchmark</text>
+</svg>

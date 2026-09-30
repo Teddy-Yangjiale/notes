@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1060" height="520" viewBox="0 0 1060 520" font-family="Microsoft YaHei, sans-serif">
+  <defs>
+    <marker id="arrF" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 z" fill="#6C6157"/></marker>
+  </defs>
+  <rect width="1060" height="520" fill="#F6F2E8"/>
+  <text x="30" y="42" font-size="24" font-weight="bold" fill="#2E2822">2025–2026 前沿：三个新轴</text>
+  <line x1="30" y1="56" x2="1030" y2="56" stroke="#CFC4AC" stroke-width="2"/>
+
+  <text x="30" y="96" font-size="16" fill="#6C6157">2024 年争「该不该分离」→ 2025 年争「怎么做成生产系统」→ 2026 年转向三个新轴：</text>
+
+  <!-- 轴1 -->
+  <rect x="30" y="120" width="325" height="250" rx="14" fill="#92B7D1" opacity="0.9"/>
+  <text x="192" y="160" text-anchor="middle" font-size="18" font-weight="bold" fill="#FFFDF7">轴一 · 分离粒度</text>
+  <text x="192" y="200" text-anchor="middle" font-size="14" fill="#FFFDF7">请求级 P/D</text>
+  <text x="192" y="224" text-anchor="middle" font-size="13" fill="#FFFDF7">↓</text>
+  <text x="192" y="250" text-anchor="middle" font-size="14" fill="#FFFDF7">请求内分段（micro-request）</text>
+  <text x="192" y="274" text-anchor="middle" font-size="13" fill="#FFFDF7">↓</text>
+  <text x="192" y="300" text-anchor="middle" font-size="14" fill="#FFFDF7">Attention-FFN 分离（AFD）</text>
+  <text x="192" y="324" text-anchor="middle" font-size="13" fill="#FFFDF7">↓</text>
+  <text x="192" y="350" text-anchor="middle" font-size="14" fill="#FFFDF7">算子 DAG 级（OpWeave/DOPS）</text>
+
+  <!-- 轴2 -->
+  <rect x="375" y="120" width="325" height="250" rx="14" fill="#A8BE86" opacity="0.9"/>
+  <text x="537" y="160" text-anchor="middle" font-size="18" font-weight="bold" fill="#FFFDF7">轴二 · 分离维度</text>
+  <text x="537" y="200" text-anchor="middle" font-size="14" fill="#FFFDF7">不止分「阶段」，还分：</text>
+  <text x="537" y="236" text-anchor="middle" font-size="15" fill="#FFFDF7">功率（分相功率封顶）</text>
+  <text x="537" y="268" text-anchor="middle" font-size="15" fill="#FFFDF7">量化格式（分离式量化）</text>
+  <text x="537" y="300" text-anchor="middle" font-size="15" fill="#FFFDF7">权重存放位置</text>
+  <text x="537" y="340" text-anchor="middle" font-size="13" fill="#FFFDF7">数据中心功耗成为第一约束</text>
+
+  <!-- 轴3 -->
+  <rect x="720" y="120" width="310" height="250" rx="14" fill="#C98FA0" opacity="0.9"/>
+  <text x="875" y="160" text-anchor="middle" font-size="18" font-weight="bold" fill="#FFFDF7">轴三 · 代价刻画</text>
+  <text x="875" y="200" text-anchor="middle" font-size="14" fill="#FFFDF7">从「分离有收益」</text>
+  <text x="875" y="228" text-anchor="middle" font-size="14" fill="#FFFDF7">变成</text>
+  <text x="875" y="256" text-anchor="middle" font-size="14" fill="#FFFDF7">「分离在哪里</text>
+  <text x="875" y="282" text-anchor="middle" font-size="14" fill="#FFFDF7">开始不划算」</text>
+  <text x="875" y="322" text-anchor="middle" font-size="13" fill="#FFFDF7">成本模型 / 设计空间探索</text>
+  <text x="875" y="346" text-anchor="middle" font-size="13" fill="#FFFDF7">传输 vs 重算交叉点</text>
+
+  <!-- 低带宽结论 -->
+  <rect x="30" y="395" width="1000" height="95" rx="12" fill="#EDE7D9" stroke="#CFC4AC" stroke-width="2"/>
+  <text x="55" y="425" font-size="16" font-weight="bold" fill="#C0522E">低带宽场景的明确结论</text>
+  <text x="55" y="453" font-size="14" fill="#2E2822">没有「面向 1–10 GbE / 纯 TCP 的 PD 分离」专门工作 —— 大概率是「算下来不划算所以没人做」</text>
+  <text x="55" y="478" font-size="14" fill="#2E2822">替代路线：GPU 内主动分离（Nexus）/ SLO-aware 混合复用（Tropical）/ 换混合注意力架构</text>
+</svg>

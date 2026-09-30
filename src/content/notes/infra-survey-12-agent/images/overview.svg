@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1060" height="560" viewBox="0 0 1060 560" font-family="Microsoft YaHei, sans-serif">
+  <defs>
+    <marker id="arrC" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 z" fill="#6C6157"/></marker>
+  </defs>
+  <rect width="1060" height="560" fill="#F6F2E8"/>
+  <text x="30" y="42" font-size="24" font-weight="bold" fill="#2E2822">Agent 基础设施：有状态、有中断的负载</text>
+  <line x1="30" y1="56" x2="1030" y2="56" stroke="#CFC4AC" stroke-width="2"/>
+
+  <!-- 与 chat 的差异 -->
+  <rect x="30" y="80" width="1000" height="66" rx="12" fill="#EDE7D9" stroke="#CFC4AC" stroke-width="2"/>
+  <text x="55" y="108" font-size="15" font-weight="bold" fill="#C0522E">与 chat 的本质差异</text>
+  <text x="250" y="108" font-size="15" fill="#2E2822">请求有状态 · 有中断（等工具）· KV 生命周期横跨多次调用 · 环境（沙箱/文件系统）成为一等资源</text>
+  <text x="250" y="132" font-size="14" fill="#6C6157">负载 = 多轮 LLM 推理 + 工具调用（代码执行/搜索/API）+ 长期记忆 + 多 Agent 协作</text>
+
+  <!-- 请求生命周期 -->
+  <text x="30" y="192" font-size="17" font-weight="bold" fill="#2E2822">一次 Agent 请求的生命周期</text>
+  <rect x="30" y="208" width="185" height="88" rx="10" fill="#92B7D1" opacity="0.9"/>
+  <text x="122" y="245" text-anchor="middle" font-size="15" font-weight="bold" fill="#FFFDF7">LLM 推理</text>
+  <text x="122" y="272" text-anchor="middle" font-size="12" fill="#FFFDF7">流式生成 token</text>
+  <rect x="245" y="208" width="185" height="88" rx="10" fill="#E9C97E" opacity="0.95"/>
+  <text x="337" y="245" text-anchor="middle" font-size="15" font-weight="bold" fill="#2E2822">工具调用</text>
+  <text x="337" y="272" text-anchor="middle" font-size="12" fill="#2E2822">代码/搜索/API</text>
+  <rect x="460" y="208" width="185" height="88" rx="10" fill="#A8BE86" opacity="0.9"/>
+  <text x="552" y="245" text-anchor="middle" font-size="15" font-weight="bold" fill="#FFFDF7">沙箱执行</text>
+  <text x="552" y="272" text-anchor="middle" font-size="12" fill="#FFFDF7">预热池 · 快照恢复</text>
+  <rect x="675" y="208" width="185" height="88" rx="10" fill="#C98FA0" opacity="0.9"/>
+  <text x="767" y="245" text-anchor="middle" font-size="15" font-weight="bold" fill="#FFFDF7">KV 驻留决策</text>
+  <text x="767" y="272" text-anchor="middle" font-size="12" fill="#FFFDF7">留还是驱逐？</text>
+  <rect x="890" y="208" width="140" height="88" rx="10" fill="#DFA07C" opacity="0.9"/>
+  <text x="960" y="245" text-anchor="middle" font-size="15" font-weight="bold" fill="#FFFDF7">结果回填</text>
+  <text x="960" y="272" text-anchor="middle" font-size="12" fill="#FFFDF7">继续推理</text>
+  <line x1="215" y1="252" x2="245" y2="252" stroke="#6C6157" stroke-width="2" marker-end="url(#arrC)"/>
+  <line x1="430" y1="252" x2="460" y2="252" stroke="#6C6157" stroke-width="2" marker-end="url(#arrC)"/>
+  <line x1="645" y1="252" x2="675" y2="252" stroke="#6C6157" stroke-width="2" marker-end="url(#arrC)"/>
+  <line x1="860" y1="252" x2="890" y2="252" stroke="#6C6157" stroke-width="2" marker-end="url(#arrC)"/>
+  <path d="M 960 296 C 960 340, 122 340, 122 296" fill="none" stroke="#C0522E" stroke-width="2" marker-end="url(#arrC)"/>
+  <text x="540" y="336" text-anchor="middle" font-size="13" fill="#C0522E">多轮循环 · KV 与记忆跨轮持续存在</text>
+
+  <!-- 2026 爆发区 -->
+  <text x="30" y="392" font-size="17" font-weight="bold" fill="#2E2822">2026 最密集爆发区</text>
+  <rect x="30" y="408" width="325" height="122" rx="12" fill="#FFFDF7" stroke="#E0D8C6" stroke-width="2"/>
+  <text x="192" y="438" text-anchor="middle" font-size="15" font-weight="bold" fill="#C0522E">工具与沙箱调度</text>
+  <text x="192" y="466" text-anchor="middle" font-size="13" fill="#2E2822">SpecBox 投机式预热沙箱</text>
+  <text x="192" y="490" text-anchor="middle" font-size="13" fill="#2E2822">工具上报进度指导 KV 驻留</text>
+  <text x="192" y="514" text-anchor="middle" font-size="13" fill="#2E2822">P99 延迟降 2.9×</text>
+  <rect x="375" y="408" width="325" height="122" rx="12" fill="#FFFDF7" stroke="#E0D8C6" stroke-width="2"/>
+  <text x="537" y="438" text-anchor="middle" font-size="15" font-weight="bold" fill="#C0522E">负载刻画与调度</text>
+  <text x="537" y="466" text-anchor="middle" font-size="13" fill="#2E2822">真实 agent 生态资源动态</text>
+  <text x="537" y="490" text-anchor="middle" font-size="13" fill="#2E2822">统一内存终端 agent 调度</text>
+  <text x="537" y="514" text-anchor="middle" font-size="13" fill="#2E2822">异构工具设备放置</text>
+  <rect x="720" y="408" width="310" height="122" rx="12" fill="#FFFDF7" stroke="#E0D8C6" stroke-width="2"/>
+  <text x="875" y="438" text-anchor="middle" font-size="15" font-weight="bold" fill="#C0522E">可靠性与记忆</text>
+  <text x="875" y="466" text-anchor="middle" font-size="13" fill="#2E2822">cut-point 回放变 CI 回归</text>
+  <text x="875" y="490" text-anchor="middle" font-size="13" fill="#2E2822">可扩展 agent 记忆模块</text>
+  <text x="875" y="514" text-anchor="middle" font-size="13" fill="#2E2822">多 Agent 拓扑优化</text>
+</svg>

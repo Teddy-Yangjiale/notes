@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1060" height="480" viewBox="0 0 1060 480" font-family="Microsoft YaHei, sans-serif">
+  <rect width="1060" height="480" fill="#F6F2E8"/>
+  <text x="30" y="42" font-size="24" font-weight="bold" fill="#2E2822">顶会论文清单：四大会议 × 主题分布</text>
+  <line x1="30" y1="56" x2="1030" y2="56" stroke="#CFC4AC" stroke-width="2"/>
+
+  <!-- 四个会议 -->
+  <rect x="30" y="85" width="240" height="120" rx="12" fill="#92B7D1" opacity="0.9"/>
+  <text x="150" y="130" text-anchor="middle" font-size="20" font-weight="bold" fill="#FFFDF7">MLSys 2026</text>
+  <text x="150" y="165" text-anchor="middle" font-size="14" fill="#FFFDF7">约 150 篇</text>
+  <text x="150" y="188" text-anchor="middle" font-size="13" fill="#FFFDF7">AI-Infra 第一主场</text>
+  <rect x="290" y="85" width="240" height="120" rx="12" fill="#A8BE86" opacity="0.9"/>
+  <text x="410" y="130" text-anchor="middle" font-size="20" font-weight="bold" fill="#FFFDF7">OSDI 2025</text>
+  <text x="410" y="165" text-anchor="middle" font-size="14" fill="#FFFDF7">53 篇</text>
+  <text x="410" y="188" text-anchor="middle" font-size="13" fill="#FFFDF7">AI-Infra 相关 25+</text>
+  <rect x="550" y="85" width="240" height="120" rx="12" fill="#E9C97E" opacity="0.95"/>
+  <text x="670" y="130" text-anchor="middle" font-size="20" font-weight="bold" fill="#2E2822">SOSP 2025</text>
+  <text x="670" y="165" text-anchor="middle" font-size="14" fill="#2E2822">约 50 篇</text>
+  <text x="670" y="188" text-anchor="middle" font-size="13" fill="#2E2822">训练/正确性精选</text>
+  <rect x="810" y="85" width="220" height="120" rx="12" fill="#C98FA0" opacity="0.9"/>
+  <text x="920" y="130" text-anchor="middle" font-size="20" font-weight="bold" fill="#FFFDF7">NSDI 2026</text>
+  <text x="920" y="165" text-anchor="middle" font-size="14" fill="#FFFDF7">Spring 节选</text>
+  <text x="920" y="188" text-anchor="middle" font-size="13" fill="#FFFDF7">网络系统视角</text>
+
+  <!-- 主题分组 -->
+  <text x="30" y="258" font-size="17" font-weight="bold" fill="#2E2822">MLSys 2026 主题分组（按论文数热度）</text>
+  <rect x="30" y="274" width="145" height="56" rx="8" fill="#DFA07C"/>
+  <text x="102" y="308" text-anchor="middle" font-size="14" font-weight="bold" fill="#FFFDF7">Serving/KV</text>
+  <rect x="185" y="274" width="130" height="56" rx="8" fill="#E9C97E"/>
+  <text x="250" y="308" text-anchor="middle" font-size="14" font-weight="bold" fill="#2E2822">投机解码</text>
+  <rect x="325" y="274" width="115" height="56" rx="8" fill="#A8BE86"/>
+  <text x="382" y="308" text-anchor="middle" font-size="14" font-weight="bold" fill="#FFFDF7">MoE</text>
+  <rect x="450" y="274" width="145" height="56" rx="8" fill="#92B7D1"/>
+  <text x="522" y="308" text-anchor="middle" font-size="14" font-weight="bold" fill="#FFFDF7">量化/低精度</text>
+  <rect x="605" y="274" width="145" height="56" rx="8" fill="#C98FA0"/>
+  <text x="677" y="308" text-anchor="middle" font-size="14" font-weight="bold" fill="#FFFDF7">训练/RL</text>
+  <rect x="760" y="274" width="160" height="56" rx="8" fill="#AFA3CB"/>
+  <text x="840" y="308" text-anchor="middle" font-size="14" font-weight="bold" fill="#FFFDF7">编译器/Kernel</text>
+  <rect x="930" y="274" width="100" height="56" rx="8" fill="#DFA07C"/>
+  <text x="980" y="308" text-anchor="middle" font-size="14" font-weight="bold" fill="#FFFDF7">Agent</text>
+
+  <!-- 用法 -->
+  <rect x="30" y="355" width="1000" height="95" rx="12" fill="#FFFDF7" stroke="#E0D8C6" stroke-width="2"/>
+  <text x="55" y="387" font-size="16" font-weight="bold" fill="#C0522E">怎么用这张表</text>
+  <text x="55" y="415" font-size="14" fill="#2E2822">· 先按主题定位自己关心的方向（对应本系列 01–12 各篇的「论文速查」）</text>
+  <text x="55" y="440" font-size="14" fill="#2E2822">· arXiv 2026-07~09 精华补录给出 12 方向 × 20 篇中最值得精读的 30 篇</text>
+</svg>

@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1060" height="560" viewBox="0 0 1060 560" font-family="Microsoft YaHei, sans-serif">
+  <defs>
+    <marker id="arrD" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 z" fill="#6C6157"/></marker>
+  </defs>
+  <rect width="1060" height="560" fill="#F6F2E8"/>
+  <text x="30" y="42" font-size="24" font-weight="bold" fill="#2E2822">PD 分离全景：一个门槛、四个条件、一条时间线</text>
+  <line x1="30" y1="56" x2="1030" y2="56" stroke="#CFC4AC" stroke-width="2"/>
+
+  <!-- 双条件 -->
+  <rect x="30" y="80" width="1000" height="64" rx="12" fill="#EDE7D9" stroke="#CFC4AC" stroke-width="2"/>
+  <text x="55" y="108" font-size="16" font-weight="bold" fill="#C0522E">核心论断</text>
+  <text x="190" y="108" font-size="15" fill="#2E2822">PD 分离不是「总是更快」，而是「带宽门槛 + SLO 形状」双条件设计</text>
+  <text x="190" y="132" font-size="14" fill="#6C6157">Φkv（KV 产出速率）决定带宽门槛；TTFT/TPOT 松紧决定 SLO 形状</text>
+
+  <!-- 四条件 -->
+  <text x="30" y="188" font-size="17" font-weight="bold" fill="#2E2822">成立的四个条件（缺一条都可能不如混部）</text>
+  <rect x="30" y="204" width="240" height="84" rx="10" fill="#92B7D1" opacity="0.9"/>
+  <text x="150" y="238" text-anchor="middle" font-size="15" font-weight="bold" fill="#FFFDF7">TPOT 紧 TTFT 松</text>
+  <text x="150" y="266" text-anchor="middle" font-size="12" fill="#FFFDF7">SLO 形状匹配</text>
+  <rect x="290" y="204" width="240" height="84" rx="10" fill="#A8BE86" opacity="0.9"/>
+  <text x="410" y="238" text-anchor="middle" font-size="15" font-weight="bold" fill="#FFFDF7">请求率喂饱两池</text>
+  <text x="410" y="266" text-anchor="middle" font-size="12" fill="#FFFDF7">规模摊薄固定成本</text>
+  <rect x="550" y="204" width="240" height="84" rx="10" fill="#E9C97E" opacity="0.95"/>
+  <text x="670" y="238" text-anchor="middle" font-size="15" font-weight="bold" fill="#2E2822">KV 传输被隐藏</text>
+  <text x="670" y="266" text-anchor="middle" font-size="12" fill="#2E2822">带宽 ≥ Φkv</text>
+  <rect x="810" y="204" width="220" height="84" rx="10" fill="#DFA07C" opacity="0.9"/>
+  <text x="920" y="238" text-anchor="middle" font-size="15" font-weight="bold" fill="#FFFDF7">输入远长于输出</text>
+  <text x="920" y="266" text-anchor="middle" font-size="12" fill="#FFFDF7">传输占比可控</text>
+
+  <!-- 时间线 -->
+  <text x="30" y="336" font-size="17" font-weight="bold" fill="#2E2822">发展时间线</text>
+  <line x1="70" y1="405" x2="1010" y2="405" stroke="#9A9084" stroke-width="2" marker-end="url(#arrD)"/>
+  <circle cx="150" cy="405" r="8" fill="#E9C97E"/>
+  <circle cx="380" cy="405" r="8" fill="#A8BE86"/>
+  <circle cx="610" cy="405" r="8" fill="#92B7D1"/>
+  <circle cx="840" cy="405" r="8" fill="#C98FA0"/>
+  <text x="150" y="382" text-anchor="middle" font-size="14" font-weight="bold" fill="#2E2822">2022–23 前史</text>
+  <text x="150" y="432" text-anchor="middle" font-size="12" fill="#6C6157">Orca 连续批处理</text>
+  <text x="150" y="450" text-anchor="middle" font-size="12" fill="#6C6157">两阶段 roofline 相反证据</text>
+  <text x="380" y="382" text-anchor="middle" font-size="14" font-weight="bold" fill="#2E2822">2024 三方奠基</text>
+  <text x="380" y="432" text-anchor="middle" font-size="12" fill="#6C6157">Splitwise / DistServe</text>
+  <text x="380" y="450" text-anchor="middle" font-size="12" fill="#6C6157">Sarathi 混批竞争路线</text>
+  <text x="610" y="382" text-anchor="middle" font-size="14" font-weight="bold" fill="#2E2822">2025 生产化</text>
+  <text x="610" y="432" text-anchor="middle" font-size="12" fill="#6C6157">Mooncake FAST 最佳论文</text>
+  <text x="610" y="450" text-anchor="middle" font-size="12" fill="#6C6157">Dynamo / llm-d / AIBrix</text>
+  <text x="840" y="382" text-anchor="middle" font-size="14" font-weight="bold" fill="#2E2822">2026 三大新轴</text>
+  <text x="840" y="432" text-anchor="middle" font-size="12" fill="#6C6157">粒度：请求级→算子级</text>
+  <text x="840" y="450" text-anchor="middle" font-size="12" fill="#6C6157">维度：功率/量化 · 代价刻画</text>
+
+  <!-- 交叉点 -->
+  <rect x="30" y="475" width="1000" height="56" rx="12" fill="#FFFDF7" stroke="#E0D8C6" stroke-width="2"/>
+  <text x="55" y="500" font-size="15" font-weight="bold" fill="#C0522E">传输 vs 重算交叉点</text>
+  <text x="280" y="500" font-size="14" fill="#2E2822">交叉点之下，「重算」是正确的工程答案；KV 复用次数 R 可把等效交叉点再降 R 倍</text>
+  <text x="280" y="522" font-size="13" fill="#6C6157">混合注意力（Φkv 降 4–13×）把 PD 分离可用的网络从 RDMA 级拉到普通以太网级</text>
+</svg>
