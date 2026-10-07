@@ -1,0 +1,824 @@
+{
+  "version": 1,
+  "date": "2026-10-07",
+  "series": "vision-foundations",
+  "frontierSeries": "vision-frontiers",
+  "reference": {
+    "series": "sta5007",
+    "criterion": "概念逐项解释、公式逐步推导、维度核对、图中元素解释、具体手算、练习详解；根据知识范围决定篇幅。"
+  },
+  "chapters": [
+    {
+      "order": 1,
+      "group": "A｜总览与基础",
+      "title": "视觉大模型知识地图",
+      "scope": "区分视觉基础模型、视觉语言模型（VLM/MLLM）、视觉生成模型、空间模型和视觉语言动作模型（VLA）；建立任务、表示、训练目标、数据与评估的对应关系。",
+      "goal": "建立从像素到语义、从语义到生成与行动的完整阅读路线。",
+      "status": "written",
+      "slug": "vision-01-map"
+    },
+    {
+      "order": 2,
+      "group": "A｜总览与基础",
+      "title": "线性代数、微积分与张量",
+      "scope": "向量与矩阵、范数、特征值/SVD、梯度/Jacobian、链式法则、张量索引与广播；用 patch embedding、attention 与投影头贯穿讲解。",
+      "goal": "逐步推导关键公式，写清每个符号和张量维度。",
+      "status": "written",
+      "slug": "vision-02-math"
+    },
+    {
+      "order": 3,
+      "group": "A｜总览与基础",
+      "title": "概率、信息论与统计学习",
+      "scope": "最大似然、MAP、交叉熵、KL、互信息、能量函数、偏差与方差；说明对比学习、生成建模和不确定性如何共用这些基础。",
+      "goal": "能解释损失函数为什么这样设计，以及训练目标与真实任务之间的差距。",
+      "status": "written",
+      "slug": "vision-03-probability"
+    },
+    {
+      "order": 4,
+      "group": "A｜总览与基础",
+      "title": "图像、信号与几何先修",
+      "scope": "像素、色彩空间、采样与混叠、卷积与傅里叶、图像金字塔、坐标变换；简述成像模型并衔接站内相机标定笔记。",
+      "goal": "理解预处理、分辨率和坐标系统如何改变模型看到的信息。",
+      "status": "written",
+      "slug": "vision-04-images"
+    },
+    {
+      "order": 5,
+      "group": "A｜总览与基础",
+      "title": "深度学习训练与实验基础",
+      "scope": "反向传播、初始化、归一化、优化器、学习率、增强、迁移学习；训练/验证/测试划分、数据泄漏、消融和统计波动。",
+      "goal": "能建立可信基线，并区分过拟合、优化失败和数据问题。",
+      "status": "written",
+      "slug": "vision-05-training"
+    },
+    {
+      "order": 6,
+      "group": "B｜从经典视觉到 CNN",
+      "title": "手工特征、LeNet 与 AlexNet",
+      "scope": "SIFT/HOG、局部特征与词袋；从手工设计到可学习特征；精读 LeNet/AlexNet 的卷积、池化、非线性与大数据训练。",
+      "goal": "理解深度视觉兴起的原因及局部性、平移等变性的作用。",
+      "status": "written",
+      "slug": "vision-06-classical-cnn"
+    },
+    {
+      "order": 7,
+      "group": "B｜从经典视觉到 CNN",
+      "title": "VGG 与 Inception",
+      "scope": "精读小卷积堆叠、多分支结构、1×1 卷积与瓶颈；对比参数量、感受野、深度和计算开销。",
+      "goal": "解释架构变化如何改变表示能力和资源成本。",
+      "status": "written",
+      "slug": "vision-07-vgg-inception"
+    },
+    {
+      "order": 8,
+      "group": "B｜从经典视觉到 CNN",
+      "title": "ResNet 与 DenseNet",
+      "scope": "精读残差学习、梯度传播、恒等映射、预激活与密集连接；区分网络退化、梯度消失和过拟合。",
+      "goal": "推导残差路径，并解释后续 Transformer 为什么也依赖残差结构。",
+      "status": "written",
+      "slug": "vision-08-resnet-densenet"
+    },
+    {
+      "order": 9,
+      "group": "B｜从经典视觉到 CNN",
+      "title": "高效 CNN 与现代卷积",
+      "scope": "MobileNet、EfficientNet、ConvNeXt；深度可分离卷积、复合缩放和现代训练配方；比较 CNN 与 ViT 的归纳偏置。",
+      "goal": "理解架构、训练配方、预训练数据和实际硬件速度的不同贡献。",
+      "status": "written",
+      "slug": "vision-09-efficient-cnn"
+    },
+    {
+      "order": 10,
+      "group": "B｜从经典视觉到 CNN",
+      "title": "视觉任务与结构化输出",
+      "scope": "分类、检索、检测、分割、关键点/姿态、跟踪、光流与深度；结合 HRNet、RAFT 等代表方法说明不同输出空间。",
+      "goal": "知道为何一个分类表征不能直接替代所有视觉任务。",
+      "status": "written",
+      "slug": "vision-10-structured-tasks"
+    },
+    {
+      "order": 11,
+      "group": "C｜视觉 Transformer",
+      "title": "Attention 与 Transformer 原理",
+      "scope": "精读 Attention Is All You Need；Q/K/V、缩放点积、自注意力与交叉注意力、残差、归一化、MLP 和 mask。",
+      "goal": "用数值例子和完整维度链路解释注意力，并核算复杂度。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 12,
+      "group": "C｜视觉 Transformer",
+      "title": "ViT：图像变成 token",
+      "scope": "精读 An Image Is Worth 16×16 Words；patchify、位置编码、CLS、预训练与迁移；分析数据规模与归纳偏置。",
+      "goal": "理解 ViT 的核心假设、输入组织和为何需要良好的预训练。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 13,
+      "group": "C｜视觉 Transformer",
+      "title": "DeiT：数据效率与蒸馏",
+      "scope": "精读蒸馏 token、教师监督与训练增强；比较架构改动和训练配方的贡献。",
+      "goal": "区分知识蒸馏、数据增强与模型扩展的作用。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 14,
+      "group": "C｜视觉 Transformer",
+      "title": "Swin、PVT 与多尺度结构",
+      "scope": "精读窗口注意力、移位窗口、层级表示与金字塔；说明它们如何服务检测、分割和高分辨率输入。",
+      "goal": "能比较全局注意力与局部层级结构的精度及计算权衡。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 15,
+      "group": "C｜视觉 Transformer",
+      "title": "视觉 token 与位置表示",
+      "scope": "绝对/相对位置编码、2D/3D RoPE、插值、动态尺寸、NaViT 式打包与 token 合并；区分空间位置与时间位置。",
+      "goal": "能追踪分辨率改变后的 token 数、位置坐标和注意力代价。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 16,
+      "group": "D｜自监督与视觉基础模型",
+      "title": "对比学习：CPC、MoCo、SimCLR",
+      "scope": "精读 InfoNCE、正负样本、温度、动量编码器、队列和大 batch；讨论增强与假负样本。",
+      "goal": "推导损失及梯度直觉，并解释表征学习的监督来源。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 17,
+      "group": "D｜自监督与视觉基础模型",
+      "title": "无显式负样本学习",
+      "scope": "BYOL、SimSiam、Barlow Twins、VICReg；教师/学生、stop-gradient、预测器、方差和协方差约束。",
+      "goal": "比较不同方法防止表示坍塌的机制与适用条件。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 18,
+      "group": "D｜自监督与视觉基础模型",
+      "title": "掩码图像建模：BEiT 与 MAE",
+      "scope": "精读离散目标、像素重建、高掩码率、非对称编码器/解码器；比较重建目标与语义表征。",
+      "goal": "理解被预测对象、mask 策略和重建难度如何影响迁移。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 19,
+      "group": "D｜自监督与视觉基础模型",
+      "title": "DINO：自蒸馏与涌现特征",
+      "scope": "精读多裁剪、teacher EMA、centering、sharpening、无标签蒸馏；分析 attention 可视化和无监督分割现象。",
+      "goal": "解释语义特征如何产生，并区分可视化现象与定量证据。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 20,
+      "group": "D｜自监督与视觉基础模型",
+      "title": "DINOv2、iBOT、Registers 与 DINOv3",
+      "scope": "按论文分别讲 patch 级目标、数据策展、模型扩展、register tokens 和 DINOv3 的 Gram anchoring；对比全局与稠密特征。",
+      "goal": "建立自监督 backbone 的演进链，并理解分类、深度、分割和匹配的不同评估。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 21,
+      "group": "E｜检测、分割与开放世界感知",
+      "title": "R-CNN 家族、FPN 与 YOLO",
+      "scope": "精读候选区域、RoI pooling/align、anchor、单阶段/双阶段、多尺度特征和 NMS；梳理 YOLO 的关键范式。",
+      "goal": "理解检测训练的匹配、分类、定位与后处理。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 22,
+      "group": "E｜检测、分割与开放世界感知",
+      "title": "DETR 与端到端检测",
+      "scope": "精读 object queries、集合预测、匈牙利匹配、二分图损失；比较 Deformable DETR 和检测版 DINO。",
+      "goal": "解释端到端检测解决了什么，以及收敛和小目标问题为何出现。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 23,
+      "group": "E｜检测、分割与开放世界感知",
+      "title": "FCN、U-Net、DeepLab 与 Mask2Former",
+      "scope": "精读上采样、跳跃连接、空洞卷积、实例与全景分割、mask 分类和 query 机制。",
+      "goal": "理解像素预测、区域预测及统一分割接口之间的关系。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 24,
+      "group": "E｜检测、分割与开放世界感知",
+      "title": "SAM → SAM 2 → SAM 3",
+      "scope": "逐篇讲图像/提示编码器、mask decoder、数据引擎；SAM 2 的视频记忆与 SAM 3 的概念提示检测/分割/跟踪。",
+      "goal": "区分几何提示、概念提示和复杂指令，以及跨帧身份保持。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 25,
+      "group": "E｜检测、分割与开放世界感知",
+      "title": "开放词汇检测与分割",
+      "scope": "OWL-ViT、GLIP、Grounding DINO、OVSeg/ODISE；语言条件、区域词语对齐、开放词汇与开放集识别。",
+      "goal": "理解开放世界任务的训练信号、负类设计和评估边界。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 26,
+      "group": "F｜视觉语言预训练的演进",
+      "title": "Captioning、VQA 与早期跨模态融合",
+      "scope": "Show and Tell、Show Attend and Tell、Bottom-Up/Top-Down attention；编码解码、区域特征、问答数据与语言偏差。",
+      "goal": "理解图像描述、视觉问答与真实视觉理解的不同要求。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 27,
+      "group": "F｜视觉语言预训练的演进",
+      "title": "ViLBERT、LXMERT、UNITER",
+      "scope": "逐篇比较双流/单流结构、跨模态注意力、masked region/text modeling、匹配与对齐目标。",
+      "goal": "掌握 LLM 时代之前视觉语言预训练的主要技术。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 28,
+      "group": "F｜视觉语言预训练的演进",
+      "title": "CLIP 与 ALIGN",
+      "scope": "精读图文双塔、对称对比损失、batch 内负样本、zero-shot 分类、prompt ensemble 和检索。",
+      "goal": "推导图文相似度矩阵，并解释 CLIP 能力和局限。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 29,
+      "group": "F｜视觉语言预训练的演进",
+      "title": "SigLIP、SigLIP 2 与 CoCa",
+      "scope": "比较 sigmoid/softmax 目标、生成与对比联合学习、语义定位、稠密特征和多语言训练。",
+      "goal": "理解表征模型如何兼顾检索、理解及视觉细节。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 30,
+      "group": "F｜视觉语言预训练的演进",
+      "title": "ALBEF 与 BLIP",
+      "scope": "精读先对齐后融合、动量蒸馏、caption bootstrapping、图文对比/匹配/生成联合目标。",
+      "goal": "解释数据清洗和训练目标组合如何推动跨模态学习。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 31,
+      "group": "G｜大语言模型时代的 VLM 架构",
+      "title": "视觉编码器如何接入 LLM",
+      "scope": "投影层/MLP、Q-Former、Perceiver Resampler、交叉注意力、视觉 token 拼接；梳理冻结和训练参数。",
+      "goal": "逐模块画出图像到答案的计算图与梯度路径。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 32,
+      "group": "G｜大语言模型时代的 VLM 架构",
+      "title": "Flamingo",
+      "scope": "精读交错图文、Perceiver Resampler、gated cross-attention、few-shot 与混合数据训练。",
+      "goal": "理解固定视觉 token 与多图上下文的接口设计。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 33,
+      "group": "G｜大语言模型时代的 VLM 架构",
+      "title": "BLIP-2 与 InstructBLIP",
+      "scope": "精读 Q-Former 的 query、分阶段预训练和指令条件特征提取；比较与 Flamingo 的不同连接方式。",
+      "goal": "解释冻结视觉/语言模型时如何学习跨模态桥接。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 34,
+      "group": "G｜大语言模型时代的 VLM 架构",
+      "title": "LLaVA 技术谱系",
+      "scope": "原版 Visual Instruction Tuning、LLaVA-1.5、NeXT、OneVision；视觉指令合成、连接器、数据配方与多图/视频扩展。",
+      "goal": "逐代拆分数据、架构、训练和分辨率的变化。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 35,
+      "group": "G｜大语言模型时代的 VLM 架构",
+      "title": "代表性 VLM 架构横向对比",
+      "scope": "Qwen-VL 系列、InternVL 系列、PaLI、Idefics、Molmo；按 encoder、connector、LLM、输入协议和开放程度比较。",
+      "goal": "建立可复用的架构比较表；重点版本另设论文细读小节或独立页。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 36,
+      "group": "H｜数据、训练与精细视觉能力",
+      "title": "图文与交错数据工程",
+      "scope": "LAION、DataComp、OBELICS 等；去重、过滤、caption 改写、合成数据、数据混合、许可与污染审计。",
+      "goal": "建立数据规模、质量、多样性和任务覆盖的独立分析框架。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 37,
+      "group": "H｜数据、训练与精细视觉能力",
+      "title": "高分辨率与动态视觉输入",
+      "scope": "LLaVA-NeXT、InternVL tiling、Qwen2-VL/2.5-VL；裁剪、缩略图、动态分辨率、token merging 与 M-RoPE。",
+      "goal": "解释小字/小目标能力、全局上下文、视觉 token 预算之间的权衡。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 38,
+      "group": "H｜数据、训练与精细视觉能力",
+      "title": "多模态训练全流程",
+      "scope": "预训练、对齐、mid-training、SFT；冻结/解冻、loss mask、sample packing、数据课程、多任务混合与遗忘。",
+      "goal": "写清各阶段的输入、损失、可训练参数及验证标准。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 39,
+      "group": "H｜数据、训练与精细视觉能力",
+      "title": "OCR、文档、图表与科学视觉",
+      "scope": "LayoutLM、Donut、Pix2Struct、Nougat 等；文字识别、布局、表格结构、图表读数、多页文档和公式。",
+      "goal": "区分读字、结构解析、知识理解与数理推理四个瓶颈。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 40,
+      "group": "H｜数据、训练与精细视觉能力",
+      "title": "区域、空间与多图理解",
+      "scope": "Kosmos-2、Shikra、Ferret、Molmo；坐标表示、referential grounding、关系推理、计数和跨图对应。",
+      "goal": "理解答案如何落回图像证据，以及 2D grounding 与 3D spatial reasoning 的差别。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 41,
+      "group": "I｜视觉推理、后训练与智能体",
+      "title": "多模态思维链与视觉推理",
+      "scope": "ScienceQA、Multimodal-CoT 等；感知、证据抽取、符号推理、语言先验和交错视觉思考。",
+      "goal": "设计感知/推理分离实验，判断错误来自看错还是推错。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 42,
+      "group": "I｜视觉推理、后训练与智能体",
+      "title": "多模态偏好学习与强化学习",
+      "scope": "DPO、PPO/GRPO 在视觉任务中的适配；可验证奖励、过程奖励、RL 数据、reward hacking，结合 VisRL 等案例。",
+      "goal": "讲清 rollout、奖励、策略更新与视觉依赖，避免用更长输出替代推理质量。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 43,
+      "group": "I｜视觉推理、后训练与智能体",
+      "title": "视觉工具调用与主动观察",
+      "scope": "VisProg、ViperGPT、Visual Sketchpad；crop/zoom、OCR、检测、分割、深度、代码与验证器。",
+      "goal": "解释观察—行动—反馈闭环和工具表示选择。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 44,
+      "group": "I｜视觉推理、后训练与智能体",
+      "title": "GUI 与屏幕智能体",
+      "scope": "SeeClick、UI-TARS 等；屏幕 grounding、操作轨迹、动作空间、SFT/RL、离线与在线任务成功率。",
+      "goal": "区分坐标命中、单步操作与长时程任务完成。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 45,
+      "group": "I｜视觉推理、后训练与智能体",
+      "title": "多模态 RAG、记忆与持续学习",
+      "scope": "ColPali 等视觉文档检索、多页证据聚合、图像/视频记忆、知识更新与灾难性遗忘。",
+      "goal": "建立检索、感知和推理的分层误差分析与证据溯源。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 46,
+      "group": "J｜视觉生成的数学基础与历史",
+      "title": "AE、VAE、GAN 与 StyleGAN",
+      "scope": "精读 ELBO、重参数化、对抗博弈、模式坍塌、style modulation 和生成评估。",
+      "goal": "理解潜变量、似然与感知质量的不同优化目标。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 47,
+      "group": "J｜视觉生成的数学基础与历史",
+      "title": "自回归图像与离散视觉 token",
+      "scope": "PixelCNN、VQ-VAE/VQGAN、ImageGPT、早期 DALL·E；码本、重建、序列建模和压缩。",
+      "goal": "理解离散表示的误差、码本利用与生成长度成本。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 48,
+      "group": "J｜视觉生成的数学基础与历史",
+      "title": "DDPM 与 DDIM",
+      "scope": "精读前向加噪、反向去噪、变分下界、噪声预测与采样；区分随机与确定性采样路径。",
+      "goal": "完整推导训练目标，并用小例子解释每一步。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 49,
+      "group": "J｜视觉生成的数学基础与历史",
+      "title": "Score-based SDE 与 EDM",
+      "scope": "score matching、反向 SDE、probability-flow ODE、噪声参数化、预条件与采样器。",
+      "goal": "将离散扩散与连续时间视角统一，并讨论数值误差。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 50,
+      "group": "J｜视觉生成的数学基础与历史",
+      "title": "Flow Matching 与 Rectified Flow",
+      "scope": "连续性方程、速度场、条件路径、conditional flow matching、rectification 与 distillation。",
+      "goal": "解释 flow 和 diffusion 的关系，以及训练目标与推理求解器的区别。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 51,
+      "group": "K｜现代生成、控制与理解生成统一",
+      "title": "Latent Diffusion 与 Stable Diffusion",
+      "scope": "精读自编码器、潜空间压缩、cross-attention 条件和训练流水线；分析压缩率与细节损失。",
+      "goal": "理解生成模型为什么在潜空间计算，以及视觉语言条件的作用。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 52,
+      "group": "K｜现代生成、控制与理解生成统一",
+      "title": "DiT、MMDiT 与现代生成架构",
+      "scope": "精读 DiT 的 patch token、adaLN、计算扩展，以及 SD3 等 MMDiT 的文本/图像交互；公开资料不足处明确标注。",
+      "goal": "比较 U-Net 与 Transformer，并核算分辨率扩展成本。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 53,
+      "group": "K｜现代生成、控制与理解生成统一",
+      "title": "引导与条件控制",
+      "scope": "Classifier-free guidance、ControlNet、T2I-Adapter、IP-Adapter；文本、边缘、深度、姿态和参考图控制。",
+      "goal": "讲清条件进入哪里、训练什么参数，以及控制强度的代价。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 54,
+      "group": "K｜现代生成、控制与理解生成统一",
+      "title": "编辑、个性化与一致性",
+      "scope": "InstructPix2Pix、DreamBooth、LoRA 与参考图编辑；inpainting、身份保持、局部编辑和多轮一致性。",
+      "goal": "区分指令遵循、目标编辑完成度和非目标区域保真。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 55,
+      "group": "K｜现代生成、控制与理解生成统一",
+      "title": "理解与生成统一模型",
+      "scope": "Emu、Chameleon、Show-o、Janus、BAGEL、InternVL-U；离散/连续表征、AR/diffusion、分支解耦与任务混合。",
+      "goal": "解释统一 token、统一架构和统一能力的区别，并分析负迁移。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 56,
+      "group": "L｜视频理解、流式视觉与视频生成",
+      "title": "视频表征的技术演进",
+      "scope": "Two-Stream、I3D、SlowFast、TimeSformer、Video Swin、VideoMAE；时空卷积、tubelet、时间注意力。",
+      "goal": "区分单帧识别与真实时间/运动理解。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 57,
+      "group": "L｜视频理解、流式视觉与视频生成",
+      "title": "视频语言模型",
+      "scope": "Video-LLaMA、LLaVA-Video、Qwen-VL 视频路线等；帧采样、时间戳、压缩、音视文同步和训练数据。",
+      "goal": "分析视频长度、帧率、视觉 token 及信息遗漏的关系。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 58,
+      "group": "L｜视频理解、流式视觉与视频生成",
+      "title": "长视频、流式输入与视觉记忆",
+      "scope": "MovieChat、LongVA、Molmo2、POINTS-Long 等；事件检索、时序 grounding、历史更新、在线记忆与缓存。",
+      "goal": "区分离线长上下文与因果在线流式处理，并评估漏事件和记忆失真。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 59,
+      "group": "L｜视频理解、流式视觉与视频生成",
+      "title": "视频生成模型",
+      "scope": "Video Diffusion、SVD、CogVideoX、HunyuanVideo、Wan 等公开路线；3D VAE、时空 DiT、I2V 与长视频扩展。",
+      "goal": "理解空间、时间压缩以及跨帧一致性的训练机制。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 60,
+      "group": "L｜视频理解、流式视觉与视频生成",
+      "title": "生成视频的物理与时序能力",
+      "scope": "对象持久性、运动、相机控制、交互、因果与长时程漂移；FVD、VBench 与任务化测试。",
+      "goal": "建立视觉逼真度、物理一致性和可用于决策的预测质量之间的区别。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 61,
+      "group": "M｜三维、几何与空间基础模型",
+      "title": "多视几何、SfM 与 SLAM",
+      "scope": "内外参、对极几何、三角化、PnP、BA、尺度歧义、回环与坐标系统；衔接站内标定笔记。",
+      "goal": "理解几何约束如何补足语义模型的空间能力。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 62,
+      "group": "M｜三维、几何与空间基础模型",
+      "title": "点云、深度与稠密几何",
+      "scope": "PointNet/PointNet++、MiDaS/DPT、Depth Anything；单目与多目、相对与度量深度、数据合成和泛化。",
+      "goal": "区分深度排序正确、尺度正确和全局几何一致。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 63,
+      "group": "M｜三维、几何与空间基础模型",
+      "title": "DUSt3R、MASt3R 与 VGGT",
+      "scope": "逐篇讲 pointmap、匹配、坐标对齐、camera/depth/track 联合预测与前馈多视图融合。",
+      "goal": "比较学习先验与显式几何优化，并分析尺度、长序列和域外场景限制。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 64,
+      "group": "M｜三维、几何与空间基础模型",
+      "title": "NeRF、Instant-NGP 与 3DGS",
+      "scope": "逐篇讲体渲染、密度/颜色、位置编码、hash grid、Gaussian splatting、可见性与优化；与已有 3DGS 笔记衔接。",
+      "goal": "区分重建、场景表示与新视角合成及各自的评价。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 65,
+      "group": "M｜三维、几何与空间基础模型",
+      "title": "3D 语言理解与三维生成",
+      "scope": "3D-LLM、LEO、DreamFusion、LRM 等；对象/场景 token、3D grounding、SDS 和前馈重建。",
+      "goal": "解释语言语义、几何表示和生成先验如何结合，识别几何幻觉。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 66,
+      "group": "N｜世界模型、空间智能与具身模型",
+      "title": "I-JEPA、V-JEPA 与 V-JEPA 2",
+      "scope": "精读潜空间预测、teacher/target encoder、mask 策略、预测器和动作条件化；比较像素预测与语义状态预测。",
+      "goal": "理解表示学习、世界预测和规划的不同训练与验证要求。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 67,
+      "group": "N｜世界模型、空间智能与具身模型",
+      "title": "交互式世界模型",
+      "scope": "Dreamer、Genie、Cosmos 等公开方法；潜状态、latent actions、视频模拟、rollout 与规划；公开程度逐项标注。",
+      "goal": "区分可观看生成、可控制环境和可信策略评估器。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 68,
+      "group": "N｜世界模型、空间智能与具身模型",
+      "title": "RT-1、RT-2 与 PaLM-E",
+      "scope": "逐篇讲机器人动作 token、视觉语言知识迁移、传感器/状态注入、不同机器人数据和泛化。",
+      "goal": "解释从视觉语言输入到动作输出的接口及训练信号。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 69,
+      "group": "N｜世界模型、空间智能与具身模型",
+      "title": "现代机器人策略与 VLA",
+      "scope": "ACT、Diffusion Policy、OpenVLA、Octo、π0、π0.5；action chunking、连续动作、flow matching 与跨任务训练。",
+      "goal": "比较离散动作与连续动作生成，并理解实时执行约束。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 70,
+      "group": "N｜世界模型、空间智能与具身模型",
+      "title": "导航、空间记忆与跨机器人泛化",
+      "scope": "R2R/Habitat 等导航环境、Open X-Embodiment/DROID 数据；认知地图、闭环观察、sim-to-real 与不同形态。",
+      "goal": "用成功率、路径效率、长时程错误和分布外泛化评价具身能力。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 71,
+      "group": "O｜评估、可信性与失效分析",
+      "title": "理解模型评测地图",
+      "scope": "ImageNet/COCO/VQA、MMBench、MMMU、MathVista、OCRBench、BLINK；按感知、知识、推理、空间和时间分类。",
+      "goal": "解释每个 benchmark 测量什么、遗漏什么及评估协议如何影响结论。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 72,
+      "group": "O｜评估、可信性与失效分析",
+      "title": "视觉幻觉与 grounding 失败",
+      "scope": "CHAIR、POPE、HallusionBench 等；对象、属性、关系与时序幻觉，语言先验、证据引用和拒答校准。",
+      "goal": "建立可定位的错误分类及图像依赖验证。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 73,
+      "group": "O｜评估、可信性与失效分析",
+      "title": "鲁棒性、捷径与因果实验",
+      "scope": "OOD、分辨率、遮挡、噪声、计数/空间组合、反事实替图、text-only/vision-only 控制与数据污染。",
+      "goal": "判断模型是否真正依赖相关视觉证据，并避免混杂解释。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 74,
+      "group": "O｜评估、可信性与失效分析",
+      "title": "生成、编辑与具身评测",
+      "scope": "FID/KID、CLIPScore、GenEval、DPG-Bench、VBench、LIBERO；自动指标、人工评分和真实任务成功率。",
+      "goal": "了解指标失配，建立多维评价与公平比较条件。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 75,
+      "group": "O｜评估、可信性与失效分析",
+      "title": "多模态安全、隐私与负责任数据",
+      "scope": "图像/文档中的提示注入、对抗样本、敏感信息、偏差、版权/许可、内容溯源与模型卡。",
+      "goal": "将失效模式、数据治理和可信部署边界联系起来。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 76,
+      "group": "P｜工程、效率与研究方法",
+      "title": "视觉 token 与资源账本",
+      "scope": "从图像尺寸/裁剪数/帧数到 encoder FLOPs、LLM prefill、KV cache、显存和端到端延迟；建立可计算示例。",
+      "goal": "把质量改进与视觉计算开销放在同一张账本上。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 77,
+      "group": "P｜工程、效率与研究方法",
+      "title": "微调、蒸馏与量化",
+      "scope": "LoRA/QLoRA、adapter、编码器/连接器微调、知识蒸馏、PTQ/QAT；检测 OCR、小目标和坐标能力退化。",
+      "goal": "区分模块、精度和校准数据的影响，并设置任务级验证。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 78,
+      "group": "P｜工程、效率与研究方法",
+      "title": "视觉压缩与自适应计算",
+      "scope": "ToMe、FastV、FastVLM 等；pruning、merging、query-based compression、动态分辨率与自适应观察。",
+      "goal": "比较不同压缩位置、保留信息及真实加速，画质量—成本曲线。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 79,
+      "group": "P｜工程、效率与研究方法",
+      "title": "多模态推理服务与部署",
+      "scope": "图像预处理、视觉编码、prefill/decode、异构请求、batching、encoder 缓存/分离、流式视频和边缘部署。",
+      "goal": "给出端到端测量协议，并衔接现有 AI Infra 专栏。",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 80,
+      "group": "P｜工程、效率与研究方法",
+      "title": "论文阅读、复现与研究选题",
+      "scope": "问题定义、最强基线、创新与证据、消融、复现检查、失败实验、最小决定性实验与计算预算。",
+      "goal": "形成可以判断 go/no-go 的研究流程，并学会持续更新知识体系。",
+      "status": "planned",
+      "slug": null
+    }
+  ],
+  "frontiers": [
+    {
+      "order": 1,
+      "title": "F01｜稠密视觉表征为何再次重要",
+      "principle": "DINOv3；Gram anchoring、全局/局部目标协调，比较 frozen features 与端到端微调。",
+      "questions": "把分类、分割、深度和匹配分开验证，讨论表征能否真正跨任务迁移。",
+      "url": "https://arxiv.org/abs/2508.10104",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 2,
+      "title": "F02｜原生多模态架构与训练",
+      "principle": "Qwen3-VL 的 interleaved-MRoPE、DeepStack、文本时间戳；Qwen3.5 官方材料中的原生多模态、混合注意力和 MoE。；后续 Qwen3.6/3.8 作为同谱系版本对比，依据官方公开资料。",
+      "questions": "比较晚期接入、联合预训练与计算效率；只讲公开的结构和训练信息，未知细节保留未知。",
+      "url": "https://arxiv.org/abs/2511.21631",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 3,
+      "title": "F03｜视觉推理瓶颈：先看清，再推理",
+      "principle": "CVPR 2026 的 Downscaling Intelligence（Extract+Think）与 DiG；相关奖励驱动视觉推理工作。",
+      "questions": "比较感知抽取、差异定位、推理后训练；设计相同骨干与数据预算下的因果消融。",
+      "url": "https://openaccess.thecvf.com/content/CVPR2026/html/Endo_Downscaling_Intelligence_Exploring_Perception_and_Reasoning_Bottlenecks_in_Small_Multimodal_CVPR_2026_paper.html",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 4,
+      "title": "F04｜视觉潜空间推理与选择性解码",
+      "principle": "VL-JEPA 的目标文本 embedding 预测；CVPR 2026 Monet 的视觉 latent reasoning 与 VLPO。",
+      "questions": "区分表示预测、潜空间推理和最终文本解码；检查潜变量是否真在承担视觉计算。",
+      "url": "https://arxiv.org/abs/2512.10942",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 5,
+      "title": "F05｜理解、推理、生成与编辑统一",
+      "principle": "BAGEL 与 2026 InternVL-U；离散/连续表征、理解与生成分支、MMDiT 生成头和训练混合。",
+      "questions": "统一是否带来实际能力迁移；控制参数量、数据和 FLOPs，分析负迁移。",
+      "url": "https://arxiv.org/abs/2603.09877",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 6,
+      "title": "F06｜长视频走向在线流式视觉",
+      "principle": "Molmo2 与 CVPR 2026 POINTS-Long；point-driven grounding、训练数据、动态视觉 token 与可维护缓存。",
+      "questions": "评价事件召回、temporal grounding、跨帧身份、历史记忆和质量—延迟权衡。",
+      "url": "https://arxiv.org/abs/2601.10611",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 7,
+      "title": "F07｜开放概念感知与视觉工具表示",
+      "principle": "SAM 3；CVPR 2026 Perception Programs；概念提示、硬负样本、结构化工具结果和观察接口。",
+      "questions": "比较 noun phrase、复杂指令、像素工具输出与语言化证据，测量指令到实例的可靠性。",
+      "url": "https://arxiv.org/abs/2511.16719",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 8,
+      "title": "F08｜几何基础模型与空间记忆",
+      "principle": "VGGT；结合 CVPR 2026 CLiViS 的动态认知地图分析几何状态与语言状态。",
+      "questions": "区分预测几何、维护地图和使用地图推理；评价坐标一致、尺度、遮挡与长期重定位。",
+      "url": "https://arxiv.org/abs/2503.11651",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 9,
+      "title": "F09｜世界模型能否支持规划和评估",
+      "principle": "V-JEPA 2 与动作条件潜状态预测；像素生成路线作为对照，讨论模型预测控制和物理可靠性。",
+      "questions": "用行动后果、rollout 误差、真实环境迁移验证；避免只以逼真视频证明世界理解。",
+      "url": "https://arxiv.org/abs/2506.09985",
+      "status": "planned",
+      "slug": null
+    },
+    {
+      "order": 10,
+      "title": "F10｜VLA 的泛化与真实闭环能力",
+      "principle": "π0/π0.5、OpenVLA、公开的后续 VLA 工作；连续动作、数据混合、知识迁移与在线反馈。",
+      "questions": "区分新对象、新任务、新环境和新机器人，研究小数据迁移、失败恢复与实际任务完成。",
+      "url": "https://arxiv.org/abs/2504.16054",
+      "status": "planned",
+      "slug": null
+    }
+  ]
+}

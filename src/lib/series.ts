@@ -22,6 +22,26 @@ export interface Series {
 
 export const SERIES: Series[] = [
   {
+    id: 'vision-foundations',
+    title: '视觉大模型 · 基础与核心论文',
+    badge: 'VISION',
+    description:
+      '面向基础不扎实的读者，从图像、数学与训练讲到视觉表征、视觉语言、生成、视频、三维和具身模型。' +
+      '逐知识点解释符号、维度和直觉，配完整手算、原创图解与带详解的练习；总览列出完整知识覆盖和写作进度。',
+    color: 'moss',
+    weight: 7,
+  },
+  {
+    id: 'vision-frontiers',
+    title: '视觉大模型 · 前沿研究',
+    badge: 'VFRONT',
+    description:
+      '围绕感知与推理、视觉潜空间、理解生成统一、流式记忆、空间与具身智能组织前沿论文。' +
+      '每个专题讲原理、实验依据、分歧与开放问题，并给出可检验的研究假设。',
+    color: 'clay',
+    weight: 8,
+  },
+  {
     id: 'cs323',
     title: 'CS323 · 编译原理',
     badge: 'CS323',

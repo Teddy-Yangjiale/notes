@@ -242,7 +242,7 @@ const toc = headings.filter((h) => h.depth === 2 || h.depth === 3);
   /* 目录固定在正文左侧；窄屏收到正文上方 */
   .body {
     display: grid;
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     gap: 2rem;
   }
   @media (min-width: 60rem) {
@@ -267,7 +267,7 @@ const toc = headings.filter((h) => h.depth === 2 || h.depth === 3);
   .toc a.on { color: var(--accent); border-left-color: var(--accent); }
 
   /* ---------- 正文排版 ---------- */
-  .prose { max-width: var(--measure); font-size: 1.02rem; }
+  .prose { min-width: 0; max-width: var(--measure); font-size: 1.02rem; }
   .prose > :global(* + *) { margin-top: 1.15em; }
 
   .prose :global(h2),
@@ -360,6 +360,8 @@ const toc = headings.filter((h) => h.depth === 2 || h.depth === 3);
   }
 
   .prose :global(table) {
+    display: block;
+    overflow-x: auto;
     width: 100%;
     border-collapse: collapse;
     font-size: .92rem;
