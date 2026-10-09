@@ -1,7 +1,8 @@
 ---
 title: "00 · 视觉大模型总览：零基础阅读路线与完整知识覆盖"
 date: 2026-10-06
-summary: "80章主线、10个前沿专题、8个实验与6个附录的完整覆盖地图。01—10讲已经写入，包含基础、经典视觉/CNN与结构化任务；目录逐项区分已写与待写，说明先修、学习标准和阅读方法。"
+updated: 2026-10-09
+summary: "80章主线、10个前沿专题、8个实验与6个附录的完整覆盖地图。01—23讲已经写入，包含基础、经典视觉/CNN、Transformer、自监督、目标检测，以及FCN到Mask2Former的分割主线；目录逐项区分已写与待写。"
 tags: ["视觉大模型", "课程总览", "阅读路线"]
 series: "vision-foundations"
 order: 0
@@ -12,7 +13,7 @@ shortTitle: "总览、路线与覆盖进度"
 
 ## 一、写作状态与阅读入口
 
-**2026-10-07：01—10讲已写入，共403个编号知识小节、146个深入算例与案例、202道带解析练习、32张原创图解和14个可运行教学实验。第06—10讲进入经典视觉/CNN和结构化任务；第11—80讲及前沿专题仍待写。本页目录不是正文的替代品。**
+**2026-10-09：01—23讲已写入，共1170个编号知识小节、406个深入算例与案例、566道带解析练习、96张原创图解和62个可运行教学实验。第06—10讲进入经典视觉/CNN和结构化任务，第11—15讲展开Transformer、ViT、DeiT、Swin/PVT与位置/token，第16—20讲精讲自监督与DINO系列，第21—23讲覆盖R-CNN/YOLO、DETR，以及FCN、U-Net、DeepLab、MaskFormer/Mask2Former的分割主线；第24—80讲及前沿专题仍待写。本页目录不是正文的替代品。**
 
 | 讲次 | 文章 | 首先解决的问题 |
 | --- | --- | --- |
@@ -26,8 +27,21 @@ shortTitle: "总览、路线与覆盖进度"
 | 08 | [ResNet与DenseNet逐步精讲](../vision-08-resnet-densenet/) | 优化退化、残差梯度、预激活、密集连接与内存 |
 | 09 | [高效CNN与现代卷积](../vision-09-efficient-cnn/) | DW/PW、倒残差、SE、复合缩放、Fused与ConvNeXt |
 | 10 | [视觉任务、HRNet与RAFT](../vision-10-structured-tasks/) | 输出与坐标、指标、多尺度融合、对应和迭代光流 |
+| 11 | [Attention与Transformer逐步精讲](../vision-11-attention-transformer/) | Q/K/V、mask、多头、位置、完整反传与计算/缓存 |
+| 12 | [ViT逐步精讲](../vision-12-vit/) | 图像切块、CLS、二维位置插值、参数/MAC、预训练与迁移 |
+| 13 | [DeiT逐步精讲](../vision-13-deit/) | 硬/软蒸馏梯度、双token、增强、正则与数据效率 |
+| 14 | [Swin与PVT逐步精讲](../vision-14-swin-pvt/) | 窗口/移位mask、相对位置梯度、分层、SRA与V2改进 |
+| 15 | [视觉token与位置逐步精讲](../vision-15-position-tokens/) | 坐标/插值/伪逆、2D/3D RoPE、打包隔离与质量合并 |
+| 16 | [对比学习逐步精讲](../vision-16-contrastive/) | InfoNCE/密度比/MI、CPC因果、MoCo状态、SimCLR双路径与评估 |
+| 17 | [无显式负样本逐步精讲](../vision-17-noncontrastive/) | sg与半梯度、BYOL/SimSiam更新、Barlow/VICReg完整反向及全局统计 |
+| 18 | [掩码图像建模逐步精讲](../vision-18-masked-modeling/) | BEiT离散token、MAE索引恢复/像素目标与稀疏计算 |
+| 19 | [DINO自蒸馏逐步精讲](../vision-19-dino/) | 多裁剪配对、EMA教师、center/温度与注意力证据边界 |
+| 20 | [从iBOT到DINOv3逐步精讲](../vision-20-dinov2-dinov3/) | 在线tokenizer、数据策展、Registers与Gram anchoring |
+| 21 | [从R-CNN到YOLO逐步精讲](../vision-21-rcnn-fpn-yolo/) | 框与IoU、proposal/anchor、RoIAlign、FPN、YOLO、NMS与AP |
+| 22 | [DETR端到端检测逐步精讲](../vision-22-detr/) | 集合预测、匈牙利匹配、Deformable Attention、DN与检测版DINO |
+| 23 | [FCN到Mask2Former逐步精讲](../vision-23-segmentation/) | 语义/实例/全景分割、上采样、skip、空洞卷积、mask分类与masked attention |
 
-“已写”表示对应文章存在；后续扩充会同步更新。不要把已写十讲等同于80章完成，也不要把术语出现过等同于对应论文已经精读。
+“已写”表示对应文章存在；后续扩充会同步更新。不要把已写二十三讲等同于80章完成，也不要把术语出现过等同于对应论文已经精读。
 
 ## 二、STA5007式深度怎样落实
 
@@ -46,7 +60,7 @@ shortTitle: "总览、路线与覆盖进度"
 
 第02—05讲可以按模块分次读。遇到新符号，先回到本章定义和数值例子，而非跳过公式继续背名字。
 
-## 四、已写十讲覆盖核对
+## 四、已写二十三讲覆盖核对
 
 ### 01：模型地图
 
@@ -88,7 +102,39 @@ shortTitle: "总览、路线与覆盖进度"
 
 分类/检索输出与指标；检测坐标/匹配/IoU/NMS/AP、分割类别/实例/ignore/mIoU；关键点高斯/解码/crop坐标、HRNet并行尺度/对齐/融合/OKS；跟踪分配与身份、光流方向/warp/resize/EPE、深度/视差/尺度；RAFT全对相关/金字塔/内存/查找/ConvGRU/detach/凸上采样/序列loss与消融；17个深入算例与案例、24道练习、2个教学程序。
 
-后续在对应章继续补softmax与attention、视觉对比、扩散SDE、多视几何、策略优化等专门推导。这不是声称十讲覆盖整个数学、统计和视觉学科的全部定理。第10讲的任务地图不替代后续历代检测、分割、跟踪和深度论文精读。
+### 11：Attention与Transformer
+
+位置与通道轴、Q/K/V来源、缩放假设、稳定softmax、精确单头手算、凸组合与对称边界；padding/causal/prefix/packing、右移、全空行、矩形时间偏移、dropout；多头/reshape/输出投影/FFN、Pre/Post-LN与梯度；置换等变、绝对/正弦/相对bias/RoPE、编码器/解码器/训练生成与loss；完整参数/MAC/显存、KV/GQA、在线softmax、Q/K/V和共享输入反传；20个深入算例、28道练习、4张图与2个教学程序。
+
+### 12：ViT
+
+图像/patch/token索引与可逆切块、投影信息损失、Linear与stride卷积等价和梯度；网格、CLS/池化/LayerNorm、Pre-LN encoder、B/L/H配置；完整参数/MAC/单矩阵内存账本、分辨率与patch大小；二维位置迁移/坐标约定/矩形网格、预训练与新头零初始化、linear probe/全量微调、数据规模与归纳偏置；attention distance/rollout的用途和边界、稠密/VLM接口；20个深入算例、28道练习、5张图与3个教学程序。
+
+### 13：DeiT
+
+数据/曝光/更新预算、教师输入与冻结；硬蒸馏、温度KL方向/梯度/高温近似/归一化；双token与独立头、共享梯度、概率/logit融合反例、两特殊位置迁移；Ti/S/B精确参数与MAC、教师成本；label smoothing/soft target、Mixup/CutMix/面积/patch边界、RandAugment/Erasing、DropPath、AdamW、EMA、scheduler、repeated augmentation/sampler；历史成绩/消融交互/一致率与偏置/公平比较与诊断；20个深入算例、28道练习、5张图和3个可运行程序。
+
+### 14：Swin与PVT
+
+空间网格/稠密输出与骨干/FPN区别；partition/reverse/roll索引、窗口复杂度、shift区域mask与独立裁剪参考、有限mask/padding/依赖支持；相对bias索引与scatter反传、Pre-LN block、merge拼接/LN/降维/完整反传、T/S/B精确参数/MAC/内存、动态尺寸与等变边界；SRA矩形attention、学习SR投影/双支路梯度/固定比例二次项、PVT stage/CLS/位置；V2 overlap/卷积FFN/固定池化、residual-post-norm/cosine/连续bias、版本迁移、稠密接口和机制消融；20个深入算例/案例、28道详解练习、5张图与4个可运行程序。
+
+### 15：视觉token与位置
+
+像素/patch/crop/tile坐标与单位、绝对/因子表约束、比例/Fourier特征、矩形位置插值及转置反传、FlexiViT伪逆条件与信息损失；位置插入点、RoPE旋转/相对恒等式/非单调反例/配对布局/完整特征与频率梯度、二维axial/mixed、三轴/帧秒/特殊token与外推；NaViT按图mask/pool、完整block反传、图级loss/对比耦合/装箱预算；ToMe多对一/保护/质量与来源、固定选择梯度/logsize精确条件/反例/unmerge/计算位置；20个深入算例/案例、28道详解练习、5张图与4个可运行程序。
+
+### 16：对比学习与CPC/MoCo/SimCLR
+
+自监督来源/feature与projection接口、正负/候选/视图轴、点积与余弦、InfoNCE稳定计算及score/QK/norm/温度完整梯度、多正目标区别；条件与边缘/proposal采样、贝叶斯密度比、互信息KL分解与下界证明/饱和/枚举、坍塌驻点；CPC未来潜变量、步长bilinear、因果感受野与共享encoder/BPTT；MoCo字典/EMA展开/年龄/队列pointer/old snapshot/停止梯度/BN shuffle/v2；SimCLR配对/self排除/anchor-candidate双路径/MLP/LARS/global BN/累积与gather/reduction；增强/捷径/假负/成本/probe-kNN-finetune与公平消融；20个算例/案例、28道详解练习、5张图与4个程序。
+
+### 17：无显式负样本与防坍塌
+
+常数/维度坍塌、行norm与列统计、rank上界、停止梯度与固定目标差分；BYOL在线/教师接口、归一化MSE与完整梯度、EMA展开/schedule/初始化/运行state、条件期望的分析边界；SimSiam共享两方向/原始head与BN/学习率组/半梯度与稳定性；Barlow跨视图C、diag/off完整导数与列标准化、rank与不相关不等于独立；VICReg raw一致、样本std hinge及协方差导数、两侧归约/epsilon常数驻点/可行性；全局统计/gather/DDP/累积/资源与评价；20个深入算例、28道详解练习、5张图与4个完整程序。
+
+### 18：BEiT、MAE与掩码图像建模
+
+patch/网格/目标对齐、替换与删除mask、masked-only归约及固定子集无偏性；BEiT双路径、dVAE/码本8192、块状mask、离散CE与梯度、变分两阶段/固定tokenizer、head成本与迁移边界；MAE随机无放回采样、shuffle/inverse restore、可见encoder/全序列轻decoder、patchify轴、raw与patch-normalized pixel MSE及梯度、高mask率/计算账本；目标空间、mask政策、泄漏和评价比较；20个深入算例、28道详解练习、5张图与4个完整程序。
+
+后续在对应章继续补视觉自蒸馏、扩散SDE、多视几何、策略优化等专门推导。这不是声称十八讲覆盖整个数学、统计和视觉学科的全部定理。第10讲的任务地图不替代后续历代检测、分割、跟踪和深度论文精读。
 
 ## 五、80章主线覆盖与进度
 
@@ -118,29 +164,29 @@ shortTitle: "总览、路线与覆盖进度"
 
 | 讲次与主题 | 讲解范围 | 状态 |
 | --- | --- | --- |
-| 11｜Attention 与 Transformer 原理 | 精读 Attention Is All You Need；Q/K/V、缩放点积、自注意力与交叉注意力、残差、归一化、MLP 和 mask。 | 待写 |
-| 12｜ViT：图像变成 token | 精读 An Image Is Worth 16×16 Words；patchify、位置编码、CLS、预训练与迁移；分析数据规模与归纳偏置。 | 待写 |
-| 13｜DeiT：数据效率与蒸馏 | 精读蒸馏 token、教师监督与训练增强；比较架构改动和训练配方的贡献。 | 待写 |
-| 14｜Swin、PVT 与多尺度结构 | 精读窗口注意力、移位窗口、层级表示与金字塔；说明它们如何服务检测、分割和高分辨率输入。 | 待写 |
-| 15｜视觉 token 与位置表示 | 绝对/相对位置编码、2D/3D RoPE、插值、动态尺寸、NaViT 式打包与 token 合并；区分空间位置与时间位置。 | 待写 |
+| [11｜Attention 与 Transformer 原理](../vision-11-attention-transformer/) | 精读 Attention Is All You Need；Q/K/V、缩放点积、自注意力与交叉注意力、残差、归一化、MLP 和 mask。 | 已写 |
+| [12｜ViT：图像变成 token](../vision-12-vit/) | 精读 An Image Is Worth 16×16 Words；patchify、位置编码、CLS、预训练与迁移；分析数据规模与归纳偏置。 | 已写 |
+| [13｜DeiT：数据效率与蒸馏](../vision-13-deit/) | 精读蒸馏 token、教师监督与训练增强；比较架构改动和训练配方的贡献。 | 已写 |
+| [14｜Swin、PVT 与多尺度结构](../vision-14-swin-pvt/) | 精读窗口注意力、移位窗口、层级表示与金字塔；说明它们如何服务检测、分割和高分辨率输入。 | 已写 |
+| 15｜视觉 token 与位置表示 | 绝对/相对位置编码、2D/3D RoPE、插值、动态尺寸、NaViT 式打包与 token 合并；区分空间位置与时间位置。 | [已写](../vision-15-position-tokens/) |
 
 ### D｜自监督与视觉基础模型
 
 | 讲次与主题 | 讲解范围 | 状态 |
 | --- | --- | --- |
-| 16｜对比学习：CPC、MoCo、SimCLR | 精读 InfoNCE、正负样本、温度、动量编码器、队列和大 batch；讨论增强与假负样本。 | 待写 |
-| 17｜无显式负样本学习 | BYOL、SimSiam、Barlow Twins、VICReg；教师/学生、stop-gradient、预测器、方差和协方差约束。 | 待写 |
-| 18｜掩码图像建模：BEiT 与 MAE | 精读离散目标、像素重建、高掩码率、非对称编码器/解码器；比较重建目标与语义表征。 | 待写 |
-| 19｜DINO：自蒸馏与涌现特征 | 精读多裁剪、teacher EMA、centering、sharpening、无标签蒸馏；分析 attention 可视化和无监督分割现象。 | 待写 |
-| 20｜DINOv2、iBOT、Registers 与 DINOv3 | 按论文分别讲 patch 级目标、数据策展、模型扩展、register tokens 和 DINOv3 的 Gram anchoring；对比全局与稠密特征。 | 待写 |
+| 16｜对比学习：CPC、MoCo、SimCLR | 精读 InfoNCE、正负样本、温度、动量编码器、队列和大 batch；讨论增强与假负样本。 | [已写](../vision-16-contrastive/) |
+| 17｜无显式负样本学习 | BYOL、SimSiam、Barlow Twins、VICReg；教师/学生、stop-gradient、预测器、方差和协方差约束。 | [已写](../vision-17-noncontrastive/) |
+| 18｜掩码图像建模：BEiT 与 MAE | 精读离散目标、像素重建、高掩码率、非对称编码器/解码器；比较重建目标与语义表征。 | [已写](../vision-18-masked-modeling/) |
+| 19｜DINO：自蒸馏与涌现特征 | 精读多裁剪、teacher EMA、centering、sharpening、无标签蒸馏；分析 attention 可视化和无监督分割现象。 | [已写](../vision-19-dino/) |
+| 20｜DINOv2、iBOT、Registers 与 DINOv3 | 按论文分别讲 patch 级目标、数据策展、模型扩展、register tokens 和 DINOv3 的 Gram anchoring；对比全局与稠密特征。 | [已写](../vision-20-dinov2-dinov3/) |
 
 ### E｜检测、分割与开放世界感知
 
 | 讲次与主题 | 讲解范围 | 状态 |
 | --- | --- | --- |
-| 21｜R-CNN 家族、FPN 与 YOLO | 精读候选区域、RoI pooling/align、anchor、单阶段/双阶段、多尺度特征和 NMS；梳理 YOLO 的关键范式。 | 待写 |
-| 22｜DETR 与端到端检测 | 精读 object queries、集合预测、匈牙利匹配、二分图损失；比较 Deformable DETR 和检测版 DINO。 | 待写 |
-| 23｜FCN、U-Net、DeepLab 与 Mask2Former | 精读上采样、跳跃连接、空洞卷积、实例与全景分割、mask 分类和 query 机制。 | 待写 |
+| 21｜R-CNN 家族、FPN 与 YOLO | 精读候选区域、RoI pooling/align、anchor、单阶段/双阶段、多尺度特征和 NMS；梳理 YOLO 的关键范式。 | [已写](../vision-21-rcnn-fpn-yolo/) |
+| 22｜DETR 与端到端检测 | 精读 object queries、集合预测、匈牙利匹配、二分图损失；比较 Deformable DETR 和检测版 DINO。 | [已写](../vision-22-detr/) |
+| 23｜FCN、U-Net、DeepLab 与 Mask2Former | 精读上采样、跳跃连接、空洞卷积、实例与全景分割、mask 分类和 query 机制。 | [已写](../vision-23-segmentation/) |
 | 24｜SAM → SAM 2 → SAM 3 | 逐篇讲图像/提示编码器、mask decoder、数据引擎；SAM 2 的视频记忆与 SAM 3 的概念提示检测/分割/跟踪。 | 待写 |
 | 25｜开放词汇检测与分割 | OWL-ViT、GLIP、Grounding DINO、OVSeg/ODISE；语言条件、区域词语对齐、开放词汇与开放集识别。 | 待写 |
 

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "date": "2026-10-07",
+  "date": "2026-10-09",
   "series": "vision-foundations",
   "frontierSeries": "vision-frontiers",
   "reference": {
@@ -104,8 +104,8 @@
       "title": "Attention 与 Transformer 原理",
       "scope": "精读 Attention Is All You Need；Q/K/V、缩放点积、自注意力与交叉注意力、残差、归一化、MLP 和 mask。",
       "goal": "用数值例子和完整维度链路解释注意力，并核算复杂度。",
-      "status": "planned",
-      "slug": null
+      "status": "written",
+      "slug": "vision-11-attention-transformer"
     },
     {
       "order": 12,
@@ -113,8 +113,8 @@
       "title": "ViT：图像变成 token",
       "scope": "精读 An Image Is Worth 16×16 Words；patchify、位置编码、CLS、预训练与迁移；分析数据规模与归纳偏置。",
       "goal": "理解 ViT 的核心假设、输入组织和为何需要良好的预训练。",
-      "status": "planned",
-      "slug": null
+      "status": "written",
+      "slug": "vision-12-vit"
     },
     {
       "order": 13,
@@ -122,8 +122,8 @@
       "title": "DeiT：数据效率与蒸馏",
       "scope": "精读蒸馏 token、教师监督与训练增强；比较架构改动和训练配方的贡献。",
       "goal": "区分知识蒸馏、数据增强与模型扩展的作用。",
-      "status": "planned",
-      "slug": null
+      "status": "written",
+      "slug": "vision-13-deit"
     },
     {
       "order": 14,
@@ -131,8 +131,8 @@
       "title": "Swin、PVT 与多尺度结构",
       "scope": "精读窗口注意力、移位窗口、层级表示与金字塔；说明它们如何服务检测、分割和高分辨率输入。",
       "goal": "能比较全局注意力与局部层级结构的精度及计算权衡。",
-      "status": "planned",
-      "slug": null
+      "status": "written",
+      "slug": "vision-14-swin-pvt"
     },
     {
       "order": 15,
@@ -140,8 +140,8 @@
       "title": "视觉 token 与位置表示",
       "scope": "绝对/相对位置编码、2D/3D RoPE、插值、动态尺寸、NaViT 式打包与 token 合并；区分空间位置与时间位置。",
       "goal": "能追踪分辨率改变后的 token 数、位置坐标和注意力代价。",
-      "status": "planned",
-      "slug": null
+      "status": "written",
+      "slug": "vision-15-position-tokens"
     },
     {
       "order": 16,
@@ -149,8 +149,8 @@
       "title": "对比学习：CPC、MoCo、SimCLR",
       "scope": "精读 InfoNCE、正负样本、温度、动量编码器、队列和大 batch；讨论增强与假负样本。",
       "goal": "推导损失及梯度直觉，并解释表征学习的监督来源。",
-      "status": "planned",
-      "slug": null
+      "status": "written",
+      "slug": "vision-16-contrastive"
     },
     {
       "order": 17,
@@ -158,8 +158,8 @@
       "title": "无显式负样本学习",
       "scope": "BYOL、SimSiam、Barlow Twins、VICReg；教师/学生、stop-gradient、预测器、方差和协方差约束。",
       "goal": "比较不同方法防止表示坍塌的机制与适用条件。",
-      "status": "planned",
-      "slug": null
+      "status": "written",
+      "slug": "vision-17-noncontrastive"
     },
     {
       "order": 18,
@@ -167,8 +167,8 @@
       "title": "掩码图像建模：BEiT 与 MAE",
       "scope": "精读离散目标、像素重建、高掩码率、非对称编码器/解码器；比较重建目标与语义表征。",
       "goal": "理解被预测对象、mask 策略和重建难度如何影响迁移。",
-      "status": "planned",
-      "slug": null
+      "status": "written",
+      "slug": "vision-18-masked-modeling"
     },
     {
       "order": 19,
@@ -176,8 +176,8 @@
       "title": "DINO：自蒸馏与涌现特征",
       "scope": "精读多裁剪、teacher EMA、centering、sharpening、无标签蒸馏；分析 attention 可视化和无监督分割现象。",
       "goal": "解释语义特征如何产生，并区分可视化现象与定量证据。",
-      "status": "planned",
-      "slug": null
+      "status": "written",
+      "slug": "vision-19-dino"
     },
     {
       "order": 20,
@@ -185,8 +185,8 @@
       "title": "DINOv2、iBOT、Registers 与 DINOv3",
       "scope": "按论文分别讲 patch 级目标、数据策展、模型扩展、register tokens 和 DINOv3 的 Gram anchoring；对比全局与稠密特征。",
       "goal": "建立自监督 backbone 的演进链，并理解分类、深度、分割和匹配的不同评估。",
-      "status": "planned",
-      "slug": null
+      "status": "written",
+      "slug": "vision-20-dinov2-dinov3"
     },
     {
       "order": 21,
@@ -194,8 +194,8 @@
       "title": "R-CNN 家族、FPN 与 YOLO",
       "scope": "精读候选区域、RoI pooling/align、anchor、单阶段/双阶段、多尺度特征和 NMS；梳理 YOLO 的关键范式。",
       "goal": "理解检测训练的匹配、分类、定位与后处理。",
-      "status": "planned",
-      "slug": null
+      "status": "written",
+      "slug": "vision-21-rcnn-fpn-yolo"
     },
     {
       "order": 22,
@@ -203,8 +203,8 @@
       "title": "DETR 与端到端检测",
       "scope": "精读 object queries、集合预测、匈牙利匹配、二分图损失；比较 Deformable DETR 和检测版 DINO。",
       "goal": "解释端到端检测解决了什么，以及收敛和小目标问题为何出现。",
-      "status": "planned",
-      "slug": null
+      "status": "written",
+      "slug": "vision-22-detr"
     },
     {
       "order": 23,
@@ -212,8 +212,8 @@
       "title": "FCN、U-Net、DeepLab 与 Mask2Former",
       "scope": "精读上采样、跳跃连接、空洞卷积、实例与全景分割、mask 分类和 query 机制。",
       "goal": "理解像素预测、区域预测及统一分割接口之间的关系。",
-      "status": "planned",
-      "slug": null
+      "status": "written",
+      "slug": "vision-23-segmentation"
     },
     {
       "order": 24,

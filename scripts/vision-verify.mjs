@@ -11,6 +11,7 @@ const notesRoot = path.join(root, 'src/content/notes');
 const curriculum = JSON.parse(fs.readFileSync(path.join(root, 'scripts/vision-curriculum.json'), 'utf8'));
 const errors = [];
 const pages = [];
+const sourceOnly = process.argv.includes('--source-only');
 if (curriculum.chapters.length !== 80) errors.push('Expected 80 main chapters');
 if (curriculum.frontiers.length !== 10) errors.push('Expected 10 frontier topics');
 for (const [i, chapter] of curriculum.chapters.entries()) {
@@ -58,7 +59,8 @@ for (const slug of fs.readdirSync(notesRoot).filter(n => /^vision-\d{2}-/.test(n
     examples.push({ number: i+1, output: run.stdout?.trim(), passed: run.status === 0 });
   }
   const htmlPath = path.join(root, 'dist', slug, 'index.html');
-  const html = fs.existsSync(htmlPath) ? fs.readFileSync(htmlPath, 'utf8') : '';
+  const html = !sourceOnly && fs.existsSync(htmlPath) ? fs.readFileSync(htmlPath, 'utf8') : '';
+  if (!sourceOnly && !html) errors.push(slug + ': missing built page; run the site build before verification');
   if (html.includes('class="katex-error"')) errors.push(slug + ': rendered KaTeX error');
   // A malformed display delimiter can swallow the rest of a Markdown page
   // even when each formula passes an isolated KaTeX call.

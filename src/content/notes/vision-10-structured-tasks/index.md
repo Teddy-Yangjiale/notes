@@ -692,7 +692,7 @@ print('toy updates:',sequence,'weighted L1:',loss)
 
 复现需保存数据split/标签约定/有效mask/坐标变换/权重来源/测试增强/后处理/指标实现，HRNet另记分支配置与heatmap解码，RAFT另记特征网格、相关实现、lookup、更新数、detach、上采样和预训练域。本文只运行教学算术和小图检查，没有发布模型基准成绩。
 
-第11讲进入Attention与Transformer，先从Q/K/V、缩放点积和mask做完整数值例子，再连接ViT与视觉基础模型。回到[课程地图](../vision-00-overview/)可以核对主线与未写专题；架构先修见[第08讲](../vision-08-resnet-densenet/)和[第09讲](../vision-09-efficient-cnn/)。
+[第11讲](../vision-11-attention-transformer/)进入Attention与Transformer，先从Q/K/V、缩放点积和mask做完整数值例子，再连接ViT与视觉基础模型。回到[课程地图](../vision-00-overview/)可以核对主线与未写专题；架构先修见[第08讲](../vision-08-resnet-densenet/)和[第09讲](../vision-09-efficient-cnn/)。
 
 ## 原始材料
 
