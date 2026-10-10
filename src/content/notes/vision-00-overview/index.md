@@ -1,8 +1,8 @@
 ---
 title: "00 · 视觉大模型总览：零基础阅读路线与完整知识覆盖"
 date: 2026-10-06
-updated: 2026-10-09
-summary: "80章主线、10个前沿专题、8个实验与6个附录的完整覆盖地图。01—23讲已经写入，包含基础、经典视觉/CNN、Transformer、自监督、目标检测，以及FCN到Mask2Former的分割主线；目录逐项区分已写与待写。"
+updated: 2026-10-10
+summary: "80章主线、10个前沿专题、8个实验与6个附录的完整覆盖地图。01—24讲已经写入，包含基础、经典视觉/CNN、Transformer、自监督、检测分割，以及SAM家族的提示式图像与视频分割；目录逐项区分已写与待写。"
 tags: ["视觉大模型", "课程总览", "阅读路线"]
 series: "vision-foundations"
 order: 0
@@ -13,7 +13,7 @@ shortTitle: "总览、路线与覆盖进度"
 
 ## 一、写作状态与阅读入口
 
-**2026-10-09：01—23讲已写入，共1170个编号知识小节、406个深入算例与案例、566道带解析练习、96张原创图解和62个可运行教学实验。第06—10讲进入经典视觉/CNN和结构化任务，第11—15讲展开Transformer、ViT、DeiT、Swin/PVT与位置/token，第16—20讲精讲自监督与DINO系列，第21—23讲覆盖R-CNN/YOLO、DETR，以及FCN、U-Net、DeepLab、MaskFormer/Mask2Former的分割主线；第24—80讲及前沿专题仍待写。本页目录不是正文的替代品。**
+**2026-10-10：01—24讲已写入。第14—23讲经过叙事重排：由具体问题引出论文，保留公式、手算、练习和可运行核查，并为每讲增加技术路线图；第23讲重写了正文，以同一张街景贯穿语义、实例和全景分割。第25—80讲及前沿专题仍待写。已写表示文章可读，不代表整个课程或每条前沿分支已经完成。**
 
 | 讲次 | 文章 | 首先解决的问题 |
 | --- | --- | --- |
@@ -40,8 +40,9 @@ shortTitle: "总览、路线与覆盖进度"
 | 21 | [从R-CNN到YOLO逐步精讲](../vision-21-rcnn-fpn-yolo/) | 框与IoU、proposal/anchor、RoIAlign、FPN、YOLO、NMS与AP |
 | 22 | [DETR端到端检测逐步精讲](../vision-22-detr/) | 集合预测、匈牙利匹配、Deformable Attention、DN与检测版DINO |
 | 23 | [FCN到Mask2Former逐步精讲](../vision-23-segmentation/) | 语义/实例/全景分割、上采样、skip、空洞卷积、mask分类与masked attention |
+| 24 | [SAM、SAM 2与SAM 3逐步精讲](../vision-24-sam/) | 提示分割、歧义mask、SA-1B、视频记忆、概念提示与PCS |
 
-“已写”表示对应文章存在；后续扩充会同步更新。不要把已写二十三讲等同于80章完成，也不要把术语出现过等同于对应论文已经精读。
+“已写”表示对应文章存在；后续扩充会同步更新。不要把已写二十四讲等同于80章完成，也不要把术语出现过等同于对应论文已经精读。
 
 ## 二、STA5007式深度怎样落实
 
@@ -60,7 +61,7 @@ shortTitle: "总览、路线与覆盖进度"
 
 第02—05讲可以按模块分次读。遇到新符号，先回到本章定义和数值例子，而非跳过公式继续背名字。
 
-## 四、已写二十三讲覆盖核对
+## 四、已写二十四讲覆盖核对
 
 ### 01：模型地图
 
@@ -187,7 +188,7 @@ patch/网格/目标对齐、替换与删除mask、masked-only归约及固定子�
 | 21｜R-CNN 家族、FPN 与 YOLO | 精读候选区域、RoI pooling/align、anchor、单阶段/双阶段、多尺度特征和 NMS；梳理 YOLO 的关键范式。 | [已写](../vision-21-rcnn-fpn-yolo/) |
 | 22｜DETR 与端到端检测 | 精读 object queries、集合预测、匈牙利匹配、二分图损失；比较 Deformable DETR 和检测版 DINO。 | [已写](../vision-22-detr/) |
 | 23｜FCN、U-Net、DeepLab 与 Mask2Former | 精读上采样、跳跃连接、空洞卷积、实例与全景分割、mask 分类和 query 机制。 | [已写](../vision-23-segmentation/) |
-| 24｜SAM → SAM 2 → SAM 3 | 逐篇讲图像/提示编码器、mask decoder、数据引擎；SAM 2 的视频记忆与 SAM 3 的概念提示检测/分割/跟踪。 | 待写 |
+| 24｜SAM → SAM 2 → SAM 3 | 逐篇讲图像/提示编码器、mask decoder、数据引擎；SAM 2 的视频记忆与 SAM 3 的概念提示检测/分割/跟踪。 | [已写](../vision-24-sam/) |
 | 25｜开放词汇检测与分割 | OWL-ViT、GLIP、Grounding DINO、OVSeg/ODISE；语言条件、区域词语对齐、开放词汇与开放集识别。 | 待写 |
 
 ### F｜视觉语言预训练的演进

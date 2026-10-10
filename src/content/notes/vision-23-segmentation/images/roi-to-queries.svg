@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="600" viewBox="0 0 1200 600" role="img" aria-labelledby="title desc">
+  <title id="title">从Mask R-CNN的每个候选框一张mask，到MaskFormer的一组区域query</title>
+  <desc id="desc">左侧依赖候选框分别截取两辆车并生成实例mask；右侧query集合同时预测两辆车与道路，各有类别分数和区域mask，空query可不输出区域。</desc>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#54747a"/></marker></defs>
+  <rect width="1200" height="600" rx="28" fill="#f5f9f7"/>
+  <text x="45" y="60" font-family="Arial, Microsoft YaHei, sans-serif" font-size="32" font-weight="700" fill="#15363a">输出单位从“框内对象”变成“带类别的区域”</text>
+  <rect x="45" y="105" width="520" height="415" rx="20" fill="#fff" stroke="#c8dcd7" stroke-width="2"/>
+  <text x="70" y="150" font-family="Arial, Microsoft YaHei, sans-serif" font-size="26" font-weight="700" fill="#245c51">Mask R-CNN：先有 RoI，再切实例</text>
+  <rect x="75" y="200" width="240" height="210" rx="8" fill="#d8e9e5"/>
+  <rect x="109" y="267" width="85" height="68" rx="7" fill="#e48b65"/>
+  <rect x="199" y="267" width="85" height="68" rx="7" fill="#d86e50"/>
+  <rect x="102" y="257" width="100" height="88" fill="none" stroke="#246c70" stroke-width="3"/>
+  <rect x="193" y="257" width="100" height="88" fill="none" stroke="#246c70" stroke-width="3"/>
+  <path d="M318 274 H346" stroke="#54747a" stroke-width="3" marker-end="url(#arrow)"/>
+  <text x="350" y="264" font-family="Arial, Microsoft YaHei, sans-serif" font-size="20" fill="#24525a">A → mask A</text>
+  <text x="350" y="303" font-family="Arial, Microsoft YaHei, sans-serif" font-size="20" fill="#24525a">B → mask B</text>
+  <text x="70" y="455" font-family="Arial, Microsoft YaHei, sans-serif" font-size="19" fill="#47656c">每个正 RoI 内预测局部二值mask；道路另处理。</text>
+  <path d="M580 300 H615" stroke="#54747a" stroke-width="3" marker-end="url(#arrow)"/>
+  <rect x="630" y="105" width="525" height="415" rx="20" fill="#fff" stroke="#c8dcd7" stroke-width="2"/>
+  <text x="655" y="150" font-family="Arial, Microsoft YaHei, sans-serif" font-size="26" font-weight="700" fill="#245c51">MaskFormer：query 预测类别 + 区域</text>
+  <rect x="655" y="197" width="165" height="65" rx="12" fill="#d7eae3"/>
+  <text x="672" y="237" font-family="Arial, Microsoft YaHei, sans-serif" font-size="20" fill="#1f594c">query 1 → 车 A</text>
+  <rect x="655" y="279" width="165" height="65" rx="12" fill="#d7eae3"/>
+  <text x="672" y="319" font-family="Arial, Microsoft YaHei, sans-serif" font-size="20" fill="#1f594c">query 2 → 车 B</text>
+  <rect x="655" y="361" width="165" height="65" rx="12" fill="#d7eae3"/>
+  <text x="672" y="401" font-family="Arial, Microsoft YaHei, sans-serif" font-size="20" fill="#1f594c">query 3 → 道路</text>
+  <path d="M825 228 H875 M825 310 H875 M825 392 H875" stroke="#54747a" stroke-width="3" marker-end="url(#arrow)"/>
+  <rect x="895" y="194" width="225" height="72" rx="10" fill="#e59a77"/>
+  <rect x="895" y="276" width="225" height="72" rx="10" fill="#db7658"/>
+  <rect x="895" y="358" width="225" height="72" rx="10" fill="#91c5bd"/>
+  <text x="655" y="456" font-family="Arial, Microsoft YaHei, sans-serif" font-size="19" fill="#47656c">剩余query可配空类；任务不同，解码规则也不同。</text>
+  <text x="45" y="567" font-family="Arial, Microsoft YaHei, sans-serif" font-size="20" fill="#47656c">共同点：都要保留空间特征，才能从对象表示恢复像素级边界。</text>
+</svg>

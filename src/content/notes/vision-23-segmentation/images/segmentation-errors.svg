@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="610" viewBox="0 0 1200 610" role="img" aria-labelledby="title desc">
+  <title id="title">三种分割错误不能靠同一个分数识别</title>
+  <desc id="desc">左侧漏掉少数汽车像素但背景正确，像素准确率仍高；中间两辆车的语义标签合并而实例身份消失；右侧目标边界整体偏移，区域和边界评价不同。</desc>
+  <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#527078"/></marker></defs>
+  <rect width="1200" height="610" rx="28" fill="#f5f9f7"/>
+  <text x="46" y="62" font-family="Arial, Microsoft YaHei, sans-serif" font-size="32" font-weight="700" fill="#15363a">一张街景，三种不同的失败</text>
+  <text x="46" y="99" font-family="Arial, Microsoft YaHei, sans-serif" font-size="20" fill="#466268">先看模型该交付什么，再选择能看见错误的指标。</text>
+  <rect x="40" y="135" width="350" height="385" rx="20" fill="#fff" stroke="#c9dcd7" stroke-width="2"/>
+  <text x="65" y="178" font-family="Arial, Microsoft YaHei, sans-serif" font-size="25" font-weight="700" fill="#245c51">① 背景掩盖漏检</text>
+  <rect x="65" y="210" width="300" height="185" rx="6" fill="#dbe8e5"/>
+  <rect x="220" y="285" width="105" height="52" rx="8" fill="#df7c5a"/>
+  <path d="M220 285 h105 v52 h-105 z" fill="none" stroke="#244e58" stroke-width="4" stroke-dasharray="8 6"/>
+  <text x="65" y="437" font-family="Arial, Microsoft YaHei, sans-serif" font-size="19" fill="#274c53">多数道路预测正确；车却没有找到。</text>
+  <text x="65" y="468" font-family="Arial, Microsoft YaHei, sans-serif" font-size="18" fill="#92523d">像素准确率高 ≠ 汽车 IoU 高</text>
+  <path d="M397 330 H430" stroke="#527078" stroke-width="3" marker-end="url(#arr)"/>
+  <rect x="438" y="135" width="350" height="385" rx="20" fill="#fff" stroke="#c9dcd7" stroke-width="2"/>
+  <text x="463" y="178" font-family="Arial, Microsoft YaHei, sans-serif" font-size="25" font-weight="700" fill="#245c51">② 实例粘在一起</text>
+  <rect x="463" y="210" width="300" height="185" rx="6" fill="#dbe8e5"/>
+  <rect x="507" y="278" width="96" height="68" rx="14" fill="#da805f"/>
+  <rect x="604" y="278" width="96" height="68" rx="14" fill="#da805f"/>
+  <line x1="604" y1="277" x2="604" y2="347" stroke="#fff" stroke-width="4" stroke-dasharray="5 5"/>
+  <text x="463" y="437" font-family="Arial, Microsoft YaHei, sans-serif" font-size="19" fill="#274c53">两块都是 car，语义图可以正确。</text>
+  <text x="463" y="468" font-family="Arial, Microsoft YaHei, sans-serif" font-size="18" fill="#92523d">若要计数，必须保留 A / B 身份</text>
+  <path d="M795 330 H828" stroke="#527078" stroke-width="3" marker-end="url(#arr)"/>
+  <rect x="836" y="135" width="324" height="385" rx="20" fill="#fff" stroke="#c9dcd7" stroke-width="2"/>
+  <text x="861" y="178" font-family="Arial, Microsoft YaHei, sans-serif" font-size="25" font-weight="700" fill="#245c51">③ 边界错位</text>
+  <rect x="861" y="210" width="274" height="185" rx="6" fill="#dbe8e5"/>
+  <path d="M915 260 H1066 V347 H915 Z" fill="#9cd3bf" stroke="#28765f" stroke-width="4"/>
+  <path d="M932 269 H1083 V356 H932 Z" fill="none" stroke="#dc694d" stroke-width="4" stroke-dasharray="9 6"/>
+  <text x="861" y="437" font-family="Arial, Microsoft YaHei, sans-serif" font-size="19" fill="#274c53">实线是真值，虚线是偏移预测。</text>
+  <text x="861" y="468" font-family="Arial, Microsoft YaHei, sans-serif" font-size="18" fill="#92523d">区域 IoU 与边界质量都要看</text>
+  <text x="46" y="572" font-family="Arial, Microsoft YaHei, sans-serif" font-size="20" fill="#466268">同一个“分割失败”可能来自任务定义、漏检或坐标/边界；诊断顺序因此不同。</text>
+</svg>

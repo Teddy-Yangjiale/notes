@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="520" viewBox="0 0 1200 520" role="img" aria-labelledby="title desc">
+  <title id="title">同一个点在原图与两种补边协议中的坐标</title>
+  <desc id="desc">宽800高400的图像缩到宽1024高512。原图点200,100，在右下补边协议中为256,128，在居中补边协议中为256,384。</desc>
+  <rect width="1200" height="520" rx="28" fill="#f5f9f7"/>
+  <text x="45" y="62" font-family="Arial, Microsoft YaHei, sans-serif" font-size="32" font-weight="700" fill="#18373b">同一点击，补边协议不同，模型坐标就不同</text>
+  <text x="45" y="100" font-family="Arial, Microsoft YaHei, sans-serif" font-size="20" fill="#425e63">原图 800×400，长边缩到 1024；比例 s = 1.28</text>
+  <rect x="40" y="132" width="330" height="306" rx="20" fill="#fff" stroke="#b8d4ce" stroke-width="2"/>
+  <text x="65" y="169" font-family="Arial, Microsoft YaHei, sans-serif" font-size="23" font-weight="700" fill="#1d5b4b">原图</text>
+  <rect x="65" y="205" width="280" height="140" rx="4" fill="#d5ede4" stroke="#3b9279" stroke-width="2"/>
+  <circle cx="135" cy="240" r="9" fill="#e16a47" stroke="#fff" stroke-width="3"/>
+  <text x="65" y="390" font-family="Arial, Microsoft YaHei, sans-serif" font-size="20" fill="#274b50">点 (200, 100)</text>
+  <path d="M380 285 H415" stroke="#5c777c" stroke-width="3" marker-end="url(#arrow)"/>
+  <rect x="425" y="132" width="350" height="306" rx="20" fill="#fff" stroke="#b8d4ce" stroke-width="2"/>
+  <text x="450" y="169" font-family="Arial, Microsoft YaHei, sans-serif" font-size="23" font-weight="700" fill="#1d5b4b">右下补边</text>
+  <rect x="450" y="205" width="256" height="256" rx="4" fill="#e8eef0" stroke="#779ba1" stroke-width="2"/>
+  <rect x="450" y="205" width="256" height="128" fill="#d5ede4" stroke="#3b9279" stroke-width="2"/>
+  <circle cx="514" cy="237" r="9" fill="#e16a47" stroke="#fff" stroke-width="3"/>
+  <text x="450" y="390" font-family="Arial, Microsoft YaHei, sans-serif" font-size="20" fill="#274b50">模型点 (256, 128)</text>
+  <path d="M785 285 H820" stroke="#5c777c" stroke-width="3" marker-end="url(#arrow)"/>
+  <rect x="830" y="132" width="330" height="306" rx="20" fill="#fff" stroke="#b8d4ce" stroke-width="2"/>
+  <text x="855" y="169" font-family="Arial, Microsoft YaHei, sans-serif" font-size="23" font-weight="700" fill="#1d5b4b">居中补边（教学对照）</text>
+  <rect x="855" y="205" width="256" height="256" rx="4" fill="#e8eef0" stroke="#779ba1" stroke-width="2"/>
+  <rect x="855" y="269" width="256" height="128" fill="#d5ede4" stroke="#3b9279" stroke-width="2"/>
+  <circle cx="919" cy="301" r="9" fill="#e16a47" stroke="#fff" stroke-width="3"/>
+  <text x="855" y="390" font-family="Arial, Microsoft YaHei, sans-serif" font-size="20" fill="#274b50">模型点 (256, 384)</text>
+  <text x="45" y="485" font-family="Arial, Microsoft YaHei, sans-serif" font-size="20" fill="#425e63">绿色是真实图像，灰色是padding；提示与输出mask必须用同一份坐标变换。</text>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#5c777c"/></marker></defs>
+</svg>

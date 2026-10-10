@@ -662,4 +662,54 @@ outputs.push(save('vision-23-segmentation','mask2former','Mask2Former：query先
  card(435,105,330,305,'Decoder layer l',['N个query cross-attend','分类头 → C+1','mask embedding · pixel embedding','输出N张soft mask'],palette.blue)+arrow(780,255,845,255)+
  card(870,135,275,245,'Layer l+1',['上一层mask阈值化','区域外加−∞','区域内读取新feature'],palette.orange)+
  card(45,500,1100,150,'训练与推理',['Hungarian matching：类别 + sampled BCE/Dice；各层aux loss。','语义聚合、实例保留、全景竞争使用同一张量但不同解码规则。'],palette.green)+txt(45,735,'若某query屏蔽全部位置，必须解除整行屏蔽，避免softmax NaN。',24),810));
+outputs.push(save('vision-24-sam','sam-family','SAM家族：提示从单图对象扩展到视频身份与概念实例','同名不代表同一任务；先判断提示类型、实例数量和时间范围。',
+ card(45,160,320,230,'SAM（图像）',['点 / 框 / mask','一个提示的有效区域','多候选解决歧义'],palette.green)+arrow(380,275,445,275)+
+ card(470,160,320,230,'SAM 2（视频）',['视觉提示 + 任意帧修正','同一对象的masklet','流式记忆与遮挡'],palette.blue)+arrow(805,275,870,275)+
+ card(895,160,260,230,'SAM 3（概念）',['短名词 / exemplar','所有匹配实例','检测 + 跟踪'],palette.orange)+
+ card(45,500,1110,145,'输出合同',['单图mask：不要求命名类别；视频masklet：需要跨帧身份；PCS：需要概念存在判断和多实例穷举。','模型、数据和指标必须随合同变化。'],palette.green)+txt(45,730,'把SAM 1的视觉提示能力与SAM 3的概念检索能力分开评价。',24),805));
+outputs.push(save('vision-24-sam','sam-architecture','SAM：缓存图像embedding，提示token与空间feature在双向Transformer交互','同图新增点击只重跑prompt encoder和mask decoder。',
+ card(45,145,280,230,'图像编码器',['图像 → H′×W′×D','一次较重的计算','可缓存'],palette.green)+arrow(340,260,405,260)+
+ card(430,105,330,310,'Two-way decoder',['点/框：位置+类型token','mask：dense embedding','prompt读图，图也读prompt','mask token与IoU token'],palette.blue)+arrow(775,260,840,260)+
+ card(865,145,290,230,'输出',['多个mask logits','预测IoU质量','上采样回原图'],palette.orange)+
+ card(45,500,1110,145,'歧义不是噪声',['单点可能指衣服、人或局部；多个候选避免平均成不连贯mask。','预测IoU是候选质量估计，不是类别概率。'],palette.green)+txt(45,730,'自动全图mask是网格提示、筛选和去重组成的上层流程。',24),805));
+outputs.push(save('vision-24-sam','sam2-memory','SAM 2：当前帧用有限历史memory预测mask，并把结果写回队列','空间记忆保存对象区域，object pointer提供轻量对象线索。',
+ card(45,145,250,230,'当前frame',['image encoder','当前prompt（可选）','feature Fₜ'],palette.green)+arrow(310,260,380,260)+
+ card(405,105,335,310,'Memory attention',['读最近N帧空间memory','读提示帧与pointer','得到条件化feature'],palette.blue)+arrow(755,260,820,260)+
+ card(845,145,310,230,'mask decoder + encoder',['输出mₜ与presence','mₜ+feature写成memory','FIFO保留首帧/近期帧'],palette.orange)+
+ card(45,500,1110,145,'交互修正',['任意帧追加点/框/mask可成为新条件；对象遮挡时应允许无对象。','短期运动、长期重现、误差累积和ID切换需分别评测。'],palette.green)+txt(45,730,'流式只限制计算方式；离线设置仍可能有来自未来帧的用户提示。',24),805));
+outputs.push(save('vision-24-sam','sam3-pcs','SAM 3：概念检测器找全实例，视频跟踪器保持每个masklet身份','presence token单独判断概念是否存在，减少开放词汇假阳性。',
+ card(45,135,280,245,'Concept prompts',['短名词短语','正/负image exemplar','text + exemplar token'],palette.green)+arrow(340,255,405,255)+
+ card(430,100,335,315,'DETR-like detector',['视觉/提示融合','object queries → 框+mask','presence token → 是否存在'],palette.blue)+arrow(780,255,845,255)+
+ card(870,135,280,245,'SAM 2 tracker',['传播已有masklet','新对象由detector加入','高置信检测可重提示'],palette.orange)+
+ card(45,500,1110,150,'PCS边界',['目标是概念的所有匹配实例，并在视频保持ID；不是任意复杂长指令。','hard negative概念、穷举性验证与空集合校准决定开放词汇可靠性。'],palette.green)+txt(45,735,'检测身份无关，跟踪身份相关；拆分可减少目标冲突。',24),810));
+outputs.push(save('vision-24-sam','data-engine','数据引擎：模型、标注与质量验证构成可审计闭环','规模来自逐步提高自动化，而不是把所有候选都当作同等质量的人工GT。',
+ card(45,145,270,220,'采样媒体与任务',['覆盖新域/长尾概念','定义提示与标注单位','准备真实负例'],palette.green)+arrow(330,255,395,255)+
+ card(420,145,270,220,'模型辅助标注',['初始mask/轨迹提议','人类点击、brush、修正','记录失败类型'],palette.blue)+arrow(705,255,770,255)+
+ card(795,145,360,220,'质量与穷举性验证',['mask边界质量','概念是否完整穷举','hard negative与空集合','抽检和独立基准'],palette.orange)+
+ arrow(975,390,600,470)+card(245,505,700,125,'训练新版本并回灌',['只在验证通过后扩大自动阶段；保留人工复核和分布审计。'],palette.green)+txt(45,735,'模型提升可降低标注成本，但也可能把当前偏差规模化。',24),810));
+// One route map per lecture keeps the historical papers connected to the
+// question that motivates the next technique.
+const storylines = [
+ ['vision-14-swin-pvt','高分辨率如何变得可计算？',['高分辨率网格','Swin 窗口与移位','PVT 压缩 K/V','多尺度任务'],['小物体需要密集位置','全局注意力太昂贵','局部计算、跨窗传递','空间降采样、保留查询','稠密头读取各层特征']],
+ ['vision-15-position-tokens','位置从哪里来，又在哪里失效？',['像素与 patch 坐标','绝对与相对位置','RoPE 的旋转','打包与合并边界'],['先定义坐标原点','再问模型怎样读取','相加或加入注意力偏置','相对位移进入相位差','重排时检查位置语义']],
+ ['vision-16-contrastive','同一图像的两个视图如何靠近？',['同图双视图','InfoNCE 多选题','CPC 与 MoCo','SimCLR 的双路径'],['增强决定正样本语义','负样本定义比较背景','从未来预测到队列字典','动量编码稳定队列','大批量直接提供负例']],
+ ['vision-17-noncontrastive','去掉负样本后，为什么不全变一样？',['常数解风险','BYOL 慢教师','SimSiam 停梯度','Barlow 与 VICReg'],['先构造塌缩反例','预测器与 EMA 目标网络','固定一侧优化方向','跨样本相关矩阵约束','方差与协方差显式约束']],
+ ['vision-18-masked-modeling','被遮住的区域，应该预测什么？',['随机遮住 patch','BEiT 离散 token','MAE 可见编码','目标与损失对照'],['遮挡比例改变难度','先把图像映射成视觉词','编码器只处理可见块','轻解码器预测像素','比较语义与低层细节']],
+ ['vision-19-dino','没有人工标签，教师怎样教学生？',['多裁剪输入','温度与中心化','EMA 教师','冻结特征评价'],['局部与全局视图配对','锐化但避免单类塌缩','教师由学生滑动平均','观察注意力与邻近关系','线性探针检验可迁移性']],
+ ['vision-20-dinov2-dinov3','自监督特征怎样成为通用底座？',['iBOT 在线目标','DINOv2 数据训练','Registers 工作槽','DINOv3 稠密锚定'],['patch 级监督与教师','数据筛选和多目标训练','给高范数背景位置出口','长期训练保持稠密特征','分清全局和局部评价']],
+ ['vision-21-rcnn-fpn-yolo','检测器如何找到、定位并去重？',['R-CNN 重复裁剪','Fast/Faster 与 RPN','FPN 小目标','YOLO 密集预测'],['每个候选单独跑网络','共享特征与区域建议','高低层语义重新组合','整图一次预测多个位置','最后统一定义 AP']],
+ ['vision-22-detr','能否把检测变成集合预测？',['DETR 一对一匹配','Deformable 采样','DAB 与 DN 训练','检测版 DINO'],['固定查询槽预测对象','匈牙利匹配处理重复','参考点只读少量位置','锚框先验与去噪加速','组合三项训练改进']]
+];
+for (const [slug,title,stages,notes] of storylines) {
+ const colors=[palette.green,palette.blue,palette.orange,palette.green];
+ let drawing='';
+ for(let i=0;i<4;i++){
+  const x=45+i*290;
+  drawing+=rect(x,155,250,215,colors[i])+txt(x+20,195,stages[i],24)
+   +lines(x+20,237,[notes[i],i===3?notes[4]:''],18,30);
+  if(i<3)drawing+=arrow(x+255,260,x+285,260);
+ }
+ drawing+=card(45,430,1115,125,'阅读方式',['沿箭头追问：上一步解决了什么？留下什么限制？','下一篇论文改动的是目标、结构、数据，还是训练过程？'],palette.white);
+ outputs.push(save(slug,'storyline',title,'按核心问题串联本讲论文与技术的路线图。',drawing,605));
+}
 console.log(JSON.stringify({generated:outputs.length,files:outputs.map(p=>path.relative(root,p))},null,2));

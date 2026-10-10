@@ -221,8 +221,8 @@
       "title": "SAM → SAM 2 → SAM 3",
       "scope": "逐篇讲图像/提示编码器、mask decoder、数据引擎；SAM 2 的视频记忆与 SAM 3 的概念提示检测/分割/跟踪。",
       "goal": "区分几何提示、概念提示和复杂指令，以及跨帧身份保持。",
-      "status": "planned",
-      "slug": null
+      "status": "written",
+      "slug": "vision-24-sam"
     },
     {
       "order": 25,
