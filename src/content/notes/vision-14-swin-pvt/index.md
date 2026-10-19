@@ -1,704 +1,780 @@
 ---
-title: "14 · Swin与PVT逐步精讲：窗口、遮罩、金字塔与空间降采样"
+title: "14 · Swin 与 PVT 论文逐图精讲：让 Transformer 像 CNN 一样有金字塔"
 date: 2026-10-08
-summary: "从二维索引开始，逐格推导窗口划分、移位遮罩与相对位置；完整核算Swin的分层结构、参数与MAC，再解释PVT/SRA、PVTv2和SwinV2。含边界反例、完整反传、原创图解、手算与可运行核查。"
-tags: ["视觉大模型", "Swin", "PVT", "多尺度", "Transformer"]
+updated: 2026-10-19
+summary: "Swin Transformer、PVT 和 Swin V2 三篇论文的逐图拆解：23 张关键图表直接截自原论文，图下先给原文要点，再补机制解释、设计动机、4×4 小图手算与易错点。从'为什么 ViT 做不了检测分割'讲到窗口注意力、移位窗口与 mask、patch merging、空间缩减注意力，再到 Swin V2 怎样扩到 30 亿参数；面向零基础、顺着本专栏学下来的读者。"
+tags: ["视觉大模型", "Swin", "PVT", "多尺度", "Transformer", "论文精读"]
 series: "vision-foundations"
 order: 14
-shortTitle: "Swin、PVT与多尺度"
-updated: 2026-10-10
+shortTitle: "Swin 与 PVT 论文逐图精讲"
 ---
 
-> 前三讲已经建立Attention、ViT和DeiT。本讲追问：图像变大后，怎样保留较密的空间网格，又避免让每个位置都直接比较所有位置？从4×4小图开始，把每一次移动、分组和梯度写清楚。所有小数字、程序输出和独立账本都是教学计算；论文实验另外标注。
+> Liu 等《Swin Transformer: Hierarchical Vision Transformer using Shifted Windows》（ICCV 2021 最佳论文）、Wang 等《Pyramid Vision Transformer》（ICCV 2021）和 Liu 等《Swin Transformer V2》（CVPR 2022）三篇论文的逐图拆解。**每张关键图表都截自原论文**，图下先给原文要点，再补机制解释、设计动机、小图手算与易错点。关键图附「🖼 逐元素图解」；每个模块末尾有带详解的练习；文末附录是概念速查、数字速查与面试高频问题。
 
-<!-- teaching-narrative-rewrite -->
+*23 张论文图表 · 6 张手绘图解 · 7 个模块 · 4 段可运行核查 · 28 道带解析的练习*
 
-想象把一张街景从224像素放大到更清晰的分辨率：小路牌需要更密的空间位置，但让每个位置都看整张图会很贵。读这讲时始终追踪一个路牌token能看到哪些位置、信息怎样跨窗传播，以及它在哪一层被合并。Swin和PVT给的是两条不同的省计算路线。
+> **📌 这一讲在课程中的位置**
+>
+> [第 12 讲](../vision-12-vit/)的 ViT 把图切成 16×16 的块，得到一张 14×14 的、从头到尾不变的特征图。这对分类够用，但[第 10 讲](../vision-10-structured-tasks/)讲过的检测和分割需要的是 **CNN 那样的多尺度金字塔**：浅层分辨率高（看小物体和边界），深层分辨率低、语义强。而且检测分割的输入往往是 800×1333 这种大图，ViT 的全局注意力按 token 数的平方涨，根本算不起。[第 13 讲](../vision-13-deit/)解决的是"数据不够"，这一讲解决的是"结构不适合稠密任务"。
+>
+> 两篇论文给了两条路：**Swin** 把注意力限制在 7×7 的局部窗口里，用"移位"让窗口之间通信，用"合并"逐级缩小特征图；**PVT** 保留全局注意力，但把 key 和 value 压缩成少量摘要。两者都借用了 CNN 的四级金字塔。**Swin V2** 则回答"这个结构能不能扩到 30 亿参数、1536 分辨率"。主线按 Swin 论文的页码走（图 1—4、公式 1—4、表 1—5），中间插入 PVT 的图 1、3、4 和表 1 作对照，最后看 Swin V2 的图 1、2 和表 1、6。[第 15 讲](../vision-15-position-tokens/)继续讲位置编码和 token 的各种设计。
 
-![本讲的论文路线和每一步解决的问题](./images/storyline.svg)
+---
 
-## 一、问题从空间网格开始
+`Part 1 · Swin 论文第 1—2 页`
 
-**一个token到底对应图像的哪一处。** 输入像素为$B\times3\times H_0\times W_0$，$B$是图像数量。经过不重叠的4×4投影，若尺寸整除4，得到$H=H_0/4$、$W=W_0/4$个空间位置，每处有$C$个特征。它可写成$B\times H\times W\times C$，也可展平为$B\times N\times C$，其中$N=HW$。
+## 一、问题：ViT 为什么做不了检测和分割
 
-展平采用行优先：二维$(y,x)$对应$i=yW+x$，逆向是$y=\lfloor i/W\rfloor$、$x=i\bmod W$。空间网格的高、宽必须另外保留；序列长24既可能来自4×6，也可能来自3×8。仅看$N$不能唯一恢复空间邻接关系。
+#### 图 1　分层特征图 vs 单一尺度
 
-浅层token最初读取一个patch，后续attention把其他位置的信息混进来。此时“位置$(y,x)$的token”指它的输出槽位和坐标，不意味着它只包含该patch的像素。**空间索引与信息依赖范围是两个问题**，本讲不断区分它们。
+*Figure 1. (a) The proposed Swin Transformer builds hierarchical feature maps by merging image patches (shown in gray) in deeper layers and has linear computation complexity to input image size due to computation of self-attention only within each local window (shown in red). It can thus serve as a general-purpose backbone for both image classification and dense recognition tasks. (b) In contrast, previous vision Transformers produce feature maps of a single low resolution and have quadratic computation complexity to input image size due to computation of self-attention globally.*
 
-**分类与稠密预测对空间信息提出不同要求。** 分类输出一张图的$K$个分数，可在最后汇聚所有位置。分割需要空间标签，检测需要框或对象位置，因此通常希望骨干保留可供读取的空间特征。平均成一个$C$维向量以后，头不能直接取出所有位置原先各自的特征。
+![图 1 · Swin 的分层特征图与 ViT 的单一尺度](./images/paper-swin-fig1-hierarchy.png)
 
-假设一个8像素宽的对象：在stride4网格上大约跨2格，在stride32上不足1格。这个尺度计算解释为什么浅层高分辨率可能有用，却不证明某个格一定能识别对象；采样相位、输入投影、背景混合和训练目标都会影响实际信息。
+**🖼 逐元素图解**
 
-分类骨干能否用于稠密任务，要检查输出哪些stage、每个stage的stride、通道、归一化与坐标协议。[第10讲](../vision-10-structured-tasks/)定义的框、mask和光流输出仍适用。骨干更换不会自动完成任务头、训练loss或评价协议。
+- **右半 (b) ViT**：三层特征图大小完全一样，每层都是 16× 下采样（224 的图就是 14×14 格）。红框套住了整张图：**每一层的注意力都是全局的**，每个格子看所有格子。上面只有一个箭头：classification。
+- **左半 (a) Swin**：三层特征图从下往上越来越小：4×（56×56 格）、8×（28×28）、16×（14×14）。**灰色小格是 patch，红框是窗口**：注意力只在红框内部算，最下面一层有 16 个红框，中间 4 个，最上面 1 个。右边的竖线把三层一起送给 *segmentation, detection…*：稠密任务需要的正是这一组不同尺度的特征图。
 
-**将ViT的patch缩小，代价为什么涨得快。** 固定输入尺寸，patch边长从16降到4，每轴token数量增4倍，总数增16倍。全局attention每头的$N\times N$分数矩阵因此约增256倍，忽略特殊token。Q/K/V和FFN按token处理，若通道不变则约增16倍。
+**读图时注意两件事。** 第一，Swin 最底层的 patch 是 4×4 像素，比 ViT 的 16×16 细四倍，所以它能看到更小的东西；代价是 token 多了 16 倍（3136 vs 196），全局注意力的分数矩阵会多 256 倍，这就是为什么必须用窗口。第二，每个红框里始终是 7×7 = 49 个 patch（图里示意画成 4×4），**窗口大小不随图像大小变**，所以总计算量和图像面积成正比，而不是平方。
 
-注意是**面积的平方**：$N=HW$，attention交互项为$N^2$。输入两轴都扩大2倍时，面积增4倍，交互增16倍；说“分辨率扩大2倍，attention扩大4倍”必须说明只扩大单轴，或把分辨率定义成面积，否则含糊。
+> **💡 零基础先修：金字塔、stride 和 FPN**
+>
+> CNN（[第 8 讲](../vision-08-resnet-densenet/)的 ResNet）的特征图每过一个 stage 就缩小一半、通道翻倍，得到 stride 4/8/16/32 的四级特征。"stride 8"的意思是特征图上一格对应原图 8×8 像素。检测器的 FPN（[第 10 讲](../vision-10-structured-tasks/)）把这四级特征融合起来，小物体用 stride 4 的那级，大物体用 stride 32 的那级。**一个"通用骨干"必须能产出这样四级特征**，ViT 只有一级（stride 16），所以不行。Swin 和 PVT 的第一目标就是把四级金字塔搬进 Transformer。
 
-小patch能够提供更密的初始位置，但不是无代价的“提高精细度”开关。可以减少每个query访问的key、压缩key/value、逐层减少位置，或组合这些策略。Swin和PVT提供两种不同的信息流组织方式。
+#### 引言　语言和视觉的两个差别
 
-**骨干金字塔与FPN分别是什么。** **骨干金字塔**是深度不同、空间尺度不同的一组表示，例如stride4/8/16/32。尺寸逐渐变小，通道通常变多。它描述骨干产出什么，并不要求这些stage之间存在自顶向下融合。
+论文第 2 页说，把 Transformer 从语言搬到视觉，困难来自两个差别：
 
-**FPN**则是一种额外的特征融合结构：把较深stage投影、上采样，与较浅stage的侧向投影相加，形成供任务头读取的多尺度特征。拥有四个stage的骨干不等于已经拥有FPN；FPN也可以接其他骨干。
+| 差别 | 语言 | 视觉 | 后果 |
+|---|---|---|---|
+| **尺度** | 一个词就是一个 token，大小固定 | 一个物体可以占 10 个像素也可以占 1000 个 | 固定大小的 token（ViT）不合适，需要多尺度 |
+| **分辨率** | 一句话几十个词 | 一张检测用的图几十万像素 | 全局注意力按 token 数平方涨，算不起 |
 
-图像金字塔又不同：它对输入图像建立多个尺寸版本，可能分别经过模型。三者分别是“多个输入尺寸”“一个骨干内部的不同尺度表示”“输出表示之间的融合”。在论文表格中把它们都写成multi-scale，会隐藏很大的计算与协议差异。
+解决方案一句话：*compute self-attention locally within non-overlapping windows … The number of patches in each window is fixed, and thus the complexity becomes linear to image size.* 窗口里的 patch 数固定，复杂度就从平方变成线性。
 
-**跟着算：224图像的两种初始网格。** 224×224输入，P16生成14×14=196个patch；P4生成56×56=3136个patch。不加CLS时，全局单头分数项数分别是$196^2=38,416$和$3136^2=9,834,496$，比值256。
+> **💡 为什么不用"滑动窗口"**
+>
+> 论文第 2 页有一个重要的工程判断。以前的局部注意力方法（Ramachandran 2019 等）给**每个像素**一个以它为中心的窗口，叫滑动窗口。数学上很自然，但每个 query 的 key 集合都不一样，GPU 上没法批量算，很慢。Swin 用的是**不重叠的固定窗口**：同一个窗口里所有 query 共享同一组 key，49 个 query 对 49 个 key 就是一次标准的矩阵乘法，和普通注意力的实现完全一样。表 5 会看到两者速度差 4 倍。"移位"是为了弥补固定窗口的缺点（窗口之间不通信）而加的。
 
-如果P4网格使用7×7窗口，窗口数$(56/7)^2=64$，每个窗口49个位置，单头总分数项$64\times49^2=153,664$。它仍多于P16的全局单头分数，但比P4的全局分数少64倍。比较必须锁定网格和通道，不能把不同输入粒度的两个数直接当作全模型加速比。
+#### 图 2　移位窗口
 
-## 二、窗口注意力：先把索引写对
+*Figure 2. An illustration of the shifted window approach for computing self-attention in the proposed Swin Transformer architecture. In layer l (left), a regular window partitioning scheme is adopted, and self-attention is computed within each window. In the next layer l + 1 (right), the window partitioning is shifted, resulting in new windows. The self-attention computation in the new windows crosses the boundaries of the previous windows in layer l, providing connections among them.*
 
-**用一个轴清单理解窗口张量。** 设窗口边长$M$，$H,W$都能整除$M$。窗口数$n_w=HW/M^2$，每窗位置数$T_w=M^2$。将所有图像的所有窗口合并进一个临时轴，attention输入为$(Bn_w)\times T_w\times C$。
+![图 2 · 移位窗口](./images/paper-swin-fig2-shift.png)
 
-临时轴并非真正的新图像batch：不同窗口仍属于同一原图，结束后要按原索引拼回。某些实现将其写为$B_*$。此时Q/K/V计算可以共用矩阵，但softmax只沿各窗自己的key轴归一化，**不会让不同窗口混在同一softmax里**。
+**🖼 逐元素图解**
 
-多头数记作$h$，每头宽度$d=C/h$，要求整除。每头Q/K/V形状为$B_*\times h\times T_w\times d$，分数为$B_*\times h\times T_w\times T_w$。特别注意$h$是头数，$H$是网格高度。
+- **左图 Layer l**：8×8 的 patch 网格（灰色小格），用红线分成 2×2 = 4 个窗口，每个窗口 4×4 个 patch。注意力只在每个红框内算。
+- **右图 Layer l+1**：红线往右下各移了 2 格（窗口大小的一半），变成 3×3 = 9 个窗口，大小不等：中间一个 4×4，边上的 2×4 或 4×2，角上的 2×2。
+- **关键观察**：右图中间那个 4×4 窗口横跨了左图四个窗口的交界处。左图里被红线隔开、不能互相看的两个相邻 patch，在右图里落进了同一个窗口。**两层一叠，信息就跨过了窗口边界。**
 
-**partition为什么不能直接reshape。** 将BHWC拆成六轴：
+**跟着算：4×4 小图、窗口 2×2、移位 1 格。** 把 patch 按行编号 1 到 16。第 l 层的四个窗口是 {1,2,5,6}、{3,4,7,8}、{9,10,13,14}、{11,12,15,16}。第 l+1 层移位 1 格后，中间那个窗口是 {6,7,10,11}：6 和 7 在上一层分属左上、右上两个窗口，现在能互相看了。但移位后边上会出现 2×1、1×2、1×1 的小窗口（比如右上角只有 {8} 一个 patch 的窗口和 {4} 的窗口）：一共 9 个大小不一的窗口，批量计算很麻烦。图 4 讲怎么解决。
 
-$$
-(B,H/M,M,W/M,M,C).
-$$
+### 🖊 本模块练习
 
-这里轴次序依次是图像、窗口行、窗内行、窗口列、窗内列、通道。为了让一个窗口的元素连续，需要交换窗内行和窗口列，变为$(B,H/M,W/M,M,M,C)$，再合并前三轴，得到$(Bn_w,M,M,C)$。
+1. ★ 224 的图，ViT 用 16×16 的块、Swin 用 4×4 的块，token 数各是多少？如果都做全局注意力，分数矩阵的元素数差多少倍？
 
-若只reshape为$(Bn_w,M^2,C)$，连续内存可能把一整条原图行切成片段，无法保证每组是二维方窗。这类错误shape完全合法，网络也能运行，却改变了空间归纳偏置。先用位置编号图，而非随机噪声，验证索引是最容易的办法。
+<details><summary>解析</summary>
 
-**跟着算：4×4图的四个2×2窗口。** 原图位置值按行写为：
+ViT：14×14 = 196；Swin 第一级：56×56 = 3136，是 16 倍。全局注意力的分数矩阵是 token 数的平方：$3136^2/196^2=256$ 倍。这就是 Swin 不能用全局注意力的原因：第一级一张图一个头的分数矩阵就有 980 万个数。
 
-$$
-X=\begin{bmatrix}
-1&2&3&4\\5&6&7&8\\9&10&11&12\\13&14&15&16
-\end{bmatrix}.
-$$
+</details>
 
-正确窗口序列是$[1,2,5,6]$、$[3,4,7,8]$、$[9,10,13,14]$、$[11,12,15,16]$。直接把原行优先的一维序列每4项一组，会得到$[1,2,3,4]$等，形成横条而非2×2窗口。
+2. ★ 为什么说窗口注意力的复杂度"和图像面积成线性"？
 
-每窗内$(a,b)$仍按$aM+b$排列。这里所有数只是空间身份证，不是实际learned feature。加上多通道和多图后，位置身份与图像身份都要保持。
+<details><summary>解析</summary>
 
-**reverse与反向传播：重排本身不丢信息。** reverse将窗口轴拆回$(B,H/M,W/M,M,M,C)$，交换相应轴，再合并为BHWC。只要尺寸和排序一致，应满足$\operatorname{reverse}(\operatorname{partition}(X))=X$。
+窗口固定 M×M = 49 个 patch。图像面积翻倍，patch 数 N 翻倍，窗口数也翻倍，但每个窗口的计算不变（49×49 的分数矩阵），所以总量翻倍：线性。全局注意力则是 N 翻倍、分数矩阵四倍：平方。论文的公式 (1)、(2) 会精确写出。
 
-把全部元素展平成向量，partition可视作置换矩阵$\Pi$：$u=\Pi x$。它每行、每列恰有一个1，因此$\Pi^{-1}=\Pi^\top$。给定输出梯度$g_u$，输入梯度是$g_x=\Pi^\top g_u$，也就是把梯度沿相反索引放回。
+</details>
 
-partition不做平均，不做投影，没有可训练参数。重复选取或遗漏一个位置则已不是置换：反向可能需要梯度累加，或某些输入梯度永远为0。因此“还原后的shape正确”不足够，还应检查元素值和唯一覆盖。
+3. 固定窗口和滑动窗口在"每个 query 看谁"上有什么不同？为什么前者在 GPU 上快得多？
 
-**W-MSA怎样计算一个窗口。** 对每窗$X_w\in\mathbb R^{M^2\times C}$，计算三个投影，拆分多头，每头为：
+<details><summary>解析</summary>
 
-$$
-A=\operatorname{softmax}\left(\frac{QK^\top}{\sqrt d}+B_{\rm rel}\right),
-\qquad U=AV.
-$$
+滑动窗口：每个 query 以自己为中心开一个窗口，相邻 query 的 key 集合不同。固定窗口：同一窗口里 49 个 query 共用同一组 49 个 key。后者可以把一个窗口的 Q、K 各排成 49×d 的矩阵，一次矩阵乘法算完，和标准注意力的高效实现完全一样；前者每个 query 要单独取 key，没法批量。表 5 测出 4 倍以上的速度差。
 
-$B_{\rm rel}$是与相对位置有关的加性分数，本讲稍后逐项推导。softmax在每个query的$M^2$个key上归一化；最终拼接各头并经输出投影$W_O$恢复$C$维。
+</details>
 
-同一窗口内所有query拥有相同的候选key集合，但权重依内容不同。不同窗口使用同一组投影参数与相对bias规则，却没有本层直接交互。**参数共享不等于输入位置彼此可见**，这点也适用于卷积与FFN。
+4. 图 2 右图里，移位后一共有几个窗口？各是什么形状？
 
-**从矩阵乘法推导窗口复杂度。** 单头$QK^\top$和$AV$各需$M^4d$个MAC。乘头数$h$后，每窗是$2M^4C$；乘$n_w=N/M^2$后，是$2NM^2C$。Q/K/V与输出投影是$4NC^2$，所以：
+<details><summary>解析</summary>
 
-$$
-\operatorname{MAC}_{\rm WMSA}=4NC^2+2NM^2C.
-$$
+9 个：1 个 4×4（中间）、4 个 4×2 或 2×4（四条边）、4 个 2×2（四角）。窗口数从 4 变 9，而且大小不一，不能直接批量。这就是图 4 "循环移位"要解决的问题。
 
-全局attention则是$4NC^2+2N^2C$。若$M,C$固定，窗口项随$N$线性增加。但增大窗口、增加通道、改变深度时，不能继续把这些变量当常数。FFN隐藏宽$4C$还会加入$8NC^2$。
+</details>
 
-本讲MAC将一次乘加计为一个单位，不包含softmax、LN、bias加法、数据重排、激活和归约。GPU运行时间还受内存访问、kernel启动、并行粒度和融合影响，因此这些公式是运算账本，不是计时结果。
+---
 
-**窗口变大，代价增加在哪里。** 固定$N,C$，窗口边长$M$加倍，每窗位置增4倍、窗口数降为1/4。单窗分数项增16倍，所有窗的分数项最终增4倍；投影与FFN位置数不变。
+`Part 2 · Swin 论文第 3—4 页`
 
-当$C$很大时，$12NC^2$可能占block主要MAC，因此只看attention分数减少比例，会夸大全block的下降比例。又当小窗口产生很多小矩阵时，重排开销可能显著；大窗口可能更有利于某些矩阵kernel。需要实际测量。
+## 二、图 3 与公式 (1)–(3)：整体架构
 
-窗口也影响交互范围：7×7的token窗口在stride4阶段跨约28×28输入像素，在stride16阶段跨约112×112像素。这里是索引跨度；前层混合以后，完整依赖可能更大。
+#### 图 3　四个 stage
 
-**跟着算：第一stage的账本和单矩阵内存。** $N=3136,C=96,M=7$时，attention投影为$4\times3136\times96^2=115,605,504$ MAC；交互项为$2\times3136\times49\times96=29,503,488$，合计145,108,992。加$8NC^2$的FFN后，一个block为376,320,000。
+*Figure 3. (a) The architecture of a Swin Transformer (Swin-T); (b) two successive Swin Transformer Blocks (notation presented with Eq. (3)). W-MSA and SW-MSA are multi-head self attention modules with regular and shifted windowing configurations, respectively.*
 
-3头、B1、FP16时，所有窗口的一份分数矩阵占$153,664\times3\times2=921,984$字节，即0.879272MiB；全局为56.273438MiB。它们比值64，但整个block的MAC和训练峰值显存都不按64倍缩小。训练还保存Q/K/V、FFN中间量、梯度与优化器状态。
+![图 3 · Swin-T 架构与两个连续的块](./images/paper-swin-fig3-arch.png)
 
-**零QK的平均例子揭示窗口边界。** 令所有QK分数和相对bias都为0，则每个位置对同窗4个值均匀加权。算例B的窗口输出分别是3.5、5.5、11.5、13.5，每个值复制到对应四个位置：
+**🖼 逐元素图解**
 
-$$
-Y_{\rm W}=\begin{bmatrix}
-3.5&3.5&5.5&5.5\\3.5&3.5&5.5&5.5\\
-11.5&11.5&13.5&13.5\\11.5&11.5&13.5&13.5
-\end{bmatrix}.
-$$
+**(a) 从左到右是数据流，每个箭头上标着张量形状：**
 
-重复很多相同分区的窗口attention，本层依赖仍被四个区域隔开。窗内FFN和逐位置LN无法单独打破这个分隔；残差保留自身值也不会创造新跨窗边。改变分区或进行merge，才可能改变依赖图。
+| 模块 | 输出形状 | 它做了什么 |
+|---|---|---|
+| Images | $H\times W\times3$ | 输入 |
+| Patch Partition | $\frac H4\times\frac W4\times48$ | 切成 4×4 的块，每块 4×4×3 = 48 个数拉成一行。和 ViT 一样，只是块小了 |
+| Linear Embedding | $\frac H4\times\frac W4\times C$ | 48 → C 的线性投影，Swin-T 的 C = 96 |
+| Stage 1：Swin Block ×2 | $\frac H4\times\frac W4\times C$ | 两个块，形状不变 |
+| Patch Merging | $\frac H8\times\frac W8\times2C$ | **把 2×2 的四个相邻 patch 合成一个**：空间减半、通道翻倍 |
+| Stage 2：×2 | $\frac H8\times\frac W8\times2C$ | |
+| Patch Merging + Stage 3：×6 | $\frac H{16}\times\frac W{16}\times4C$ | Swin-T 最深的 stage 在这里 |
+| Patch Merging + Stage 4：×2 | $\frac H{32}\times\frac W{32}\times8C$ | |
 
-## 三、移位窗口：跨窗连接与真实边界
+四个 stage 的输出分辨率正好是 stride 4/8/16/32，通道 C/2C/4C/8C，**和 ResNet 的四个 stage 一一对应**。这就是它能直接替换 ResNet 接 FPN 的原因。
 
-固定窗口算得省，却把窗边的两个邻居隔开。接下来只改分组边界，看它们怎样在第二层交换信息；循环移位引入的伪邻居必须靠mask排除。
+**(b) 两个连续的块**，自下而上：$z^{l-1}$ → LN → **W-MSA** → ⊕ → LN → MLP → ⊕ → $z^l$ → LN → **SW-MSA** → ⊕ → LN → MLP → ⊕ → $z^{l+1}$。和 ViT 的块唯一的区别是把 MSA 换成了 W-MSA（规则窗口）和 SW-MSA（移位窗口），**两种块成对交替出现**，所以每个 stage 的块数都是偶数（2、2、6、2）。
 
-**shift移动的是分组边界。** 在相邻block间，把窗口边界沿两轴移动$s$，常取$s=\lfloor M/2\rfloor$。新窗覆盖上一层不同窗的一部分，让已有信息继续传播。它与对每个像素建立一个不同的滑动窗口不相同：同一个新窗内，query仍共享key集合。
+#### 公式 (3)　两个块的数学
 
-4×4、M2、s1的真实移位分组可沿单轴写成$\{0\}$、$\{1,2\}$、$\{3\}$。两轴取笛卡尔积，得到角上1格、边上2格、中间4格的九组。这些小边界组不能为了凑齐窗口，把图像另一侧当邻居。
+![公式 (3)](./images/paper-swin-eq3.png)
+
+$$
+\hat{\mathbf z}^l=\text{W-MSA}(\mathrm{LN}(\mathbf z^{l-1}))+\mathbf z^{l-1},\quad
+\mathbf z^l=\mathrm{MLP}(\mathrm{LN}(\hat{\mathbf z}^l))+\hat{\mathbf z}^l,
+$$
+$$
+\hat{\mathbf z}^{l+1}=\text{SW-MSA}(\mathrm{LN}(\mathbf z^l))+\mathbf z^l,\quad
+\mathbf z^{l+1}=\mathrm{MLP}(\mathrm{LN}(\hat{\mathbf z}^{l+1}))+\hat{\mathbf z}^{l+1}.
+$$
 
-算法会用循环roll把这些组装入规则2×2窗口，并通过mask拆开虚假的边界连接。这是“规则计算容器”和“真实允许的空间组”两层概念；混淆两者，是移位窗口最常见的理解障碍。
+和第 12 讲 ViT 的公式 (2)(3) 逐项对照：Pre-LN、残差、GELU MLP（宽 4C）全部相同；**唯一的改动是注意力的候选集合从"全部 token"变成"同一窗口内的 token"**，并且奇数块用规则窗口、偶数块用移位窗口。
 
-**循环roll的确切方向。** 沿两轴roll$(-s)$，移动后的坐标$(y,x)$读取原图$((y+s)\bmod H,(x+s)\bmod W)$。负号不是删去边界：越出原图的索引通过取模绕到另一侧。处理后roll$(+s)$放回原坐标。
+#### 公式 (1)(2)　复杂度为什么从平方变线性
 
-算例B在s1时变成：
+![公式 (1)(2)](./images/paper-swin-eq1-2.png)
 
 $$
-X'=\begin{bmatrix}
-6&7&8&5\\10&11&12&9\\14&15&16&13\\2&3&4&1
-\end{bmatrix}.
+\Omega(\text{MSA})=4hwC^2+2(hw)^2C,\qquad
+\Omega(\text{W-MSA})=4hwC^2+2M^2hwC.
 $$
 
-左上窗口$[6,7,10,11]$是真实相邻的中间区域；右上$[8,5,12,9]$把左右边缘拼到一起。后者只是计算容器，不能无mask地互相读。roll是置换，反向用逆roll，既不额外学参数，也不天然阻止跨边界信息。
+| 项 | 来自哪里 | 全局 MSA | 窗口 W-MSA |
+|---|---|---|---|
+| $4hwC^2$ | Q、K、V、输出四个 $C\times C$ 投影，每个 token 各算一次 | 相同 | 相同 |
+| 第二项 | $QK^{\top}$ 和 $AV$ 两次"token 对 token"的乘法 | 每个 token 对全部 $hw$ 个：$2(hw)^2C$ | 每个 token 只对窗内 $M^2$ 个：$2M^2hwC$ |
 
-![原网格、负向循环移动与计算区域编号，展示真实允许连接](images/window-shift.svg)
+**跟着算：stage 1 的账本。** Swin-T 第一级 $hw=3136$、$C=96$、$M=7$：
 
-**九区域mask怎样从切片产生。** 对每一轴分三段：$[0,H-M)$、$[H-M,H-s)$、$[H-s,H)$；宽轴同理。九个矩形赋不同区域编号。**按循环移动后的计算坐标生成这张区域图，不再对它做一次与特征相同的roll**，然后用同一partition拆成规则窗口。
+- 投影项：$4\times3136\times96^2=115{,}605{,}504$ MAC。
+- 全局交互项：$2\times3136^2\times96=1{,}888{,}223{,}232$。
+- 窗口交互项：$2\times49\times3136\times96=29{,}503{,}488$。
 
-在每个窗口中，令区域标签为$\ell_i$，加性mask定义为：
+窗口把交互项砍掉 64 倍（$3136/49$）。加上 MLP 的 $8hwC^2=231{,}211{,}008$，一个 W-MSA 块约 3.76 亿 MAC，其中注意力交互只占 8%。
 
-$$
-\mathcal M_{ij}=
-\begin{cases}0,&\ell_i=\ell_j,\\-\infty,&\ell_i\ne\ell_j.\end{cases}
-$$
+> **⚠️ 窗口变大，代价增加在哪里**
+>
+> 固定 $hw$ 和 $C$，把 M 从 7 变 14：每窗 patch 数四倍、窗口数四分之一，交互项 $2M^2hwC$ 增四倍；投影和 MLP 不变。所以总量不是四倍，是"交互项四倍 + 其余不变"。另外作者脚注说明：$h,w$ 不能被 M 整除时在右下 padding，复杂度要按 padding 后的尺寸算。
 
-不同编号只阻止循环拼接产生的假邻接；编号相同的中心新窗仍可跨越上一层旧窗边界。若误把每个旧窗身份都拿来mask，就把希望新增的跨窗连接再次删除。区域图里的编号大小没有语义，只用来比较相等。
+#### 跟着算　窗口划分不是 reshape
 
-**跟着算：区域图、窗口标签与允许矩阵。** 4×4/M2/s1的区域编号为：
+把 $B\times H\times W\times C$ 的特征图切成窗口，要先拆轴再换轴：
 
-$$
-L=\begin{bmatrix}
-0&0&1&2\\0&0&1&2\\3&3&4&5\\6&6&7&8
-\end{bmatrix}.
-$$
+```
+(B, H, W, C)
+→ (B, H/M, M, W/M, M, C)        拆：行 = 窗口行 × 窗内行；列同理
+→ (B, H/M, W/M, M, M, C)        换：把两个"窗口"轴放到前面
+→ (B·H/M·W/M, M·M, C)           合：所有窗口排成一个批，每窗 M² 个 token
+```
 
-partition得到$[0,0,0,0]$、$[1,2,1,2]$、$[3,3,6,6]$、$[4,5,7,8]$。第二窗允许关系是：
+4×4 的图、M = 2，正确的第一个窗口是 {1,2,5,6}。如果直接把 16 个数按顺序每 4 个一组，第一组是 {1,2,3,4}，那是整图第一行，错了。这和第 12 讲 patchify 的错误一模一样。逆操作（window reverse）按同样的轴顺序放回去，`reverse(partition(X)) == X`，没有参数、不丢信息。
 
-$$
-E=\begin{bmatrix}
-1&0&1&0\\0&1&0&1\\1&0&1&0\\0&1&0&1
-\end{bmatrix}.
-$$
+**零分数的平均例子。** 让 Q、K 全零（所有分数为 0），注意力就是窗内 4 个值的平均。4×4 编号图的四个窗口平均值是 3.5、5.5、11.5、13.5，每个值填回它那个窗口的 4 个位置。这张"输出图"直接显示了窗口的边界：窗内一样、窗间不同。模块七的程序用它核对分窗索引。
 
-移动后的值是$[8,5,12,9]$，所以8只与12平均，5只与9平均。第三窗两行分别成组，第四窗只允许对角自身；第一窗全部可见。对角始终允许，避免有效query成为全空行。
+### 🖊 本模块练习
 
-**为什么不能把mask乘在softmax之后就结束？** 若先在4个key上softmax，再把两个不允许项乘0，总权重通常小于1。零分数的例子原权重每项1/4，留下两项后总和1/2，输出被无意缩小。正确masked softmax只在允许key上归一化，因此两项各1/2。
+5. ★ Swin-T 四个 stage 的输出形状是什么（224 输入）？和 ResNet-50 的哪几层对应？
 
-可以在softmax前用$-\infty$排除，或对允许项指数求和；也可以事后mask并重新归一化，但需安全处理分母和全空行。不能把“禁止项输出为0”当作充分条件，行归一化同样重要。
+<details><summary>解析</summary>
 
-对padding query，可能根本不存在真实输出。此时应专门定义其处理，而非强行套有效query至少看自己的逻辑。[第11讲](../vision-11-attention-transformer/)讨论的全空行数值问题仍适用。
+56×56×96 → 28×28×192 → 14×14×384 → 7×7×768，stride 4/8/16/32。对应 ResNet-50 的 C2–C5（256/512/1024/2048 通道）。所以 Swin-T 可以不改检测器代码直接替换 ResNet-50 做骨干，FPN 接这四级输出。
 
-**把移位结果放回原图，逐格核对。** 继续零分数、uniform attention例子。左上移动窗输出8.5；右上两个子组输出10和7；左下两个子组输出14.5和2.5；右下只读自身。reverse后roll$(+1)$，得到：
+</details>
 
-$$
-Y_{\rm SW}=
-\begin{bmatrix}
-1&2.5&2.5&4\\7&8.5&8.5&10\\
-7&8.5&8.5&10\\13&14.5&14.5&16
-\end{bmatrix}.
-$$
+6. ★ 把 $B\times H\times W\times C$ reshape 成 $(B\cdot HW/M^2)\times M^2\times C$ 得到的是窗口吗？
 
-注意这个结果直接对原图做SW计算，并未先执行W block。它只是隔离mask语义的例子；真实网络还有LN、投影、内容分数、FFN和残差。不要把uniform平均输出误认为Swin固定的滤波核。
+<details><summary>解析</summary>
 
-**跟着算：独立方法证明循环计算与裁剪窗口一致。** 在**原图坐标**给位置分组：
+不是。reshape 按内存顺序切，一个"窗口"会拿到一整行的连续 M² 个 patch。必须先把 H 拆成 (H/M, M)、W 拆成 (W/M, M)，再把两个窗口轴换到前面。4×4/M2 的例子：正确第一窗 {1,2,5,6}，reshape 得到 {1,2,3,4}。
 
-$$
-g(y,x)=\left(\left\lfloor\frac{y-s}{M}\right\rfloor,
-\left\lfloor\frac{x-s}{M}\right\rfloor\right).
-$$
+</details>
 
-只平均具有相同$g$的真实位置，不使用取模，不生成九区域mask。这个独立参考方法得到同一$Y_{\rm SW}$。实验一比较两种方法的全部16项，而非只比较中心一格。
+7. 一个 stage 里为什么块数总是偶数？
 
-这种对照比“把实现公式再写一遍”更有检查价值：一条路径采用循环容器与区域遮罩，另一条直接枚举裁剪的真实窗。如果符号或mask方向写错，两者会不同。
+<details><summary>解析</summary>
 
-**代码中的−100与数学上的−∞。** 作者Swin实现使用有限的大负数−100作为区域mask。正常尺度下，被遮项的指数权重非常小，但不是数学意义的严格0。两个分数$(0,-100)$，第二项质量约$3.72\times10^{-44}$；浮点类型可能把它下溢成0。
+因为 W-MSA 和 SW-MSA 成对交替。单独一个 W 块，窗口之间完全不通信；必须跟一个 SW 块才能跨窗。Swin-T 的 {2,2,6,2}、Swin-B 的 {2,2,18,2} 全是偶数。
 
-若某个不允许key原分数高达200，加−100后仍有100，甚至成为最大项。这个反例说明有限mask的正确性依赖分数尺度和数值约定，不能由“负100很大”推导无条件禁止。实验用精确排除来检查依赖图，另行展示有限mask反例。
+</details>
 
-工程上选择$-\infty$、类型最小值或固定常数，要考虑所用kernel、所有mask行、混合精度和export行为。记录实际实现即可，不应无声替换以后仍声称与原始路径完全一致。
+8. Swin-T stage 1 一个块里，注意力的交互项（$QK^{\top}$ 和 $AV$）占总 MAC 的比例大约是多少？
 
-**padding有两种问题：凑窗与保护有效位置。** $H,W$不是$M$倍数时，可以右边/下边补到$H'=\lceil H/M\rceil M$、$W'=\lceil W/M\rceil M$。这让partition合法，代价应按$H'W'$计算，而非仅按原有效位置数。
+<details><summary>解析</summary>
 
-补零不等于无影响。三个有效值1/2/3加一个0，在uniform attention下均值1.5；排除padding key则是2。即使补值起初为0，带bias的线性层、位置项、LN和后续层也可能让它不再为0。最后crop输出，不能撤销此前padding向有效query的影响。
+交互 29.5M，投影 115.6M，MLP 231.2M，合计约 376M，交互占 8%。所以窗口注意力之后，计算的大头又回到了投影和 MLP，和第 12 讲 ViT 在 224 下的情况一样。
 
-因此要区分shift边界mask和padding有效性mask。原固定尺寸路径与后续动态尺寸实现未必使用同一padding协议；可以有意让模型处理补齐特征，也可以严格屏蔽它们，但需要训练/推理一致并说明选择。不能把一个版本的规则自动归给所有Swin实现。
+</details>
 
-**两层W/SW的感受野是否已经全局。** 用图表示依赖：位置是节点，允许读key是一条边；下一层的节点依赖于它本层能读到的节点及这些节点先前的依赖集合。两层传播等价于集合并集，而不是把窗口尺寸简单相加。
+---
 
-4×4/M2例子中，W后SW的中心位置可依赖所有16个原位置；角位置仍只依赖其原W窗口的4个值。对于更大的网格，两层一般无法覆盖所有位置。“跨窗”与“所有位置两层都全局”是不同命题。
+`Part 3 · Swin 论文第 5 页`
 
-真实数值贡献还可能被attention权重、投影、残差和抵消削弱。允许的图路径给出潜在依赖范围，不能单靠图判断模型实际使用了哪些远处证据。更深传播与patch merging会继续扩大范围。
+## 三、图 4：移位窗口怎样批量计算
 
-**跟着算：两层平均和依赖支持。** 先得到$Y_{\rm W}$，再对它计算SW，结果为：
+模块一留下的问题：移位后有 9 个大小不一的窗口，没法批量算。最笨的办法是把小窗口 padding 成 4×4，但窗口数从 4 变 9，计算量 2.25 倍。Swin 的办法是**循环移位 + mask**。
 
-$$
-\begin{bmatrix}
-3.5&4.5&4.5&5.5\\7.5&8.5&8.5&9.5\\
-7.5&8.5&8.5&9.5\\11.5&12.5&12.5&13.5
-\end{bmatrix}.
-$$
+#### 图 4　循环移位
 
-实验一依次把16个输入设为单位基向量，读每个输出是否受影响。每格依赖数量为：
+*Figure 4. Illustration of an efficient batch computation approach for self-attention in shifted window partitioning.*
 
-$$
-\begin{bmatrix}4&8&8&4\\8&16&16&8\\8&16&16&8\\4&8&8&4\end{bmatrix}.
-$$
+![图 4 · 循环移位与 mask](./images/paper-swin-fig4-cyclic.png)
 
-这个uniform线性教学模型中，贡献均非负，所以可通过基输入确认支持；一般神经网络需要考虑局部Jacobian与数值阈值，不能把某个输入下的零梯度当作结构上永远不可达。
+**🖼 逐元素图解**
 
-## 四、相对位置与attention反传
+从左到右四步：
 
-![2×2窗口的相对位置索引、共享表及梯度累加](images/relative-bias.svg)
+1. **window partition（最左，淡色）**：移位后的 9 个窗口，边上和角上的那些标了 A、B、C：A 是右下角 1 个小块，B 是右边一条，C 是下边一条，中间是 4 个完整窗口的一部分。
+2. **cyclic shift（左二）**：把整张特征图**向左上方循环滚动**：从上面和左边滚出去的 A、B、C 从下面和右边补回来。现在特征图又能被规则地切成 4 个 M×M 的窗口了，窗口数不变。
+3. **masked MSA（中间）**：右下角那个窗口里同时装着 A、B、C 和一块中间区域，它们在原图上**根本不相邻**（A 原来在左上角，现在被拼到了右下角）。所以对这种"拼凑窗口"做注意力时要加 mask，禁止来自不同原区域的 patch 互相看。
+4. **reverse cyclic shift（最右）**：算完以后滚回去，A、B、C 回到原位。
 
-**相对bias表示哪个方向。** 窗口内query坐标为$(y_i,x_i)$，key为$(y_j,x_j)$，定义$\Delta y=y_i-y_j$、$\Delta x=x_i-x_j$。取值各在$[-(M-1),M-1]$。每头维护$(2M-1)\times(2M-1)$的可学习bias表。
+**一句话：循环移位是为了让"计算容器"保持规则（4 个 M×M 窗口，批量算），mask 是为了让"真实的邻居关系"保持正确（拼凑进同一容器的不同区域互不可见）。** 这两层概念分开，移位窗口就不难了。
 
-把差值平移到非负索引，行优先映射：
+![原网格、负向循环移动与计算区域编号](./images/window-shift.svg)
 
-$$
-\rho(i,j)=(\Delta y+M-1)(2M-1)+(\Delta x+M-1).
-$$
+**🖼 逐元素图解**
 
-然后$B^{(a)}_{ij}=\beta^{(a)}_{\rho(i,j)}$。表项加入QK分数，影响softmax的偏好；它不是对V加一个向量，也不是给每个token输入加绝对位置。改变query−key的方向会翻转bias表对应关系，加载权重时不能忽略。
+- **左格"原始网格"**：4×4 编号图，四种底色是第 l 层的四个规则窗口。
+- **中格"特征 roll(−1,−1)"**：向左上滚 1 格后的编号。新的左上 2×2 窗口是 {6,7,10,11}，正是图 2 里"跨过旧窗口边界"的那个中间窗口，四个 patch 在原图上真实相邻，可以互相看。新的右上窗口是 {8,5,12,9}：8 和 5 原来一个在最右、一个在最左，被循环拼到了一起，**不是真邻居**。
+- **右格"计算坐标的区域编号"**：给每个位置标它来自原图的哪一块（0 到 8 共 9 个区域）。**这张编号图是按滚动后的坐标直接生成的，不再滚一次。** 同一窗口里编号相同的才能互相看。
+- **下方两张卡片**：中心新窗四个编号都是 0，全部互见；右上容器编号是 1/2/1/2，只允许 8↔12、5↔9。
+- **底部**：mask 在 softmax **之前**加；算完 reverse 再 roll(+1,+1) 放回。
 
-**表、索引矩阵与广播各占多少。** M7时，每头bias表有$13^2=169$个参数；3头为507个。查表展开后的bias矩阵却有$3\times49\times49=7203$项。前者是独立可训练数，后者是重复引用的计算结果，不能把后者当参数量。
+#### 跟着算　mask 的三个细节
 
-索引矩阵$\rho$只有$M^2\times M^2$个整数，通常登记为buffer，不求梯度。训练时bias广播给所有图像和窗口，同一相对位移表项可以出现多次。不同block通常有自己的bias表，不能因为结构相同就把全网只计一份。
+**区域编号怎么来。** 每个轴分三段：$[0,H-M)$、$[H-M,H-s)$、$[H-s,H)$，s 是移位量（$\lfloor M/2\rfloor$），两轴组合成 9 个矩形，各给一个编号。4×4、M=2、s=1 的编号图是
 
-无shift和有shift的窗口都能使用相同的窗口内位置索引规则；shift的真实边界通过mask处理。bias不会替代mask：一个学得较低的bias仍可能留下不应存在的跨图像边缘路径。
+$$
+L=\begin{bmatrix}0&0&1&2\\0&0&1&2\\3&3&4&5\\6&6&7&8\end{bmatrix}.
+$$
 
-**跟着算：2×2窗口的完整相对索引。** 位置次序$(0,0),(0,1),(1,0),(1,1)$，M2，因此表长9。按query−key计算：
+按规则窗口切开得到四个窗口的标签：[0,0,0,0]、[1,2,1,2]、[3,3,6,6]、[4,5,7,8]。第一窗全部互见；第二窗允许矩阵是
 
 $$
-\rho=\begin{bmatrix}
-4&3&1&0\\5&4&2&1\\7&6&4&3\\8&7&5&4
-\end{bmatrix}.
+E=\begin{bmatrix}1&0&1&0\\0&1&0&1\\1&0&1&0\\0&1&0&1\end{bmatrix};
 $$
+
+第三窗两行各自成组；第四窗四个编号都不同，每个 patch 只能看自己。**对角线永远允许**，这样不会出现一行全被 mask 掉的空 softmax。
 
-对角均为4，表示零位移。左上query看右上key时差$(0,-1)$，索引3；反向差$(0,1)$，索引5。它们一般不是同一参数，因此可表达方向不对称。相同位移的多个位置对，如左上看右上、左下看右下，都引用3。
+**mask 加在 softmax 之前。** 标签不同的位置分数加 $-\infty$（代码里是 $-100$），softmax 时指数为 0，权重只在允许的 key 上归一化。如果先 softmax 再把禁止项乘 0，权重之和会小于 1：零分数例子里 4 个 key 各 1/4，删掉两个后只剩 1/2，输出被无故缩小一半。
 
-**相对bias的梯度为什么需要scatter-add。** 设分数梯度为$G_{ij}^{(w,a)}$，$w$遍历图像与窗口，$a$为head。因为多个分数引用同一表项，链式法则给出：
+**零分数的平均例子放回去。** 继续让所有分数为 0。右上容器 {8,5,12,9} 标签 [1,2,1,2]：8 和 12 平均得 10，5 和 9 平均得 7。四个窗口算完、reverse、roll(+1,+1) 放回原坐标，得到
 
 $$
-\frac{\partial L}{\partial\beta^{(a)}_r}
-=\sum_w\sum_{i,j:\rho(i,j)=r}G_{ij}^{(w,a)}.
+Y_{SW}=\begin{bmatrix}1&2.5&2.5&4\\7&8.5&8.5&10\\7&8.5&8.5&10\\13&14.5&14.5&16\end{bmatrix}.
 $$
 
-这个操作是按整数索引累加，不是直接把整个$M^2\times M^2$矩阵reshape成表。某些偏移出现多次；表项未被用到则梯度为0。若存在真实mask，对应禁止分数在精确masked softmax下梯度为0。
+对照原图：中间 2×2 是 {6,7,10,11} 的平均 8.5（跨了旧窗口边界）；四个角 1、4、13、16 只看自己；边上的 2.5 是 {2,3} 的平均、7 是 {5,9} 的平均。**每个位置的输出只混合了它在原图上的真实邻居**，循环拼接没有泄漏。模块七的程序用"直接在原图坐标按 9 个区域分组"的笨办法独立算一遍，两者逐格相等。
 
-所有分数加同一常数不改变softmax，因此每个有效query的分数梯度和为0。整个bias梯度表的和也应为0，前提是本例只通过attention使用这张表、没有额外正则项。实验二同时验证这个不变性与两个窗口的共享累加。
+> **⚠️ −100 不是 −∞**
+>
+> 作者代码用 $-100$ 做 mask。正常尺度下 $e^{-100}\approx3.7\times10^{-44}$，FP32 已经下溢成 0，效果等于 $-\infty$。但如果某个被禁止的位置原分数异常大（比如 200），加 $-100$ 后还是 100，会压过合法的 0 分 key。这在训练稳定时不会发生，调试异常时要记得这个有限值。
 
-**跟着算：一行softmax及其bias梯度。** 用两个可见key，$V=(2,6)$，分数均为0，因此$A=(1/2,1/2)$，输出$u=4$。只监督这个query，$L=u^2/2=8$，$g_u=4$，对权重梯度为$(8,24)$。
+> **💡 两层 W + SW 之后，感受野有多大**
+>
+> 不是"窗口大小加倍"那么简单。第 l 层每个 patch 看到同窗的 M² 个；第 l+1 层它看到移位窗里的 M² 个，而这些 patch 各自在上一层又看过各自的窗。4×4 小图的实验（模块七）：两层之后中心 4 格依赖全部 16 个输入，边上的依赖 8 个，角上只依赖 4 个。更大的图两层之后远未全局；跨 stage 的 patch merging 才让感受野快速扩大。
 
-softmax Jacobian产生：
+### 🖊 本模块练习
 
-$$
-g_s=A\odot\left(g_A-\sum_jA_jg_{A,j}\right)
-=\tfrac12(8-16,24-16)=(-4,4).
-$$
+9. ★ 循环移位之后右上角的窗口里装着原图最左和最右的 patch，为什么不能让它们互相看？mask 怎样防止？
 
-被引用的两个bias得到−4和4；下降更新会提高第二key的相对分数吗？实际上对第二bias减去正梯度，分数下降，因该key值更大、会提高当前平方loss；第一bias上升。这里目标是0，不是“总应该更关注大值”。对两个V的梯度都是2。
+<details><summary>解析</summary>
 
-**从输出一直回到窗口输入。** 对一头$U=AV$，上游$G_U$给出：
+因为它们在原图上隔着整张图的宽度，不是邻居；让它们互相看等于在图的左右边缘之间"连了一条线"，违背局部性的本意。mask 给每个位置标原区域编号，同一窗口里编号不同的位置对，分数加 −∞，softmax 后权重为 0。4×4 例子：右上容器标签 [1,2,1,2]，只允许 8↔12 和 5↔9。
 
-$$
-G_V=A^\top G_U,\qquad G_A=G_UV^\top.
-$$
+</details>
 
-逐行softmax得到$G_S$后：
+10. ★ "mask 只禁止编号不同的位置对"：那上一层不同窗口的两个 patch（比如 6 和 7）会被禁止吗？
 
-$$
-G_Q=G_SK/\sqrt d,\qquad G_K=G_S^\top Q/\sqrt d.
-$$
+<details><summary>解析</summary>
 
-若$Q=XW_Q,K=XW_K,V=XW_V$，输入贡献为：
+不会，也不应该。6 和 7 在移位后的中心窗口里编号都是 0（它们在原图上真实相邻）。移位窗口的目的就是让上一层被边界隔开的邻居通信；如果拿"旧窗口身份"做 mask，就把要建立的连接又切掉了。mask 判断的是"是不是被循环拼接凑到一起的"，不是"上一层是不是同一窗"。
 
-$$
-G_X=G_QW_Q^\top+G_KW_K^\top+G_VW_V^\top.
-$$
+</details>
 
-三条路径必须相加，不能只保留V路径。各投影矩阵梯度为$X^\top G_Q$等；输出投影要先处理：$G_{W_O}=U^\top G_Y$、$G_U=G_YW_O^\top$。多头各自反传，再按拆分的逆次序拼回；相对bias另行scatter-add。
+11. 先 softmax 再把禁止项乘 0，为什么不对？
 
-**将W/SW放进Swin V1的完整block。** V1采用Pre-LN，符号可写成：
+<details><summary>解析</summary>
 
-$$
-Z=X+\operatorname{DropPath}(\operatorname{WMSA}(\operatorname{LN}_1(X))),
-$$
+权重之和不再是 1。零分数例子：4 个 key 各 1/4，乘 0 去掉两个后总和 1/2，输出是正确值的一半。正确做法是在 softmax 前加 −∞，或者事后重新归一化。差一个系数会改变残差分支的尺度，训练会受影响。
 
-$$
-Y=Z+\operatorname{DropPath}(\operatorname{FFN}(\operatorname{LN}_2(Z))).
-$$
+</details>
+
+12. 4×4 小图、M=2，经过 W 块再 SW 块，角上的 patch 依赖几个输入？中心的呢？
+
+<details><summary>解析</summary>
+
+角上 4 个（它自己的旧窗口），中心 16 个（全部）。中心 patch 在 SW 层看中心窗的 4 个，这 4 个在 W 层各看过自己旧窗的 4 个，并集是 16。角上的 patch 在 SW 层只看自己，只能继承 W 层旧窗的 4 个。所以两层之后远非"全局"。
+
+</details>
 
-相邻block将WMSA换成SWMSA。FFN通常是$C\to4C\to C$与GELU，逐位置作用；它不自己产生新的空间边。LN沿每个位置的通道轴，而不是跨一个窗口49个位置一起标准化。
+---
 
-stage内部保持$H,W,C$不变，stage之间merge才改变尺寸。DropPath、attention dropout、FFN dropout和position选项分别核对，不能看到某一配置有0值就认定所有模型没有该机制。残差和Pre-LN的链式反传见第11讲，本讲实验二隔离attention以便逐参数检查。
+`Part 4 · Swin 论文第 5 页、第 8 页`
 
-## 五、Patch merging与完整分层账本
+## 四、公式 (4)、Patch Merging 与模型账本
 
-**merging的四格拼接顺序。** 从BHWC网格读取四组：$X_{00}$为偶行偶列、$X_{10}$为奇行偶列、$X_{01}$为偶行奇列、$X_{11}$为奇行奇列。V1作者代码按：
+#### 公式 (4)　相对位置偏置
 
+*Relative position bias. In computing self-attention, we follow [49, 1, 32, 33] by including a relative position bias $B\in\mathbb R^{M^2\times M^2}$ to each head in computing similarity:*
+
+![公式 (4)](./images/paper-swin-eq4-bias.png)
+
 $$
-X_{\rm cat}=[X_{00};X_{10};X_{01};X_{11}]
-\in\mathbb R^{B\times(H/2)\times(W/2)\times4C}
+\mathrm{Attention}(Q,K,V)=\mathrm{SoftMax}\bigl(QK^{\top}/\sqrt d+B\bigr)V .
 $$
 
-拼接，然后在4C通道上LN，再用无bias线性矩阵$W_m\in\mathbb R^{4C\times2C}$投影。这里拼接沿通道，不是空间上先平均四格。
+Swin **不用** ViT 那种加在输入上的绝对位置表，而是在注意力分数上加一个偏置 B，B 只取决于 query 和 key 在窗口内的**相对位移**。窗口 M×M，相对位移每轴在 $[-(M-1),M-1]$ 之间，所以只需要一张 $(2M-1)\times(2M-1)$ 的可学习小表 $\hat B$，B 的每个元素从里面查。
 
-注意顺序是00、10、01、11，与一般二维patch行优先00、01、10、11不同。两者都能表达有效架构，但对应权重行的解释不同；若换顺序并且不换权重，就改变模型函数。四格拼接本身可逆，降维投影通常不可逆。
+![相对偏置：少量参数，多次引用，反传累加](./images/relative-bias.svg)
 
-**4C上的LN到底算哪些数。** 对一个合并位置的向量$x\in\mathbb R^{4C}$，计算$\mu=\sum_jx_j/(4C)$，$\sigma=\sqrt{\sum_j(x_j-\mu)^2/(4C)+\epsilon}$，输出$z_j=\gamma_j(x_j-\mu)/\sigma+\beta_j$。
+**🖼 逐元素图解**
 
-四个原位置的通道一起参与这个位置的LN统计。因此它不同于先分别LN每个原位置、再拼接；后者有四套各自的均值方差。V1是先拼接再LN再reduce，V2的merge则先reduce再对2C做LN，次序稍后对比。
+- **左格"窗内坐标与序列次序"**：M = 2 的窗口，四个位置 (0,0)、(0,1)、(1,0)、(1,1)。
+- **中格"4×4 位置对索引"**：第 i 行第 j 列是 query i 对 key j 的位移在小表里的下标。位移 (Δy, Δx) 各加 M−1 变成非负，再按 $(Δy+M-1)(2M-1)+(Δx+M-1)$ 展平成一维。对角线全是 4（位移 (0,0)），往右看一格是 3（Δx = −1），往左看是 5。
+- **右蓝卡"可学习表：9×heads"**：M = 2 时 $(2M-1)^2=9$ 项，每头一份。同一位移共用一项；索引矩阵是整数缓冲区，不学。
+- **下方橙卡"梯度不是 reshape"**：一个表项被很多位置对引用，它的梯度是所有引用处分数梯度之和（scatter-add）。
 
-LN存在$\epsilon$和affine参数，不应把它当“简单除以标准差”。$\gamma,\beta$各有4C个参数，所以merge参数为$8C^2+8C$。若实现设置不同bias/affine，账本必须跟着变化。
+**跟着算：M = 7 时各有多少。** 小表 $13^2=169$ 项，3 个头 507 个参数。展开后的 B 是 $49\times49\times3=7203$ 个数，但那是查表结果不是参数。**一个表项的梯度**：窗内所有位移相同的位置对、所有窗口、所有图的分数梯度累加。单行例子：两个可见 key，$V=(2,6)$，分数全 0，$A=(1/2,1/2)$，输出 4；损失 $u^2/2$，$g_u=4$，对两个分数的梯度分别是 $4\cdot\tfrac12\cdot(2-4)=-4$ 和 $4\cdot\tfrac12\cdot(6-4)=4$；这两个梯度分别加到它们各自位移对应的表项上。
 
-**跟着算：C1时的merge手算。** 2×2原值$\begin{bmatrix}1&2\\3&4\end{bmatrix}$，拼接向量为$(1,3,2,4)$。设$\epsilon=0,\gamma=1,\beta=0$，均值2.5、方差1.25，因此：
+#### 表 4　移位和相对偏置各值多少
 
-$$
-z=(-1.5,0.5,-0.5,1.5)/\sqrt{1.25}.
-$$
+*Table 4. Ablation study on the shifted windows approach and different position embedding methods on three benchmarks, using the Swin-T architecture. w/o shifting: all self-attention modules adopt regular window partitioning, without shifting; abs. pos.: absolute position embedding term of ViT; rel. pos.: the default settings with an additional relative position bias term.*
 
-选$W_m=\begin{bmatrix}1&0\\0&1\\0&0\\0&0\end{bmatrix}$，输出前两项，约$( -1.341641,\ 0.447214)$。这是方便演算的特定权重，真实merge会学习全部行；它仍体现“先跨四格标准化、再降维”的步骤。
+![表 4 · 移位窗口与位置编码消融](./images/paper-swin-table4-ablation.png)
 
-**token减四倍、通道翻倍，信息是否无损。** merge前标量数$HWC$；merge后$(H/2)(W/2)(2C)=HWC/2$，总标量减半。$4C\to2C$矩阵rank至多2C，至少存在2C维线性零空间，所以无法对任意4C输入建立一一映射。
+**🖼 逐元素图解**
 
-这不意味着任务信息必定丢失：学习可能保留对目标有用的摘要。但被压缩的细纹理、相位和局部差异，不能仅由后续上采样保证找回。稠密头使用浅层skip或多尺度特征，部分原因就在这里。
+- **三组列**：ImageNet top-1/top-5、COCO 的 AP box / AP mask、ADE20K 的 mIoU。后两组是稠密任务。
+- **上两行：移位**。不移位 80.2 / 47.7 / 43.3；移位 81.3 / 50.5 / 46.1。分类 +1.1，**检测 +2.8，分割 +2.8**。稠密任务受益更大，因为它们更依赖跨窗口的空间关系。
+- **下五行：位置编码**。无位置 80.1 / 49.2 / 43.8；绝对位置 80.5 / 49.0 / 43.2；绝对 + 相对 81.3 / 50.2 / 44.0；相对但不带 $QK^{\top}$ 项 79.3；相对（默认）81.3 / 50.5 / 46.1。
 
-LN还引入另一类不变性，例如相同常数平移会被去均值消除。严格讨论可逆性时应看完整函数，而非只看线性投影。我们不把某个特定输入的压缩效果等同于所有自然图像的损失大小。
+**读法：** 相对偏置比无位置高 +1.2 / +1.3 / +2.3；**加上绝对位置反而掉**（COCO −0.3，ADE −2.1）。作者的解释：绝对位置破坏了平移不变性，而检测分割正需要"物体挪到哪都一样"。这和第 12 讲 ViT 表 8 的结论相反：ViT 分类里各种位置编码差不多，Swin 在稠密任务上相对位置明显更好。
 
-**跟着算：包含LN的明确碰撞。** 取两个拼接向量$a=(1,3,2,4)$、$b=(1,3,4,2)$。它们数值不同，但均值和方差相同，前两项也相同。使用算例I的selector投影，LN后前两项一致，所以merge输出完全相同。
+#### 跟着算　Patch Merging
 
-对应原2×2网格分别为$\begin{bmatrix}1&2\\3&4\end{bmatrix}$与$\begin{bmatrix}1&4\\3&2\end{bmatrix}$。这是可检查的多对一例子，不依赖“维度变少一定直观丢信息”的口头判断。它不证明真实训练权重恰好忽略这两格；它证明架构的所有输入无损保证不存在。
+每个 stage 结束时，把 2×2 相邻的四个 patch 合成一个：
 
-**merging的梯度怎样放回四个位置。** 设输出梯度$G_Y$，线性步给出$G_{W_m}=Z^\top G_Y$和$G_Z=G_YW_m^\top$。对LN，令$\widehat x=(x-\mu)/\sigma$、$v=G_Z\odot\gamma$，逐位置：
+```
+取四组：X00 偶行偶列，X10 奇行偶列，X01 偶行奇列，X11 奇行奇列   各 (H/2, W/2, C)
+拼接：  [X00; X10; X01; X11]                                       (H/2, W/2, 4C)
+LN(4C) → 无偏置线性层 4C → 2C                                       (H/2, W/2, 2C)
+```
 
-$$
-G_x=\frac{v-\operatorname{mean}(v)-\widehat x\operatorname{mean}(v\odot\widehat x)}{\sigma}.
-$$
+![四 stage 与 patch merging：空间减四倍、通道翻倍](./images/pyramid-merge.svg)
 
-这个表达使用前向含$\epsilon$的$\sigma$，与LN的实际导数一致。affine梯度是对合并位置求和的$G_\gamma=\sum G_Z\odot\widehat x$、$G_\beta=\sum G_Z$。
+**🖼 逐元素图解**
 
-将$G_x$的四段C通道按照00/10/01/11散回原网格，就是拼接的逆索引。各段都可能得到梯度，即使输出只有2C宽；降维不意味着只训练其中两格。实验三检查输入、merge矩阵和LN affine全部56个教学标量。
+- **上排四张卡片**：Swin-T 四个 stage 的输出 56×56×96、28×28×192、14×14×384、7×7×768，stride 4/8/16/32，块数 2/2/6/2。
+- **下排**：2×2 的格子 00/01/10/11 → 橙卡"拼接顺序 [00;10;01;11]，先 LN 4C" → 蓝卡"无偏置线性 4C→2C，总标量降到一半"。
+- **底部**：拼接可逆，完整 merge 不是无损；Swin V2 改成先 reduce 再 LN 2C。
 
-![Swin四stage形状与00/10/01/11拼接后归一化投影](images/pyramid-merge.svg)
+**单通道手算。** 2×2 原值 $\begin{bmatrix}1&2\\3&4\end{bmatrix}$，按 00/10/01/11 拼成 $(1,3,2,4)$。LN（γ=1、β=0、ε=0）：均值 2.5，方差 1.25，输出 $(-1.342,0.447,-0.447,1.342)$。再乘一个 4×2 的矩阵得到 2 个数。**四个位置的 4 个数变成 2 个数，总标量减半**，$4C\to2C$ 的矩阵秩至多 2C，一定有信息丢失；但空间上四格合一、通道翻倍，正是 CNN stage 之间"分辨率减半、通道加倍"的翻版。
 
-**四个stage的shape链路。** 224图像、初宽96：4×4 patch stem得到56×56×96；stage1结束merge为28×28×192；stage2结束merge为14×14×384；stage3结束merge为7×7×768。对应原图stride4/8/16/32。
+> **⚠️ merge 不等于"四个 token 取平均"**
+>
+> 平均是固定权重、输出 C 维；merge 是先拼成 4C（四个位置的信息各占一段）、LN、再学一个 4C→2C 的矩阵。它能区分"左上亮右下暗"和"左上暗右下亮"（平均分不开），而且输出是 2C 不是 C。第 12 讲"投影不是池化"的道理在这里再次出现。
 
-每stage内部的多个block保持这个shape。常见分类接口在最终序列上LN，再对49个位置平均，接$768\to K$头；原Swin默认路径不需要CLS。稠密接口则读取各stage空间网格，不能只拿分类平均向量。
+#### 模型变体与账本
 
-如果在stage末命名输出，须说明是merge前还是merge后。以stage1为例，56×56×96和28×28×192都可能在函数附近出现；拿错会使FPN通道声明、stride和位置映射全部不一致。
+*Swin-T: C = 96, layer numbers = {2, 2, 6, 2}; Swin-S: C = 96, {2, 2, 18, 2}; Swin-B: C = 128, {2, 2, 18, 2}; Swin-L: C = 192, {2, 2, 18, 2}*
 
-**Tiny/Small/Base不能只按名字比较。** 以下是本讲核对的Swin V1、R224、M7、MLP ratio4、QKV bias开启、patch LN开启、无绝对位置表的配置：
+![四个变体](./images/paper-swin-variants.png)
 
-| 配置 | 初宽 | 四stage block数 | 四stage head数 |
-| --- | ---: | --- | --- |
-| T | 96 | 2/2/6/2 | 3/6/12/24 |
-| S | 96 | 2/2/18/2 | 3/6/12/24 |
-| B | 128 | 2/2/18/2 | 4/8/16/32 |
+窗口 M = 7，每头 d = 32（所以头数 = C/32：Swin-T 四个 stage 是 3/6/12/24 头），MLP 宽 4C。T 和 S 只差 stage 3 的深度（6 vs 18 块），S 和 B 只差宽度（96 vs 128）。
 
-每头宽度均为32。这是具体配置，不是“Tiny永远意味着96宽”的通用定义；其他窗口、图像尺寸、V2、任务仓库和预训练权重可有不同变体。
+**跟着算：Swin-T 的精确参数。** 一个块：QKV 权重 $3C^2$ 加偏置 $3C$，输出投影 $C^2+C$，MLP $8C^2+5C$，两个 LN $4C$，相对表 $169h$；合计 $12C^2+13C+169h$。stem：$48C+C$（投影）$+2C$（LN）。merge：$8C^2$（4C→2C 无偏置）$+8C$（LN 4C）。最终 LN $2C_4$，1000 类头 $(C_4+1)\times1000$。
 
-加深stage3会重复增加14×14阶段的block，扩大该stage传播和计算预算。加宽则使多数矩阵参数和MAC近似按宽度平方增长，activation通道数线性增长。它们对应不同的扩展路径。
+| 组件 | 参数 |
+|---|---:|
+| stem（C=96） | 4,896 |
+| stage 1，2 块 | 224,694 |
+| merge 1 | 74,496 |
+| stage 2，2 块 | 891,756 |
+| merge 2 | 296,448 |
+| stage 3，6 块 | 10,658,952 |
+| merge 3 | 1,182,720 |
+| stage 4，2 块 | 14,183,856 |
+| 最终 LN + 1000 类头 | 770,536 |
+| **合计** | **28,288,354** |
 
-**精确参数：逐组件计数。** 标准block：QKV权重$3C^2$、bias$3C$；输出投影$C^2+C$；FFN权重$8C^2$、bias$5C$；两次LN共$4C$；相对表$(2M-1)^2h$。所以：
+论文写 29M。同样算法 Swin-S 是 49,606,258（论文 50M），Swin-B 是 87,768,224（88M）。**stage 4 只有 7×7 = 49 个位置，参数却最多**：参数看通道宽度（$12C^2$，C=768），不看位置数。
 
-$$
-P_{\rm block}=12C^2+13C+(2M-1)^2h.
-$$
+**MAC 账本。** 一个块 $12NC^2+2NM^2C$，merge $2NC^2$。stage 之间 $N\to N/4$、$C\to2C$，所以 $NC^2$ 不变：**四个 stage 每块的投影和 MLP 计算量相同**（约 3.5 亿），这是 Swin 配置里"每个 stage 预算平衡"的来源。Swin-T 总计 4,490,566,656 MAC ≈ 4.49G（论文 4.5G FLOPs）；S 约 8.74G、B 约 15.43G。T → S 多出的 12 个 stage 3 块正好贡献 $12\times354{,}192{,}384=4.25$G。
 
-RGB/P4 stem为$48C+C+2C=51C$；merge为$8C^2+8C$。最终LN$2C_{\rm final}$；K类头$(C_{\rm final}+1)K$。不计index/mask buffer，不计任务FPN和检测/分割头。
+### 🖊 本模块练习
 
-卷积和线性等价时，参数数量照实际权重数算，不因代码用Conv2d还是Linear改变。若开启绝对位置表，初stage要额外加$NC$；这也带来尺寸迁移问题。
+13. ★ M = 7、3 个头的相对位置偏置有多少参数？展开后的 B 有多少个数？
 
-**跟着算：Swin-T的完整参数账本。** | 组件 | 参数数 |
-| --- | ---: |
-| stem，C96 | 4,896 |
-| stage1两block | 224,694 |
-| merge1 | 74,496 |
-| stage2两block | 891,756 |
-| merge2 | 296,448 |
-| stage3六block | 10,658,952 |
-| merge3 | 1,182,720 |
-| stage4两block | 14,183,856 |
-| 最终LN | 1,536 |
-| 1000类头 | 769,000 |
-| 合计 | 28,288,354 |
+<details><summary>解析</summary>
 
-stage4位置少却通道宽，因此参数很多；参数不随空间位置数重复创建。相同计数条件下，S为49,606,258，B为87,768,224。实验四由组件公式独立计算并assert这些精确值。
+参数 $(2\times7-1)^2\times3=169\times3=507$。展开的 B 是 $49\times49\times3=7203$ 个数，但它们是从 507 个参数查表得来的，不是独立参数。参数量按可训练的独立标量数。
 
-**精确MAC与“每stage近似平衡”。** block是$12NC^2+2NM^2C$；merge是$(N/4)(4C)(2C)=2NC^2$。stage之间$N\to N/4,C\to2C$，因此$NC^2$保持不变，而$NC$降为一半。前者解释各stage同数block的投影/FFN预算相近。
+</details>
 
-stem为$N\cdot48C$，分类头为$C_{\rm final}K$。我们的独立账本不计LN、pool和非矩阵运算，因此与库函数名为FLOPs的数字出现小差异时，先对齐约定，不应立即判谁算错。
+14. ★ 表 4 里"绝对 + 相对"比"只用相对"在 COCO 和 ADE20K 上更差，为什么？
 
-本章没有GPU计时。两种MAC相近的结构，可因窗口划分、kernel融合、显存读写、设备和batch不同而速度不同。报告吞吐还要说明是否含输入预处理、同步和任务头。
+<details><summary>解析</summary>
 
-**跟着算：Swin-T的MAC分解。** | 组件 | 矩阵MAC |
-| --- | ---: |
-| stem | 14,450,688 |
-| stage1两block | 752,640,000 |
-| merge1 | 57,802,752 |
-| stage2两block | 723,136,512 |
-| merge2 | 57,802,752 |
-| stage3六block | 2,125,154,304 |
-| merge3 | 57,802,752 |
-| stage4两block | 701,008,896 |
-| 1000类头 | 768,000 |
-| 合计 | 4,490,566,656 |
+绝对位置编码告诉模型"这是图里第 (r, s) 块"，物体平移后编码就变了，破坏了平移不变性；检测分割要求同一物体出现在任何位置都给同样的特征。相对偏置只看两块之间的位移，天然平移不变。分类受影响小（81.3 相同），稠密任务掉 0.3 和 2.1。
 
-相同条件S约8.741G、B约15.431G。T/S改变stage3深度，新增12个block，MAC增$12\times354,192,384=4,250,308,608$。这条差值核对可以帮助发现depth或stage尺寸被错配。
+</details>
 
-**层级结构怎样改变activation账本。** 四stage的$NC$依次为301,056、150,528、75,264、37,632个标量；单张FP16主状态约0.5742、0.2871、0.1436、0.0718MiB。这里只是一份状态，不含多个副本。
+15. patch merging 把四个 C 维向量变成一个 2C 维向量，信息"无损"吗？四个 token 直接取平均和它有什么不同？
 
-attention分数每stage一份共有$BhNM^2$项；head数随通道增长时，总量还要乘对应$h$。FFN隐藏为$B\times N\times4C$，常明显大于主状态。训练同时保存很多block的激活，深stage3重复18次并不“因为图小所以免费”。
+<details><summary>解析</summary>
 
-activation checkpointing用重新前向换保存量，影响实际运算和随机状态管理；它不减少可训练参数。memory-efficient attention可以避免显式保存某些矩阵，但不自动改变窗口允许关系。分清算法依赖、内存实现与账本中的理想中间张量。
+不无损：4C → 2C 的矩阵秩至多 2C，至少 2C 维的零空间。但它和平均不同：平均固定等权、输出 C 维、分不开"左上亮右下暗"和反过来；merge 先把四个位置拼成 4C（各占一段）再学投影，能保留位置之间的差异。
 
-**动态输入要逐处检查，不只是删去assert。** 一个224固定尺寸实现可能在初始化时构建各stage resolution、相对index、shift mask，并在前向检查输入尺寸。直接删去assert以后，旧mask和旧reshape仍可能不适配新图。
+</details>
 
-可变尺寸方案须运行时获取H/W，检查stem边界取整，补齐窗口，重建或缓存对应mask，处理奇数merge，最后输出有效区域和正确stride。cache key至少考虑尺寸、窗口、shift、设备/类型相关状态；仅按token总数缓存可能把不同长宽比混为一谈。
+16. Swin-T stage 4 只有 49 个位置，为什么参数比 stage 1（3136 个位置）多得多？
 
-当某stage尺寸小于窗口，原固定实现会调整窗口并关闭shift；另一些实现保留窗口而补边。两者产生不同的bias索引与参数兼容政策，不可称为默认数学等价。第15讲将扩展动态网格与位置协议，本节先确定本章模型边界。
+<details><summary>解析</summary>
 
-**相对位置是否带来严格平移等变。** 相对bias只依赖位移，减少对绝对位置表的依赖，但规则窗口仍绑定网格分区。移动输入一个token，原本同窗的两点可能落入不同窗，允许attention图改变；移位交替能增加连接，却不自动消除这种分区相位。
+参数取决于通道宽度：一个块约 $12C^2$，stage 4 的 C = 768 是 stage 1 的 8 倍，参数 64 倍。位置数只影响计算量（MAC 按 N 走），不影响参数。两个 stage 的每块 MAC 反而差不多（$NC^2$ 不变）。
 
-patch stem的stride、merge的2×2相位、padding和图像边界也会影响平移响应。若移动幅度与采样/窗口周期一致并处于无限或合适边界条件，某些局部操作可以有对应对称性；不能把这个条件结论推广到任意像素平移的整网。
+</details>
 
-实践中可通过平移、crop和尺度增强学习鲁棒性。鲁棒性是输出在扰动下表现稳定，严格等变则是函数满足具体变换等式，二者的检验不同。蒸馏CNN也不会改变这些结构事实，呼应第13讲。
+---
 
-## 六、PVT与Spatial-Reduction Attention
+`Part 5 · PVT 论文第 1、4—7 页`
 
-Swin限制一个query本层能读到的空间范围。PVT采取另一种取舍：query仍在全图，但key/value先被压缩；因此计算下降，远处信息也可能被汇总得更粗。
+## 五、PVT：另一条路，压缩 key 和 value
 
-![全局、窗口、普通SRA和固定大小池化的证据粒度与交互成本](images/sra-comparison.svg)
+Swin 的办法是"每个 query 只看窗内"。同期的 PVT（Pyramid Vision Transformer）走了另一条路：**每个 query 仍然看整张图，但把 key 和 value 压缩成少量摘要**。两者都搭了四级金字塔，但注意力的省法不同。
 
-**SRA把query与key/value变成不同长度。** 普通self-attention的Q/K/V都来自$N\times C$。SRA保留$N$个query，同时把空间表示降为$N_s$个摘要，K/V来自摘要。若每轴缩$r$倍且整除，$N_s=N/r^2$。
+#### 图 1　三种架构
 
-一头形状为$Q:N\times d$、$K,V:N_s\times d$，所以$A:N\times N_s$，输出仍是$N\times d$。**保留query长度，保证本层输出还覆盖原网格**；压缩的是供读取的证据集合，不是把本层所有输出都降采样。
+*Figure 1: Comparisons of different architectures, where "Conv" and "TF-E" stand for "convolution" and "Transformer encoder", respectively. (a) Many CNN backbones use a pyramid structure for dense prediction tasks such as object detection (DET), instance and semantic segmentation (SEG). (b) The recently proposed Vision Transformer (ViT) is a "columnar" structure specifically designed for image classification (CLS). (c) By incorporating the pyramid structure from CNNs, we present the Pyramid Vision Transformer (PVT)…*
 
-每个query可以访问遍布整图的摘要，因此与窗口局部可见性不同。SRA源于同一输入的两条处理支路，虽有不同序列长度，仍是这里定义的self-attention变体；是否跨模态要看Q和K/V源数据，不能仅由矩形分数判断。
+![PVT 图 1 · CNN、ViT 与 PVT](./images/paper-pvt-fig1-compare.png)
 
-**Spatial reduction既有空间分组，也有通道投影。** 把每个$r\times r$组的C通道拼成$r^2C$维向量，用$W_S\in\mathbb R^{r^2C\times C}$投影，再LN：
+**🖼 逐元素图解**
 
-$$
-\widetilde X=\operatorname{LN}(\operatorname{Group}_r(X)W_S+b_S).
-$$
+- **(a) CNN**：Conv 1 到 Conv 4 四层特征图越来越小，右边的 TASK 框列了 CLS、DET、SEG：四级金字塔能喂给所有任务。
+- **(b) ViT**：一根"柱子"，所有层特征图同样大（16× 下采样），TASK 框只有 CLS。
+- **(c) PVT**：TF-E 1 到 TF-E 4 四级金字塔，每级是 Transformer 编码器，TASK 框又有了 DET、SEG。右下角放大的 Transformer Block 里多了一个 *Shrink* 模块：这就是空间缩减。
 
-然后$Q=XW_Q$，$K=\widetilde XW_K$，$V=\widetilde XW_V$。K与V共享同一空间摘要输入，但后续投影不同。通常不用两套独立的SR卷积分别生成K和V。
+和 Swin 的图 1 讲的是同一件事：**要做稠密任务，Transformer 必须有金字塔。**
 
-这可由kernel$r$、stride$r$、输入输出都C的普通卷积实现，权重仍含$r^2C^2$个数。它**不是默认average pooling，也不是depthwise卷积**。官方实现的卷积展平遵循通道/空间轴顺序；手写group+linear等价时必须显式匹配权重排列。
+#### 图 3　PVT 的整体结构
 
-**跟着算：4×4到四个摘要，再输出16个位置。** 用算例B的单通道值，特意设每组平均作为教学SR，不加LN、令QK分数为0。四个摘要是$(3.5,5.5,11.5,13.5)$。每个query对四摘要均匀读，输出都为8.5。
+*Figure 3: Overall architecture of Pyramid Vision Transformer (PVT). The entire model is divided into four stages, each of which is comprised of a patch embedding layer and a $L_i$-layer Transformer encoder. Following a pyramid structure, the output resolution of the four stages progressively shrinks from high (4-stride) to low (32-stride).*
 
-分数矩阵是16×4，而不是4×4；输出仍为4×4的16个位置。对比W-MSA只读本窗，SRA所有位置都能读取整图四组摘要。但本例把每组具体纹理压成均值，query不能通过一个摘要单独选取组内某个原像素。
+![PVT 图 3 · 整体架构](./images/paper-pvt-fig3-arch.png)
 
-这是解释维度和信息压缩的特制平均模型；实际PVT SR有学习投影、LN、内容相关QK、多头和残差，通常不会把整层输出都变成常数。实验三采用C2学习投影与LN检查完整两支路。
+**🖼 逐元素图解**
 
-**低分辨率K/V是否意味着丢掉原输出细节。** attention分支读取的远处证据变粗，但高分辨率query仍来自当前位置。加上残差$X+\operatorname{SRA}(\operatorname{LN}(X))$，本地高分辨率状态仍有直接保留路径，后续FFN也沿各位置处理。
+- **上排**：输入 $H\times W\times3$ → Stage 1 → $F_1$：$\frac H4\times\frac W4\times C_1$ → Stage 2 → $F_2$：$\frac H8\times\frac W8\times C_2$ → … → $F_4$：$\frac H{32}\times\frac W{32}\times C_4$。四级输出 $F_1$ 到 $F_4$ 和 Swin 一样是 stride 4/8/16/32。
+- **下排放大的 Stage i**：Patch Embedding（切块 $P_i\times P_i$、线性投影、LN）→ 加位置编码（圆圈 ⊕）→ reshape 成序列 → $L_i$ 个 Transformer 块 → reshape 回特征图。
+- **每个块里**：Norm → **SRA**（Spatial Reduction Attention，蓝框里带 *Spatial Reduction* 的注意力）→ 残差 → Norm → Feed Forward → 残差。**和 ViT 的块唯一的区别是 MHA 换成了 SRA。**
 
-因此“KV压缩”不等于“输出只能有摘要分辨率”。不过，某个query对远处某组的访问只经过共享摘要，无法在本次attention中为组内每个原位置分配独立softmax权重。这是交互表达的约束，即使残差保留本地细节也仍存在。
+和 Swin 的差别：PVT 用"切块"做下采样（每个 stage 开头的 patch embedding 用 $P_i=2$ 的块把分辨率减半），Swin 用 patch merging；PVT 每个 stage 都加位置编码（按分辨率插值），Swin 用相对偏置。
 
-要判断任务影响，设计远处细节决定答案的例子：两幅图局部query相同，但远处组的细节重新排列后摘要相同。若所有可见摘要和query都相同，这一attention分支无法区分它们；多层更新或其他支路可能提供新信息。
+#### 图 4 与公式 (1)–(3)　空间缩减注意力
 
-**SRA的输入梯度为何至少有两部分。** 输出反传得到$G_Q,G_K,G_V$。query支路给$G_X^{(Q)}=G_QW_Q^\top$；摘要支路先合并：
+*Figure 4: Multi-head attention (MHA) vs. spatial-reduction attention (SRA). With the spatial-reduction operation, the computational/memory cost of our SRA is much lower than that of MHA.*
 
-$$
-G_{\widetilde X}=G_KW_K^\top+G_VW_V^\top.
-$$
+![PVT 图 4 · MHA 与 SRA](./images/paper-pvt-fig4-sra.png)
 
-经LN反传，再乘$W_S^\top$，按$r\times r$分组逆索引scatter回原网格，得到$G_X^{(\rm SR)}$。因此$G_X=G_X^{(Q)}+G_X^{(\rm SR)}$，还需加残差与外层Pre-LN贡献。
+**🖼 逐元素图解**
 
-SR矩阵的梯度是分组输入转置乘投影输出梯度；SR LN affine另计。原位置即使不是某个query特别偏好的摘要，仍可能因组内共享投影受到梯度。只在降采样后的几个位置写梯度、其余清零，会遗漏分组投影的输入依赖。
+- **左 MHA**：Q、K、V 三路输入各 $(H_iW_i)\times C_i$，进 Multi-Head Attention。
+- **右 SRA**：Q 直接进；**K 和 V 先过一个红框 Spatial Reduction**，从 $(H_iW_i)\times C_i$ 变成 $\frac{H_iW_i}{R_i^2}\times C_i$，再进注意力。$R_i$ 是缩减比例，stage 1 是 8。
 
-**固定比例SRA的完整MAC，不只数QK。** Q与输出投影为$2NC^2$；压缩后的K/V投影为$2N_sC^2$；SR卷积在整除、kernel=stride=r时为$N_s(r^2C)C=NC^2$；交互为$2NN_sC$。r>1时：
+![PVT 公式 (1)–(3)](./images/paper-pvt-eq1-3.png)
 
 $$
-\operatorname{MAC}_{\rm SRA}=3NC^2+2N_sC^2+2NN_sC.
+\mathrm{SRA}(Q,K,V)=\mathrm{Concat}(\mathrm{head}_0,\dots,\mathrm{head}_{N_i})W^O,\qquad
+\mathrm{head}_j=\mathrm{Attention}\bigl(QW_j^Q,\;\mathrm{SR}(K)W_j^K,\;\mathrm{SR}(V)W_j^V\bigr),
 $$
+$$
+\mathrm{SR}(\mathbf x)=\mathrm{Norm}\bigl(\mathrm{Reshape}(\mathbf x,R_i)\,W^S\bigr).
+$$
 
-r1通常不运行额外SR卷积/LN，恢复普通$4NC^2+2N^2C$。FFN应在$N$个位置上另外加入$2eNC^2$，$e$是隐藏扩展比例，不能按$N_s$计算。
+**逐符号读 SR：** 把 $H_iW_i\times C_i$ 的序列按 $R_i\times R_i$ 的块重排成 $\frac{H_iW_i}{R_i^2}\times(R_i^2C_i)$（每个块的 $R_i^2$ 个位置、各 $C_i$ 通道拼成一行），乘一个 $(R_i^2C_i)\times C_i$ 的矩阵 $W^S$，再 LN。**这和 patch embedding 是同一种操作**：等价于 kernel = stride = $R_i$ 的卷积。所以 SR 是"把 key/value 的特征图再切一次块"。
 
-固定r时，交互仍为$2N^2C/r^2$，是二次项，只是系数降低。若改变r让$N_s$固定，才改变随输入面积的增长规律。论文“节省$r^2$倍”应限定到分数/交互项，整个attention还包含投影与reduction。
+**跟着算：4×4 到 4 个摘要。** 单通道 4×4 编号图，让 SR 就取每个 2×2 块的平均（教学简化，不加 LN），得到 4 个摘要 $(3.5,5.5,11.5,13.5)$。16 个 query 各自对这 4 个摘要做注意力；让分数全 0，每个 query 输出都是 $(3.5+5.5+11.5+13.5)/4=8.5$。**query 仍有 16 个、输出仍是 16 个位置**，只是每个 query 的候选从 16 个原 token 变成了 4 个摘要。
 
-**跟着算：同一stage比较交互和整体attention。** PVT首stage设$N=56^2=3136,C=64,r=8,N_s=49$。QK/AV交互从全局$2N^2C=1,258,815,488$下降到$2NN_sC=19,668,992$，是64倍下降。
+**跟着算：省了多少。** PVT stage 1：$N=56^2=3136$、$C=64$、$R=8$，摘要数 $N_s=3136/64=49$。交互项从全局的 $2N^2C=1{,}258{,}815{,}488$ 降到 $2NN_sC=19{,}668{,}992$，**64 倍**。完整的 SRA MAC 还包括 Q 和输出投影 $2NC^2$、压缩后的 K/V 投影 $2N_sC^2$、SR 本身 $N_s(R^2C)C=NC^2$。
 
-但SRA的Q/输出投影25,690,112，K/V投影401,408，SR卷积12,845,056，合计58,605,568。FFN若扩展8倍，还要$16NC^2=205,520,896$；加上它，一个block的矩阵预算264,126,464，远大于只报19,668,992。
+> **💡 Swin 和 PVT 各限制了什么**
+>
+> 窗口注意力：每个 query 能**逐个**读取窗内 49 个原始 token，但本层看不到窗外。SRA：每个 query 能读到**整张图**，但看到的是 49 个"粗摘要"，每个摘要混合了 8×8 = 64 个原始位置。前者精细但局部，后者全局但模糊。两者都靠残差保留了 query 自己的高分辨率信息。
 
-若把两轴尺寸加倍而r保持8，$N$和$N_s$都增4倍，交互增16倍；投影/SR/FFN增4倍。这个反事实尺寸核算直接显示固定r不提供面积线性的全部复杂度。
+![三种注意力：可见范围与证据粒度](./images/sra-comparison.svg)
 
-**PVT的四stage为何经常都得到49个KV。** 以224输入、四stage宽64/128/320/512、SR比例8/4/2/1为例，空间网格56/28/14/7，每轴除SR比例以后都为7，因此前三stage的KV各为49个摘要。最后r1采用全局读，空间部分也有49个位置。
+**🖼 逐元素图解**
 
-这只是这个尺寸的巧合：输入448时，同一比例对应14×14=196个KV，而非49。不要把配置中的sr_ratio误读成“固定49个KV”的语义。
+- **左绿卡"全局注意力"**：Q、K/V 都是 N×d，每个位置读全部原 key，分数 N×N，交互 $2N^2C$。
+- **中蓝卡"窗口注意力"**：每窗 M² 个 Q/K/V，逐位置读本窗证据，交互 $2NM^2C$。
+- **右橙卡"普通 SRA"**：Q 是 N×d，K/V 是 $N/r^2\times d$，读全图的学习摘要，交互 $2N^2C/r^2$。
+- **下方蓝卡"固定 P×P 摘要的 LSRA"**：PVT v2 的线性版本，K/V 固定 P² = 49 个，交互 $2NP^2C$，和图像面积成线性。
 
-初patch步长4，后续stage patch embedding通常以2×2输入特征投影到下stage宽度。其$4C_{\rm in}\to C_{\rm out}$不要求严格翻倍，例如128→320。PVT-Tiny配置每stage两block，MLP扩展8/8/4/4；其他型号和仓库revision应逐个核对，不凭同名自动套depth。
+#### 表 1 与表 2　PVT 的四档与结果
 
-**PVT V1的CLS和绝对位置在哪些stage。** V1作者分类路径在各stage加学习位置表，位置表根据实际空间网格插值。前三stage是纯空间序列；最后stage加入CLS，最终取CLS分类。因此224时末序列长度50，不是49。
+*Table 1: Detailed settings of PVT series. The design follows the two rules of ResNet: (1) with the growth of network depth, the hidden dimension gradually increases, and the output resolution progressively shrinks; (2) the major computation resource is concentrated in Stage 3.*
 
-最后stage的SR比例1避免把CLS当空间像素进行$r\times r$卷积分组。若改成r>1而仍把CLS留在输入中，reshape空间网格会遇到额外行，必须另外设计处理，不能直接沿用前stage路径。
+![PVT 表 1 · 四档配置](./images/paper-pvt-table1-settings.png)
 
-位置迁移也要把最后的CLS位置与patch位置分开。224配置四表分别有$3136\times64$、$784\times128$、$196\times320$、$50\times512$个数，共389,376；CLS输入参数再加512。这些是本章针对该路径的独立计数，PVT V2和稠密backbone接口另看。
+**🖼 逐元素图解**
 
-## 七、PVT V2：连续局部结构与固定摘要数
+- **四行是四个 stage**，每行左边是输出尺寸（$\frac H4$ 到 $\frac H{32}$），中间是 Patch Embedding 的 $P_i$ 和 $C_i$（$P_1=4$、$C_1=64$；之后 $P=2$，C = 128/320/512）。
+- **每个方括号里三行**：$R_i$ 缩减比例（8/4/2/1）、$N_i$ 头数（1/2/5/8）、$E_i$ MLP 扩张倍数（8/8/4/4）；方括号外的 ×2、×3、×6、×18 是块数。
+- **四列是 Tiny/Small/Medium/Large**，只差块数：Tiny {2,2,2,2}、Small {3,4,6,3}、Medium {3,4,18,3}、Large {3,8,27,3}。Small 的 {3,4,6,3} 正是 ResNet-50 的块数。
 
-**overlapping patch embedding具体重叠什么。** PVT V2作者路径采用首层7×7/stride4/padding3，后续stage3×3/stride2/padding1。相邻输出的输入感受区域重叠，因此边界附近的输入可以参与多个token。
+**跟着算：为什么四个 stage 的 K/V 都是 49 个。** 224 输入，四级网格 56/28/14/7，缩减比例 8/4/2/1，每轴除完都是 7：$56/8=28/4=14/2=7/1=7$。所以前三个 stage 的 K/V 各 49 个摘要，最后一个 stage 不缩减、也恰好 49 个位置。
 
-卷积输出单轴尺寸：
+*Table 2: Image classification performance on the ImageNet validation set.*
 
-$$
-H_{\rm out}=\left\lfloor\frac{H_{\rm in}+2p-k}{s}\right\rfloor+1.
-$$
+![PVT 表 2 · ImageNet 结果](./images/paper-pvt-table2-imagenet.png)
 
-7/4/3时为$\lceil H_{\rm in}/4\rceil$。224→56，225→57，230→58，不可继续用整数除4的向下取整替代运行时输出shape。后续奇数尺寸同样按实际卷积结果传播。
+列是参数、GFLOPs、Top-1 **错误率**（注意不是准确率）。PVT-Small 24.5M / 3.8G / 20.2（即 79.8%），对比 ResNet-50 25.6M / 4.1G / 21.5 和 DeiT-S 22.1M / 4.6G / 20.1。**在分类上 PVT 和 DeiT 差不多**（它们的错误率 20.2 vs 20.1），作者自己说 *the pyramid structure is beneficial to dense prediction tasks, but brings little improvements to image classification*。PVT 的价值在检测分割：论文摘要里 PVT + RetinaNet 比 ResNet-50 + RetinaNet 高 4.1 AP。
 
-重叠不意味着多个输出特征值相同，只表示它们共享部分输入依赖。对于相同输出宽C、RGB输入，首层权重为$49\cdot3C=147C$，比P4的不重叠$48C$多99C；更大核带来额外成本。
+> **💡 PVT v2 改了三处**
+>
+> 后续的 PVT v2 做了三个改动，本讲的程序也核对了它们：**重叠 patch embedding**（stem 用 7×7/stride 4/padding 3 的卷积，相邻 token 的输入区域重叠，边界附近的像素参与多个 token）；**卷积 FFN**（在 FFN 的两个线性层之间加一个 3×3 深度卷积，给每个位置一点局部空间交互，并借此去掉了位置编码）；**线性 SRA**（用自适应平均池化把 K/V 固定成 7×7 = 49 个，无论图多大，交互项 $2NP^2C$ 和面积成线性）。
 
-**跟着算：一维重叠投影看见哪些元素。** 输入值$(1,2,3,4,5,6)$，kernel3、stride2、padding1、核权重全1。输出三项是$0+1+2=3$、$2+3+4=9$、$4+5+6=15$。
+### 🖊 本模块练习
 
-第一与第二输出共享输入值2，第二与第三共享4。若换不重叠kernel2/stride2，无padding，输出是3、7、11，依赖集合也不同。这里输出长度都为3，说明**同shape不等价于同空间接口**。
+17. ★ SRA 对 56×56、R = 8 的特征图，输出是 7×7 吗？
 
-二维7×7、stride4时，水平相邻输出共享3列输入，竖直相邻共享3行，边界部分可能是padding。原图中心坐标与patch支持范围要按kernel/padding/stride计算，不能只乘stride。
+<details><summary>解析</summary>
 
-**FFN加入DW卷积，空间交互发生在哪里。** 普通FFN逐token：$C\to eC$、GELU、$eC\to C$。卷积FFN将第一投影输出恢复为$H\times W\times eC$，施加3×3、stride1、padding1的depthwise卷积，再激活与第二投影：
+不是。输出仍是 56×56：query 有 3136 个，每个 query 产生一个输出。被压成 7×7 = 49 的是 **key 和 value**。初学者常把"K/V 变少"误解成"输出变少"。
 
-$$
-Y=\bigl[\operatorname{GELU}(\operatorname{DWConv}_{3\times3}(XW_1+b_1))\bigr]W_2+b_2.
-$$
+</details>
 
-DW只在每个隐藏通道内混合附近空间；前后全连接混合通道。由此FFN也产生局部空间依赖，已经不同于第24节的逐位置MLP。它与attention的大范围摘要读取互补，但是否提高特定任务仍需要证据。
+18. ★ 固定 R = 8，图像面积扩大 4 倍，SRA 的交互项扩大多少？PVT v2 的线性 SRA 呢？
 
-DW增加$9eC$权重，带bias时共$10eC$参数，MAC为$9NeC$。这种结构使局部与边界信息进入表示，V2路径也去掉固定学习绝对位置表，分类使用末网格平均；不能据此说它“没有任何位置信息”。
+<details><summary>解析</summary>
 
-**跟着算：DW的低参数不意味着没有空间作用。** $N=196,C=320,e=4$，隐藏宽1280。3×3 DW有11,520个核权重、1,280个bias，共12,800参数；矩阵/卷积MAC为$196\times9\times1280=2,257,920$。
+普通 SRA：$2NN_sC$，N 和 $N_s=N/64$ 都变 4 倍，交互项 16 倍，仍是平方。线性 SRA：$N_s$ 固定 49，交互 $2N\cdot49\cdot C$ 只变 4 倍，线性。代价是每个摘要覆盖的原始区域变大 4 倍，更粗。
 
-两线性层MAC为$2\times196\times320\times1280=160,563,200$，DW相对很小。若将中心核设1、上邻核设1，其余0，每个隐藏输出已经依赖自身与上方位置；偏置来自空间支持方式，而非参数特别多才会出现。
+</details>
 
-在边界上，上邻可能是0 padding，行为与内部位置不同。这能提供边界线索，但不是任意绝对坐标的显式标签，也不保证严格平移等变。
+19. SR 操作和 ViT 的 patch embedding 是同一种运算吗？
 
-**Linear SRA的“linear”指复杂度。** 固定大小池化版本将整图降成$P\times P$个摘要，典型$P=7$，所以$N_s=P^2=49$独立于输入面积。作者线性路径再用1×1投影、LN和GELU，然后生成K/V；Q仍来自全部原位置。
+<details><summary>解析</summary>
 
-交互MAC为$2NP^2C$，若P/C固定则随N线性。它仍使用softmax，因此不是把attention函数变成线性函数，也不是用kernel近似替换softmax的另一类“linear attention”。
+是。都是"把 R×R 块的所有通道拼成一行，乘一个矩阵"，等价于 kernel = stride = R 的卷积。差别只在输入：patch embedding 作用在像素上，SR 作用在中间特征图上，而且只用于产生 K/V，Q 不经过它。
 
-作者仓库并非所有PVT V2型号都启用这一选项，带Li的配置需核对。linear路径的FFN还可在第一线性层后增加ReLU再做DW/GELU，因此开关不一定只改变pool。复现时应比较真实模块，而非只记录模型名称。
+</details>
 
-**跟着算：自适应池化的边界与线性账本。** 将长度5池成3格，常见自适应平均池采用第$i$格区间$[\lfloor iH/P\rfloor,\lceil(i+1)H/P\rceil)$：得到$[0,2)$、$[1,4)$、$[3,5)$。相邻格可能共享输入，不是三块等大小无重叠划分。
+20. PVT-Small 分类只比 DeiT-S 好 0.1 个点，为什么作者仍认为金字塔有价值？
 
-输入$(1,0,0,0,0)$，摘要为$(1/2,0,0)$；摘要平均是1/6，原均值1/5。不能把“先adaptive pool再uniform attention”无条件认作原网格平均。
+<details><summary>解析</summary>
 
-对P7的二维路径，仅计Q/输出、KV、1×1 SR和交互，MAC为$2NC^2+3\cdot49C^2+98NC$，另计pool、LN、激活和FFN。N小于49时仍可能输出49摘要，但其中存在重复/重叠读取，不凭空产生49份独立新证据。
+因为价值在稠密任务：分类只需要最后一级的全局表示，金字塔的中间几级没被用上；检测分割需要 stride 4/8/16 的高分辨率特征，ViT/DeiT 根本给不出。PVT + RetinaNet 比 ResNet-50 高 4.1 AP，Swin 表 2 里 Swin-T 比 DeiT-S 高 2.5 AP，都是这个道理。
 
-**局部窗口与全局摘要分别限制什么。** 窗口attention允许逐个读取同窗的细位置，却本层不能直接读取窗外。SRA可以访问整图，却以压缩摘要代替大量原key。固定池化让摘要数恒定，随着图像变大，每个摘要覆盖更大范围，可能混合更多细节。
+</details>
 
-这三个选择分别约束直接可见范围、证据粒度和随尺寸的预算。多层、残差、FFN局部卷积、head融合会改变整网能力，所以不能由单层特点推出一个架构在所有任务都更好。
+---
 
-合理的诊断需要匹配任务：局部纹理、远处细节比较、跨区域对应、小物体与边界。逐类报告性能比一个平均分更能解释结构取舍，尤其在图像长宽比变化和高分辨率迁移时。
+`Part 6 · Swin 论文第 6—8 页，Swin V2 论文第 1—8 页`
 
-## 八、Swin V2：更大模型与分辨率迁移
+## 六、结果、速度与 Swin V2 的扩展
 
-前面已经知道空间信息怎样流动。模型和分辨率继续放大时，还会出现训练稳定性与位置偏置迁移问题；V2的改动要分别对应这些问题来读。
+#### 表 1　ImageNet：Swin vs DeiT vs CNN
 
-![Swin V1与V2的归一化次序、cosine注意力与连续位置bias](images/v2-mechanisms.svg)
+*Table 1. Comparison of different backbones on ImageNet-1K classification. Throughput is measured using the GitHub repository of [68] and a V100 GPU, following [63].*
 
-**residual-post-norm与普通Post-LN不同。** V2将attention分支的输出先归一化，再与主支路相加，FFN同理：
+![Swin 表 1 · ImageNet 分类](./images/paper-swin-table1-imagenet.png)
 
-$$
-Z=X+\operatorname{DropPath}(\operatorname{LN}_1(\operatorname{Attn}(X))),
-\qquad
-Y=Z+\operatorname{DropPath}(\operatorname{LN}_2(\operatorname{FFN}(Z))).
-$$
+**🖼 逐元素图解**
 
-这叫residual-post-norm。它不同于经典Post-LN的$\operatorname{LN}(X+\operatorname{Attn}(X))$：后者把残差主支路也纳入归一化；V2仍留下明确的相加主支路。不要仅凭“post”一词交换公式。
+- **(a) 只用 ImageNet-1K 训练**。列：输入尺寸、参数、FLOPs、吞吐量、top-1。四组模型：RegNetY（CNN）、EfficientNet（CNN）、ViT/DeiT（柱状 Transformer）、Swin。
+- **(b) ImageNet-22K 预训练再微调**：ResNet 大模型（R-101x3、R-152x4）、ViT、Swin-B/L。
 
-设计目的是控制深层残差分支回流的幅度，配合其他技术改善扩大模型时的稳定性；它不是对任意权重、任意lr的收敛证明。作者大模型还有额外归一化/初始化等设置，复制一行LN顺序不能代表完整扩展方案。
+**读法，抓同算力的对比：**
 
-**scaled cosine attention：把方向与范数分开。** V1点积受Q/K范数影响。V2先归一化方向，再用每头可学习尺度：
+| 对比 | 数字 | 说明 |
+|---|---|---|
+| Swin-T vs DeiT-S | 81.3 vs 79.8，4.5G vs 4.6G | 同计算量 **+1.5** |
+| Swin-B vs DeiT-B | 83.5 vs 81.8，15.4G vs 17.5G | **+1.7**，还更省 |
+| Swin-B↑384 vs DeiT-B↑384 | 84.5 vs 83.1 | +1.4 |
+| Swin-B vs RegNetY-16G | 83.5 vs 82.9 | 略好；吞吐 278 vs 335 |
+| Swin-B vs EffNet-B7 | 83.5 vs 84.3，吞吐 278 vs 55 | 精度略低但快 5 倍 |
+| (b) Swin-L↑384（22K） | 87.3 | 比 ViT-L/16 的 85.2 高 2.1，FLOPs 103.9G vs 190.7G |
 
-$$
-s_{ij}=a\frac{q_i^\top k_j}{\|q_i\|\|k_j\|}+B_{ij},\qquad a>0.
-$$
+Swin 分类上比 DeiT 高 1.5 个点左右，但它真正的优势在下一张表。
 
-实现中规范化分母需要epsilon保护。作者用log参数存尺度，前向指数化，且对log尺度上限进行clamp；核对的路径初始a10，上限100。这是具体实现，不是cosine attention的唯一合法常数。
+#### 表 2　COCO 检测：骨干一换，+4 AP
 
-改变a控制softmax尖锐程度：a大时角度小差异也会放大。clamp触顶后该参数局部梯度行为改变；Q/K归一化也要完整反传，不能沿用未归一化点积的梯度直接替换前向。
+*Table 2. Results on COCO object detection and instance segmentation. † denotes that additional deconvolution layers are used to produce hierarchical feature maps. ∗ indicates multi-scale testing.*
 
-**跟着算：范数缩放怎样影响两种分数。** 取$q=(3,4),k=(0,2)$，点积8，若head宽2，点积attention分数$8/\sqrt2\approx5.656854$；cosine为$8/(5\cdot2)=0.8$，a10时分数8。
+![Swin 表 2 · COCO 检测与实例分割](./images/paper-swin-table2-coco.png)
 
-把q扩大10倍，点积attention分数变56.568542，cosine仍0.8。在两个key比较时，前者整体变尖，后者忽略这一次正幅度缩放。零向量则不能直接除范数，须按实现epsilon处理；负数缩放会翻转方向，并不具有同样不变性。
+**🖼 逐元素图解**
 
-若$\widehat q=q/\|q\|$且非零，对q的方向梯度包含$(I-\widehat q\widehat q^\top)/\|q\|$。因此投影掉沿q自身方向的分量，保留改变角度的分量；这解释为什么norm步骤影响反传而不只是数值范围。
+- **(a) 四种检测框架**（Cascade Mask R-CNN、ATSS、RepPoints v2、Sparse R-CNN），每种都比较 R-50 和 Swin-T 两个骨干。AP box 列：46.3 → 50.5、43.5 → 47.2、46.5 → 50.0、44.5 → 47.9，**每种框架都 +3.4 到 +4.2**，参数和 FLOPs 几乎相同（82M/739G vs 86M/745G）。
+- **(b) 同一框架（Cascade Mask R-CNN）换不同骨干**。DeiT-S† 48.0 vs Swin-T 50.5（+2.5），而且 DeiT 要额外加反卷积层才能凑出多尺度特征（†），FPS 10.4 vs 15.3。R50 46.3 vs Swin-T 50.5；X101-32x4d 48.1 vs Swin-S 51.8；X101-64x4d 48.3 vs Swin-B 51.9。
+- **(c) 系统级比较**：Swin-L + HTC++ 多尺度测试 58.7 AP box / 51.1 AP mask，比之前最好的 Copy-paste（55.9）高 2.8。
 
-**连续相对bias怎样跨窗口大小。** V1离散表随M改变尺寸，需插值或重新处理。V2用小MLP把二维相对坐标映射成每头bias，在新位移处仍可求值。作者使用有符号对数坐标，以压缩大位移变化。
+**这张表是 Swin 得最佳论文的理由：** 它第一次证明 Transformer 骨干可以在检测分割上**全面**超过同算力的 CNN。回看图 1：ViT/DeiT 没有金字塔，做检测要人为加反卷积凑尺度，还慢。
 
-本章核对的坐标转换为：先以预训练窗口跨度或当前窗口跨度归一化，$z=8\Delta/(M_{\rm ref}-1)$，再变成：
+#### 表 5　真实速度：为什么选循环移位
 
-$$
-u=\operatorname{sign}(z)\frac{\log_2(1+|z|)}{\log_2 8}.
-$$
+*Table 5. Real speed of different self-attention computation methods and implementations on a V100 GPU.*
+
+![Swin 表 5 · 各种注意力实现的实际速度](./images/paper-swin-table5-speed.png)
 
-两轴分别转换，输入MLP。代码还对MLP结果用$16\operatorname{sigmoid}$产生bias；bias虽然处于正区间，softmax只关心相对差值，不表示每个位置都“被奖励16”。固定坐标/scale/MLP权重决定实际值。
+**🖼 逐元素图解**
 
-**跟着算：对数坐标缩小外推跨度。** 预训练窗口M7，$M_{\rm ref}-1=6$。位移0/1/6/12对应z0/1.333333/8/16，转换u约0/0.407464/1.056642/1.362488；负位移取反号。
+- **左四列**：一个 stage 里注意力模块的耗时（ms），S1 到 S4。**右三列**：整个网络的 FPS，T/S/B。
+- **sliding window (naive)**：每个像素一个窗口，朴素实现，stage 1 要 122.5 ms，整网只有 183 FPS。
+- **sliding window (kernel)**：写了专门的 CUDA kernel，7.6 ms，488 FPS。
+- **Performer**：一种线性注意力近似，638 FPS。
+- **window (w/o shifting)**：固定窗口不移位，770 FPS，最快。
+- **shifted window (padding)**：移位后把小窗口 padding 成大窗口，670 FPS，比不移位慢 13%。
+- **shifted window (cyclic)**：图 4 的循环移位，**755 FPS**，只比不移位慢 2%。
 
-从最大预训练位移6增到12，原位移增一倍，u仅从1.056642到1.362488。这样输入范围增长更缓，方便迁移；但“能在新坐标求值”并不等于“外推一定准确”。还需在新分辨率/窗口上微调和评价。
+**读法：** 移位窗口的循环实现几乎免费（T/S/B 分别只慢 2%/1.6%/0.7%），而精度 +1.1/+2.8/+2.8（表 4）。相比之下朴素滑动窗口慢 4 倍，专门写 kernel 也只有 65%。这就是 Swin 选固定窗口 + 循环移位的全部理由。
 
-图像分辨率增加、窗口M保持7时，bias表并不因图更大自动扩张；增加的是窗口数。只有M改变或位置坐标政策改变时，才涉及新的相对位移范围。不要把所有高分辨率迁移都解释为bias插值。
+#### Swin V2 图 1　三处改动
 
-**V1/V2权重不能只靠同shape直接混装。** 两版attention分数、LN位置、bias生成方式和merge顺序不同。V1 merge的LN宽4C，V2宽2C；V1离散表与V2坐标MLP没有逐参数直接对应；V2的Q/V bias与key bias政策也要看实际实现。
+*Figure 1. To better scale up model capacity and window resolution, several adaptions are made on the original Swin Transformer architecture (V1): 1) A res-post-norm to replace the previous pre-norm configuration; 2) A scaled cosine attention to replace the original dot product attention; 3) A log-spaced continuous relative position bias approach to replace the previous parameterized approach.*
 
-仅从checkpoint加载时的missing/unexpected keys判断兼容性不够。某些相同shape矩阵仍位于不同函数次序，直接加载可能运行却不能保持原行为。应记录架构版本、配置、转换规则与数值前向对照。
+![Swin V2 图 1 · V1 与 V2 的块](./images/paper-swinv2-fig1.png)
 
-V2大模型方案还结合预训练与系统策略。SimMIM的遮挡目标将在对应自监督章节展开，这里仅说明它是相关训练来源，不把一个名字算作完整讲解。参数增长、输入变大和监督数据预算要分别报告。
+**🖼 逐元素图解**
 
-## 九、任务接口、历史证据与诊断
+上下两个虚线框是 V1 和 V2 的一个块，**红色是改动处**：
 
-**从四stage到任务头：FPN的公式与坐标。** 设骨干输出$C_2,C_3,C_4,C_5$对应stride4/8/16/32。侧向1×1投影$\phi_l$把不同通道变成共同D宽，典型递推为：
+| 改动 | V1（上） | V2（下，红色） | 要解决什么 |
+|---|---|---|---|
+| **归一化位置** | Layer Norm 在 Attention 和 MLP **之前**（pre-norm），左边主干直接相加 | Layer Norm 移到 Attention 和 MLP **之后**、相加**之前**（res-post-norm） | 大模型深层激活爆炸（图 2） |
+| **相似度** | $qk^{\top}$ 点积，Softmax | $\cos(q,k)/\tau$，Softmax | 少数像素对主导注意力 |
+| **位置偏置** | 右边的 *Parameterized RPB*：查表 B | 左边的 *MLP*，输入 $\log(\Delta x),\log(\Delta y)$，输出 B（Log-CPB） | 换窗口大小时偏置表无法迁移 |
 
+![Swin V1 与 V2 的归一化次序、cosine 注意力与连续位置偏置](./images/v2-mechanisms.svg)
+
+**🖼 逐元素图解**
+
+- **左上绿卡 V1 Pre-LN**：$Z=X+\mathrm{Attn}(\mathrm{LN}(X))$，merge 是 LN 4C → reduce。**右上蓝卡 V2 res-post-norm**：$Z=X+\mathrm{LN}(\mathrm{Attn}(X))$，merge 改成 reduce → LN 2C。注意它**不是**经典的 Post-LN $\mathrm{LN}(X+\mathrm{Attn}(X))$：残差主干仍然不过 LN，只是分支输出先归一化再加回。
+- **左下橙卡 cosine attention**：Q、K 归一化方向再乘每头可学习尺度。**右下蓝卡 连续位置偏置**：二维位移 → 有符号对数坐标 → 小 MLP → 每头 bias。
+- **底部**：图里省略了 DropPath；普通 Post-LN 是另一条公式。
+
+#### Swin V2 图 2　为什么要改归一化
+
+*Figure 2. The Signal Propagation Plot for various model sizes. H-size models are trained at a self-supervised learning phase, and other sizes are trained by an image classification task. * indicates that we use a 40-epoch model before it crashes.*
+
+![Swin V2 图 2 · 各层激活方差](./images/paper-swinv2-fig2-variance.png)
+
+**🖼 逐元素图解**
+
+- **横轴**：块的编号 1 到 24。**纵轴**：该块输出的平均方差，**对数刻度**（$10^{-2}$ 到 $10^{6}$）。
+- **三组颜色**：B（绿）、L（蓝）、H（红）三个规模；实心圆是 Pre-norm（V1），三角是 Post-norm（V2）。
+- **读法**：所有 Pre 曲线都随深度**单调上升**，H-Pre（红圆）从 $10^2$ 涨到 $10^4$ 以上，然后训练崩溃（星号说明用的是崩溃前 40 epoch 的模型）。Post 曲线（三角）平得多，H-Post 全程在 $10^0$ 附近。
+
+**为什么 Pre-norm 会这样：** $Z=X+\mathrm{Attn}(\mathrm{LN}(X))$ 里，分支的输出没有经过归一化就直接加到主干上，每一层都往主干里加一份未约束的量，24 层累积下来主干的幅度越来越大；而 LN 只作用在分支的输入上，管不了主干。V2 把 LN 放到分支输出上，每次加回主干的量都被归一化过。论文说最大的 30 亿参数模型还要每 6 个块再在主干上加一个 LN 才稳。
+
+**跟着算：cosine 注意力为什么对幅度不敏感。** $q=(3,4)$、$k=(0,2)$：点积 8，头维 2 时点积分数 $8/\sqrt2\approx5.66$；cosine 是 $8/(5\times2)=0.8$，乘尺度 $1/\tau$（τ 可学习，初始化使 $1/\tau=10$）得 8。把 q 放大 10 倍：点积分数变 56.6，softmax 会极端尖锐；cosine 仍是 0.8。**少数幅度很大的 token 不能再独占注意力。**
+
+#### Swin V2 公式 (4) 与表 1　对数坐标让位置偏置可以跨窗口大小
+
+![Swin V2 公式 (4)](./images/paper-swinv2-eq4-logcpb.png)
+
 $$
-P_5=\phi_5(C_5),\qquad
-P_l=\phi_l(C_l)+\operatorname{Resize}(P_{l+1},\operatorname{size}(C_l)).
+\widehat{\Delta x}=\mathrm{sign}(x)\cdot\log(1+|\Delta x|),\qquad
+\widehat{\Delta y}=\mathrm{sign}(y)\cdot\log(1+|\Delta y|).
 $$
+
+V1 的偏置是一张 $(2M-1)^2$ 的表，M 从 8 换到 16 时表的大小变了，只能双三次插值，效果差。V2 改成**连续函数**：一个两层 MLP 把相对位移 $(\Delta x,\Delta y)$ 映射成偏置，任意位移都能算。再把位移取对数：论文的例子，从 8×8 窗口迁移到 16×16，线性坐标要从 $[-7,7]$ 外推到 $[-15,15]$，外推了原范围的 1.14 倍；对数坐标从 $[-2.079,2.079]$ 到 $[-2.773,2.773]$，只外推 0.33 倍。**MLP 在没见过的输入上要猜，猜的范围越小越准。**
+
+*Table 1. Comparison of different position bias computation approaches using Swin-T. * indicates the top-1 accuracy on ImageNet-1k trained from scratch. The models in * column will be used for testing on the ImageNet-1K image classification task using larger image/window resolutions, marked by †. For these results, we report both the results w.o./with fine-tuning.*
+
+![Swin V2 表 1 · 三种位置偏置的迁移](./images/paper-swinv2-table1-cpb.png)
+
+**🖼 逐元素图解**
+
+- **第一列（W8, I256）**：在 8×8 窗口、256 输入上从头训练的精度，三种方法 81.7 / 81.7 / 81.8，几乎一样。
+- **后四列**：把这个模型直接拿到更大窗口和输入上（W12/I384 … W24/I768），斜线前是**不微调**直接测，斜线后是微调后。
+- **第一行 Parameterized（V1 查表 + 插值）**：不微调从 79.4 一路掉到 68.7；微调后 82.7 → 83.2。
+- **第三行 Log-spaced CPB**：不微调 82.4 / 81.7 / 80.4 / 79.1；微调后 83.2 / 83.8 / 84.0 / **84.2**。
+- **括号里是相对第一行的增量**：窗口越大增益越大，W24 时不微调 +10.4、微调 +1.0。
+
+**读法：** 窗口从 8 到 24，查表法不微调掉 13 个点，对数 CPB 只掉 2.7；微调后对数 CPB 随窗口增大持续上升到 84.2，查表法在 83.2 饱和。**低分辨率预训练、高分辨率微调**是训练大模型省算力的关键，V2 让这条路走通了。
+
+#### Swin V2 表 6　两项改动各值多少
+
+*Table 6. Ablation on res-post-norm and cosine attention.*
+
+![Swin V2 表 6 · 归一化与 cosine 注意力消融](./images/paper-swinv2-table6-ablation.png)
+
+Swin-T 81.5 → +res-post-norm 81.6 → +cosine 81.7；Swin-S 83.2 → 83.3 → 83.6；Swin-B 83.6 → 83.8 → 84.1；ViT-B 82.2 → 82.6。**模型越大收益越大**（T +0.2、S +0.4、B +0.5），和它们的设计目的一致：这两项是为了让更大的模型能训，不是为了让小模型更准。最终 Swin V2-G（30 亿参数、1536 分辨率）在 ImageNet-V2 上 84.0、COCO 63.1 box AP、ADE20K 59.9 mIoU，而且只用了 7000 万张标注图（JFT-3B 的 1/40）。
+
+> **⚠️ V1 和 V2 的权重不能互换**
+>
+> 两版 LN 的位置、注意力分数的算法、偏置的来源（查表 vs MLP）、merge 里 LN 的宽度（4C vs 2C）都不同。很多矩阵形状相同，`load_state_dict(strict=False)` 能跑通，但函数已经变了。加载前先对架构版本，不要只看 missing keys。
+
+### 🖊 本模块练习
+
+21. ★ 表 2(a) 里四种检测框架换 Swin-T 都比 R-50 高 3–4 AP，参数和 FLOPs 几乎不变。这说明什么？
 
-后面可有3×3平滑。这里C下标是stage名称，不是通道维C；P是FPN输出，不是patch边长P。局部符号需要按公式重新定义，避免阅读时把不同论文的同一字母混用。
+<details><summary>解析</summary>
 
-加法要求batch、空间shape和通道全部一致。形状可对齐仍不保证采样中心对齐：stem padding、merge顺序、上采样坐标政策和原图crop都影响位置。一个预测框最终需要按输入预处理逆变换返回原图，不能只按feature stride粗略乘回。
+增益来自骨干本身，而不是检测框架或模型规模。四种框架的头完全不同（两阶段、单阶段、点表示、稀疏查询），都受益，说明 Swin-T 产出的四级特征普遍比 ResNet-50 的好。同算力下的一致增益是"更好的骨干"最有说服力的证据。
 
-**奇数尺寸融合，用目标size而非盲目scale_factor。** 若相邻特征15×15和8×8，固定放大2倍给16×16，与15×15不能相加。指定上采样目标为15×15可以解决shape，却仍需明确插值坐标与边界政策。
+</details>
 
-在语义分割中，将stride4 logits放回输入尺寸，插值的是每类连续分数；通常先resize分数再argmax，比先argmax离散标签再bilinear有更明确的类别语义。GT离散标签resize应采用合适的离散方法，并保存ignore规则。
+22. ★ 表 5 里循环移位比 padding 快多少？比不移位慢多少？为什么作者接受这一点点慢？
 
-检测头可能在每个FPN层输出候选类别和框，分配对象尺度还涉及assigner、anchor或query。Swin/PVT只决定骨干提供的表示，不决定所有框筛选、AP和loss。后续感知章节会精读具体head，本节说明正确接线的基本条件。
+<details><summary>解析</summary>
 
-**阅读原论文实验时，先锁定一行的条件。** [Swin原论文Table4](https://arxiv.org/pdf/2103.14030)中，指定Swin-T消融的ImageNet top-1从不移位80.2到移位81.3。这支持那组条件下shift有帮助；它不是所有数据、全部模型都必涨1.1点，也不是本章程序的准确率。
+Swin-T：循环 755 FPS，padding 670，不移位 770。循环比 padding 快 13%，比不移位只慢 2%。而表 4 显示移位带来 +1.1 分类、+2.8 检测、+2.8 分割。2% 的速度换 2.8 AP，显然值。
 
-[PVT原论文](https://arxiv.org/pdf/2102.12122)使用RetinaNet、Mask R-CNN、Semantic FPN等检查骨干在稠密任务上的作用。一个AP数对应骨干、任务头、预训练、输入尺度、schedule和评价集的共同结果；换一个骨干名称而省略后面条件，不足以复现结论。
+</details>
 
-[PVT V2](https://arxiv.org/pdf/2106.13797)比较overlap、卷积FFN和LSRA；[Swin V2](https://arxiv.org/pdf/2111.09883)面向扩大容量与分辨率的稳定性和迁移问题。这里把论文作为历史证据与设计来源，详细原理已经用独立索引、推导和教学模型展开；不会把历史最好结果称为2026年的最新榜单。
+23. 为什么 Pre-norm 在很深的大模型里会让激活方差逐层上升？res-post-norm 怎样解决？
 
-**消融必须区分“连接规则”与“预算”。** 比较W与W/SW，可以保持窗口、通道、深度、参数与训练目标一致，主要改变分组连接。比较global与window若同时缩小patch、改变深度，就不再是单变量比较。
+<details><summary>解析</summary>
 
-比较SRA与固定池化，需要记录KV数量随尺寸如何变化、SR参数数、FFN变化、输入尺度及总MAC。若改注意力后重新调lr而基线不调，也会混入调参预算差异。强基线、匹配预算和实际测时应与机制实验结合。
+Pre-norm 的 LN 作用在分支输入上，分支输出未经约束直接加到主干，主干幅度每层累积。24 层后 H 模型的方差涨到 $10^4$ 以上，训练崩溃。res-post-norm 把 LN 移到分支输出上，每次加回主干的量都归一化过，方差平稳（图 2 的三角曲线）。
 
-多尺度输出能改进任务接口，但到底来自高分辨率浅层、深层语义、FPN融合还是预训练，需要对应对照。真实评估还要报告小/中/大对象、边界、长宽比及置信区间，避免平均指标掩盖相反的子集趋势。
+</details>
 
-**跟着算：一个可以执行的机制对照设计。** 教学设定：相同图像划分、输入、宽度、block数、训练步数与优化器，比较①固定W，②W/SW，③相同网格SRA；另外记录各自参数/MAC/实测时延。测试拆成局部识别、跨旧窗口关系、远处细纹理关系三个子集。
+24. 从 8×8 窗口迁移到 16×16，为什么对数坐标比线性坐标外推得少？
 
-假设②比①跨窗子集提升但局部差不多，支持连接变化与这个能力有关；若③远处粗关系好、细纹理差，提示摘要粒度可能是瓶颈。进一步改变r或P，检查细节/成本的对应曲线，才能更有把握地解释原因。
+<details><summary>解析</summary>
 
-这些是**实验设计和待检验预测**，本章没有训练出上述结果。不要把合理机制解释写成已测结论；也不要把一种构造数据上的支持说成所有自然视觉任务的保证。
+线性坐标范围从 $[-7,7]$ 变 $[-15,15]$，新增的 $[8,15]$ 是原范围的 1.14 倍；对数坐标 $\log(1+7)=2.079$ 到 $\log(1+15)=2.773$，新增 0.69 只是原范围的 0.33 倍。MLP 对训练时没见过的输入只能外推，外推越少越可靠。表 1 的 W24 列不微调差 10.4 个点。
 
-**一份从症状到检查对象的诊断表。** | 症状 | 优先核查 | 独立对照 |
-| --- | --- | --- |
-| shape正常，但窗口图像混乱 | partition轴交换、窗内次序、batch身份 | 位置编号图及reverse |
-| 左右边缘异常互相影响 | roll方向、region mask、禁止项归一化 | 裁剪真实窗口参考 |
-| 新尺寸预测崩溃 | 旧mask/cache、padding、奇数merge、位置表 | 分stage打印H/W及有效区域 |
-| 梯度过小或缺失 | Q/K/V路径遗漏、LN、scatter、冻结范围 | 小双精度有限差分 |
-| MAC少但变慢 | 重排、kernel粒度、内存、同步 | 固定设备/输入的端到端计时 |
-| 小对象差而总AP接近 | stride、浅层接口、KV粒度、分配政策 | APS/尺寸分层与坐标可视化 |
+</details>
 
-冻结要检查每个Parameter的requires_grad和optimizer成员，给整个Module随意设置一个同名属性并不必然修改其参数。训练模式、DropPath与eval转换也单独核对，不能只由没有loss下降猜架构机制失效。
+---
 
-**选结构时把问题和假设写在前面。** 若目标依赖密集局部边界且分辨率高，分层/局部机制提供一种预算组织；若需要细粒度全局对应，压缩KV和有限窗传播可能形成限制。这里的“可能”由信息流推导而来，仍需任务和训练证据。
+`Part 7`
 
-预训练质量、数据、分辨率、连接器、头和部署库常比一个架构名字更能改变最终表现。尤其接VLM时，输出哪stage、采用全局或patch特征、多少视觉token，直接影响LLM接口，不能仅按分类top-1选择。
+## 七、四段可运行核查
 
-下一讲将把绝对/相对位置、RoPE、动态长宽比、打包与token压缩放到统一坐标协议中。到这里应已能回答：每个输出在哪、能看谁、看得多细、哪些操作压缩信息、计算项怎样随尺寸增长。
+下面四段程序只用 Python 标准库。它们核对本讲的索引、mask、梯度和账本，不训练模型，也不加载权重。
 
-## 十、四组自包含教学实验
+### 实验一：分窗、移位 mask 与依赖支持
 
-**实验一：分窗、移位mask与依赖支持。** 程序只用Python标准库。使用固定4×4单通道图，比较循环计算与原坐标裁剪参考；对16个基输入检测两层依赖，再展示有限mask与padding零值的反例。它没有学参数，目的是验证索引和允许关系。
+用固定的 4×4 单通道图，把图 4 的循环移位 + mask 算一遍，再用"在原图坐标直接按 9 个区域分组"的笨办法独立算一遍，逐格比较；对 16 个基输入检测两层 W+SW 后每个位置依赖哪些输入；最后展示有限 mask（−100）和 padding 零值的反例。
 
 ~~~python
 import math
@@ -791,11 +867,10 @@ print('finite_mask_mass',small[1],'huge_masked_logit_mass',large[1])
 print('partition, inverse, boundary masks and dependency checks passed')
 ~~~
 
-应看到SW输出与第16节一致，中心依赖16个输入、角上4个。代码主动区分精确禁止和−100示例；正因为两者不同，才没有把近似非零数拿来构造假的跨边界支持。
 
-**实验二：窗口attention的完整参数梯度。** 两窗、每窗4位置、宽2、单头，其中一窗带边界遮罩，共用Q/K/V/输出矩阵和9项relative bias。本例不含LN/FFN/残差和线性bias，便于把attention本体的每条梯度路径独立检查；真实Swin V1结构仍以第24节为准。
+### 实验二：窗口注意力的完整参数梯度
 
-平方loss同时读取两窗输出，对16个输入标量、16个投影权重和9个bias共41项做中心差分。还assert禁止分数梯度为0、相对表由每窗梯度累加、表梯度总和为0。
+两个窗口、每窗 4 个位置、宽 2、单头，其中一窗带边界 mask；共用 Q/K/V/输出矩阵和 9 项相对偏置。对所有参数做有限差分，特别核对相对偏置的 scatter-add 梯度。不含 LN/FFN/残差，便于把注意力本体的每条梯度路径单独检查。
 
 ~~~python
 import math
@@ -895,11 +970,10 @@ print('shared_bias_gradient',[round(row[0],9) for row in gradients[-1]])
 print('masked score gradients and shared relative-bias accumulation passed')
 ~~~
 
-本机检查最大绝对误差约$1.08\times10^{-13}$。这个值只属于给定小输入、权重、双精度和步长；不能替代GPU混合精度实现测试。若改mask、头数或矩阵排列，应重新验证实际路径。
 
-**实验三：SRA双支路与merge反传。** 第一部分是4×4/C2经2×2 SR投影、LN、四个KV摘要、16个query的attention，检查68个标量。第二部分是2×2/C2合并为4维输出，按00/10/01/11拼接、LN8、8×4投影，检查56个标量。
+### 实验三：SRA 双支路与 merge 反传
 
-LN包含可训练gamma/beta和epsilon；注意力包含全部Q/K/V/输出矩阵。教学loss为输出平方和，不是ImageNet分类目标。最后验证一个包含LN的多对一碰撞，并对比LN/reduction交换顺序的不同结果。
+第一部分：4×4、C=2 的特征图经 2×2 空间缩减投影、LN、4 个 K/V 摘要、16 个 query 的注意力，检查 68 个标量的梯度（query 支路和摘要支路都要回传）。第二部分：2×2、C=2 按 00/10/01/11 拼接、LN 8、8×4 投影的 patch merging，检查 56 个标量。
 
 ~~~python
 import math
@@ -1034,9 +1108,10 @@ print('LN_then_reduce',first[0],'reduce_then_LN',second[0])
 print('SRA shared-input paths, merging scatter and information-loss checks passed')
 ~~~
 
-本机SRA最大误差约$8.45\times10^{-11}$，merge约$4.25\times10^{-10}$。两者通过不同路径和完整输入反传确认公式；这个教学程序没有完成整套PVT/Swin训练。
 
-**实验四：全网参数/MAC及版本公式核对。** 程序独立核算Swin T/S/B的四stage、stem、merge、末LN与1000类头；计算单份FP16分数矩阵、SRA账本、均值摘要、cosine/log坐标和overlap尺寸。窗口固定7，图像224，各种运算计数条件已在前文声明。
+### 实验四：全网参数、MAC 与版本公式
+
+独立核算 Swin T/S/B 的四 stage、stem、merge、末 LN 与 1000 类头的精确参数和 MAC；计算单份 FP16 分数矩阵、SRA 账本、均值摘要例子、cosine 与对数坐标、PVT v2 的 overlap stem 尺寸。
 
 ~~~python
 import math
@@ -1106,136 +1181,87 @@ for side in [224,225,230]:
 print('all ledger and formula checks passed')
 ~~~
 
-得到T参数28,288,354与矩阵MAC4,490,566,656。改变分类数、bias、window、absolute position、block ratio或动态padding后，应修改对应账本，不把assert中的旧常数当所有变体的真值。
 
-## 十一、28道练习与逐题解析
+四段程序通过之后，**已经核对的**：分窗索引、移位 mask 的正确性、两层依赖集合、相对偏置的梯度累加、SRA 和 merge 的反传、三档精确账本、cosine 和对数坐标的数值。**没有核对的**：任何真实 checkpoint、ImageNet/COCO 的精度、GPU 速度。
 
-**练习1：N=24能否唯一恢复原空间网格？**
+---
 
-**解析：** 不能。4×6、3×8、2×12都可能。还需保存H/W及行优先或其他序列排序。错用平方网格会改变邻接、position和SR/窗口分组，即使N×C矩阵仍能运行。
+## 附录 A · 核心概念速查
 
-**练习2：224输入从P16改P4，哪些项增16倍、哪些增256倍？**
+| 概念 | 一句话 | 出处 |
+|---|---|---|
+| **为什么要金字塔** | 检测分割需要 stride 4/8/16/32 四级特征，ViT 只有一级 | Swin 图 1、PVT 图 1 |
+| **窗口注意力 W-MSA** | 注意力只在 M×M = 49 个 patch 的窗口内算；复杂度 $4hwC^2+2M^2hwC$，与面积线性 | 公式 (2) |
+| **固定窗口 vs 滑动窗口** | 固定窗口同窗 query 共用 key，能批量；滑动窗口慢 4 倍 | 第 2 页、表 5 |
+| **移位窗口 SW-MSA** | 下一层窗口边界移 M/2，让上一层相邻窗口通信；两种块成对交替 | 图 2、公式 (3) |
+| **循环移位 + mask** | 滚动特征图让窗口保持规则；按原区域编号给拼凑窗口加 −∞ mask | 图 4 |
+| **相对位置偏置** | $(2M-1)^2$ 的小表按位移查，加在分数上；比绝对位置好，稠密任务 +2.3 mIoU | 公式 (4)、表 4 |
+| **Patch merging** | 2×2 四个 patch 拼成 4C、LN、线性到 2C；空间减半通道翻倍 | 图 3 |
+| **变体** | T/S/B/L：C = 96/96/128/192，块数 {2,2,6,2} 或 {2,2,18,2}，每头 32 维 | 第 5 页 |
+| **SRA（PVT）** | query 全保留，K/V 用 R×R 块缩减成摘要；交互 $2N^2C/R^2$ | PVT 图 4、公式 (1)–(3) |
+| **Swin vs PVT** | 窗口：逐个读窗内原 token，局部精细；SRA：读全图粗摘要，全局模糊 | 模块五 |
+| **PVT v2** | 重叠 stem、卷积 FFN、固定 49 个 K/V 的线性 SRA | 模块五 💡 |
+| **检测增益** | 四种框架换 Swin-T 都 +3.4 到 +4.2 AP，同算力 | Swin 表 2 |
+| **res-post-norm** | LN 移到分支输出、相加之前；抑制深层激活爆炸 | V2 图 1、图 2 |
+| **scaled cosine attention** | $\cos(q,k)/\tau+B$，对 q/k 幅度不敏感 | V2 图 1 |
+| **Log-CPB** | MLP 从对数位移生成偏置，任意窗口可算；W8→W24 不微调只掉 2.7 | V2 公式 (4)、表 1 |
 
-**解析：** 固定C时token数196→3136，Q/K/V、输出投影和FFN按位置计算的项增16倍；全局QK/AV交互以及每头分数项增256倍。patch投影本身还依赖patch输入维度，不应不加条件归入16倍项。
+## 附录 B · 数字速查
 
-**练习3：为什么BHWC不能只reshape成窗口序列？**
+| 量 | 数值 |
+|---|---:|
+| Swin-T 四级输出（224） | 56²×96 / 28²×192 / 14²×384 / 7²×768 |
+| 窗口 / 移位 / 每头维 | M = 7 / s = 3 / 32 |
+| Swin-T/S/B 精确参数 | 28,288,354 / 49,606,258 / 87,768,224（论文 29M/50M/88M） |
+| Swin-T MAC | 4,490,566,656（论文 4.5G） |
+| stage 1 一个块 | 投影 115.6M + 交互 29.5M + MLP 231.2M ≈ 376M MAC |
+| 相对偏置参数（M=7，3 头） | 169×3 = 507 |
+| ImageNet top-1 | Swin-T 81.3 / S 83.0 / B 83.5 / B↑384 84.5 / L↑384（22K）87.3 |
+| COCO（Cascade Mask R-CNN） | R-50 46.3 → Swin-T 50.5 AP box |
+| 速度（V100，Swin-T） | 不移位 770 / 循环移位 755 / padding 670 / 滑窗 kernel 488 / 滑窗朴素 183 FPS |
+| PVT stage 1 | N 3136、C 64、R 8 → 49 个 K/V；交互项降 64 倍 |
+| Swin V2 对数坐标外推 | 线性 1.14× vs 对数 0.33×（W8 → W16） |
+| Swin V2-G | 30 亿参数，1536 分辨率，COCO 63.1 AP，ADE20K 59.9 mIoU |
 
-**解析：** 行优先连续存储的4项可能来自一条长行，二维窗口需要两条局部行。先拆窗口行/列和窗内行/列，再permute使每窗内容相邻。4×4/M2正确首窗是1/2/5/6，直接每4项一组则是1/2/3/4。
+## 附录 C · 面试高频问题
 
-**练习4：partition的梯度要不要乘可学习权重？**
+1. **ViT 为什么不适合做检测分割骨干？Swin 怎么改？**
+   ViT 只有 stride 16 一级特征、全局注意力随 token 数平方增长。Swin 用 4×4 的小 patch 起步，每个 stage 用 patch merging 减半分辨率、翻倍通道，得到 stride 4/8/16/32 四级特征；注意力限制在 7×7 窗口内，复杂度与面积线性。
 
-**解析：** 它是置换，无参数。前向$u=\Pi x$，反向$g_x=\Pi^\top g_u$；用逆索引还原即可。若某索引重复使用，则已经变成gather并需累加，不再是纯置换。
+2. **窗口注意力怎样让不同窗口通信？**
+   相邻两个块交替使用规则窗口和移位 M/2 的窗口。移位后的窗口横跨上一层的窗口边界，两层叠加信息就跨窗了。表 4：移位带来分类 +1.1、检测 +2.8、分割 +2.8。
 
-**练习5：B2、H=W56、M7、C96、h3，attention分数shape是什么？**
+3. **循环移位和 mask 是怎么回事？**
+   移位后窗口数从 4 变 9 且大小不一，没法批量。把特征图向左上循环滚动 M/2，又能切成规则窗口；但滚动把原图对角的区域拼到了一起，所以按原区域编号给同窗不同区域的位置对加 −∞ mask。算完再滚回去。速度只比不移位慢 2%。
 
-**解析：** 每图64窗，共128窗，单窗49位置，每头d32。合并窗口后分数为128×3×49×49；如果保留B与窗口轴，可写2×64×3×49×49。不能变成2×3×3136×3136，那是全局分数。
+4. **Swin 为什么用相对位置偏置而不是绝对位置编码？**
+   相对偏置只看两块之间的位移，平移不变，检测分割需要这个性质。表 4 显示加绝对位置反而在 COCO 掉 0.3、ADE20K 掉 2.1。参数只有 $(2M-1)^2$ 每头。
 
-**练习6：窗口边长加倍，全block MAC是不是必增4倍？**
+5. **Swin 和 PVT 省计算的方式有什么不同？**
+   Swin 限制每个 query 的候选集合（只看窗内 49 个）；PVT 保留全图候选但把 K/V 压缩成 49 个摘要。前者局部精细，后者全局但粗。两者都用四级金字塔。
 
-**解析：** 固定N/C下，交互项$2NM^2C$增4倍，但投影与FFN$12NC^2$不变，全block增长介于对应比例之间。窗口补齐、尺寸适配和实现开销另计；不能从交互比例直接得到时延。
+6. **patch merging 和平均池化有什么不同？**
+   merging 把 2×2 的四个 C 维向量拼成 4C（位置信息各占一段），LN，再学一个 4C→2C 的线性层；池化是固定等权、输出仍 C 维，分不开块内的排列。
 
-**练习7：参数共享的两个窗口为何不能直接互读？**
+7. **Swin V2 改了什么、为什么？**
+   res-post-norm（LN 移到分支输出）抑制深层激活爆炸；scaled cosine attention 防止少数大幅度 token 主导注意力；Log-CPB 用 MLP 从对数位移生成偏置，让低分辨率预训练的模型能迁移到大窗口。三者都是为了把模型扩到 30 亿参数、1536 分辨率。
 
-**解析：** 共享的是函数的矩阵和bias规则；每窗softmax只对自己key集合计算。除非分区改变、merge或加入其他跨窗路径，否则本层没有输入依赖连接。共享函数不自动把各次调用的输入相加。
+8. **res-post-norm 和经典 Post-LN 一样吗？**
+   不一样。Post-LN 是 $\mathrm{LN}(X+\mathrm{Attn}(X))$，残差主干也被归一化；res-post-norm 是 $X+\mathrm{LN}(\mathrm{Attn}(X))$，主干保持恒等路径，只归一化分支输出。
 
-**练习8：s1的负roll里，新左上来自原图哪处？**
+9. **为什么 Swin-T stage 4 参数最多、但每块计算量和 stage 1 差不多？**
+   参数按 $12C^2$，C 翻三次倍后是 stage 1 的 64 倍；MAC 按 $12NC^2$，N 每级除 4、C 每级乘 2，$NC^2$ 不变。参数看宽度，计算看宽度×位置数。
 
-**解析：** 新$(0,0)$读取原$(1,1)$，算例B是6。移动后的右边界会从原左边绕入，因此需要mask。处理后正roll把结果映回原位置，反向沿同样置换关系逆放梯度。
+10. **Swin 的真实速度和 DeiT 比如何？**
+    同精度档更快：Swin-T 81.3 @ 755 FPS vs DeiT-S 79.8 @ 940；Swin-B 83.5 @ 278 vs DeiT-B 81.8 @ 292。检测上 Swin-T 15.3 FPS vs DeiT-S 10.4，因为 DeiT 要额外加反卷积凑多尺度。
 
-**练习9：为什么mask不能禁止所有“旧窗编号不同”的位置？**
+---
 
-**解析：** 新窗就是为了连接旧窗的部分区域。旧窗不同不是禁止条件；循环拼接后属于不同真实边界子组才应禁止。用旧窗身份mask会取消shift想引入的跨窗连接。
+## 原始材料
 
-**练习10：先softmax再把禁止项乘0为什么不够？**
+- [Liu 等：Swin Transformer: Hierarchical Vision Transformer using Shifted Windows](https://arxiv.org/abs/2103.14030)，ICCV 2021 最佳论文；[官方代码](https://github.com/microsoft/Swin-Transformer)。**本讲标注"Swin 图 N / 表 N / 公式"的截图来自该论文 arXiv v2 版。**
+- [Wang 等：Pyramid Vision Transformer](https://arxiv.org/abs/2102.12122)，ICCV 2021；[官方代码](https://github.com/whai362/PVT)；[PVT v2](https://arxiv.org/abs/2106.13797)。**"PVT 图 N / 表 N / 公式"的截图来自 PVT v1 论文 arXiv v2 版。**
+- [Liu 等：Swin Transformer V2: Scaling Up Capacity and Resolution](https://arxiv.org/abs/2111.09883)，CVPR 2022。**"Swin V2 图 N / 表 N / 公式"的截图来自该论文 arXiv v2 版。**
+- 所有截图版权归原作者，讲解文字为笔记作者补充。4×4 编号图、零分数平均、cosine 与对数坐标的小例子是本讲构造的教学例子，不是论文数据。
 
-**解析：** 两个允许项、两个禁止项且原分数都0时，留下权重总和1/2。有效权重需重新归一化或在softmax前排除。否则均值输出被缩小，loss与梯度都改变。
-
-**练习11：区域标签[1,2,1,2]允许哪几对？**
-
-**解析：** 第0/2位置互见，第1/3互见，其他跨组禁止。对应允许矩阵在算例D。对于值8/5/12/9，输出10/7/10/7；这些是移动坐标顺序，最后还需reverse和逆roll。
-
-**练习12：−100是否能保证严格零权重？**
-
-**解析：** 不能，有限logit产生的指数仍可非零；甚至禁止key原分数200，加−100后是100，可以压过有效0分数。具体数值类型可能下溢，但不能用下溢现象证明无条件数学禁止。
-
-**练习13：最后裁掉padding，是否撤销padding对有效输出的影响？**
-
-**解析：** 不会。有效query此前若读取了padding key，已经改变加权和和归一化。1/2/3/0平均1.5，排除0的正确有效平均2，crop不能把1.5自动改回2。记录padding读取政策并保持训练/推理一致。
-
-**练习14：W再SW两层，4×4小图每个位置是否都全局？**
-
-**解析：** 中心四格依赖16项，边缘非角依赖8，四角依赖4。更大图的两层通常也不全局；图上可达范围和实际权重贡献另分。实验一用16个基输入核对这组支持数量。
-
-**练习15：M7/h3相对bias是7203个参数吗？**
-
-**解析：** 不是。独立表项$13^2\times3=507$；展开到三个49×49矩阵才有7203个引用值。整数索引通常是buffer，同一表被所有图像/窗口引用，不能把广播后的activation计成参数。
-
-**练习16：把query−key换成key−query，索引3会发生什么？**
-
-**解析：** 在M2例子，$(0,-1)$变成$(0,1)$，索引3变5。一般位移取反会旋转相对表对应关系。若同步翻转权重表可构造等价转换，只改索引方向则通常改变函数。
-
-**练习17：同一bias被多个位置对使用，梯度覆盖还是相加？**
-
-**解析：** 相加。每次引用都有一条链式贡献，按$\rho(i,j)$scatter-add；还跨图像/窗口求和。被禁止的分数在精确mask下贡献0；带正则时再加入正则梯度。
-
-**练习18：V1 merge的四格顺序与输出维度？**
-
-**解析：** 00/10/01/11拼成4C，LN4C后无bias线性4C→2C；空间每轴减半。输出标量数是原来一半，不是保留同总量。交换01与10须相应交换权重行，不能只调代码。
-
-**练习19：把四个token先平均，等价于patch merging吗？**
-
-**解析：** 一般不等。平均给各位置固定同系数，并先压成C；merge先保留四份C再学习4C→2C，且LN统计次序不同。某些权重可模拟平均的一部分行为，但不能把两函数定义直接等同。
-
-**练习20：merge压成2C，是否只对原四格中的两格有梯度？**
-
-**解析：** 否。$G_YW_m^\top$产生4C梯度，再经跨4C的LN和四段scatter，都可非零。压缩输出维数限制rank，不决定固定哪两格被保留。实验三检查全部输入项。
-
-**练习21：Swin-T的参数最多stage是否也有最多token？**
-
-**解析：** 不一定。本配置stage4两block有14,183,856参数，stage1仅224,694；stage4虽只有49位置，但C768使矩阵参数大。stage3六block则占主要MAC，参数、token、总运算是不同账本。
-
-**练习22：SRA对56×56/r8的输出为什么不是7×7？**
-
-**解析：** 只有KV摘要是7×7，共49项；query保留3136项，$3136\times49$的attention乘$49\times d$得到$3136\times d$。本层输出仍56×56，之后stage embedding才另行降采样。
-
-**练习23：固定r8，面积扩大4倍，SRA交互项扩大多少？**
-
-**解析：** N和$N_s=N/64$都扩大4倍，交互$2NN_sC$扩大16倍。固定P7的池化版本$N_s=49$不变，交互扩大4倍。必须说明固定的变量，才有复杂度结论。
-
-**练习24：r1时能继续加一个NC²的SR成本吗？**
-
-**解析：** 按本章核对的实现，r1走原序列，不运行额外SR卷积/LN，因此恢复普通attention账本。若另一个实现即使r1也有1×1 SR，则需另外计数。路径分支决定实际运算，不由公式机械延伸决定。
-
-**练习25：PVT最后加入CLS后，可以不改reshape就运行r2吗？**
-
-**解析：** 不可以，空间网格只有HW个位置，序列多1。须分离CLS、定义它如何与摘要交互；本章V1分类路径末r1不需这个空间reshape。位置插值也要单独保留CLS行。
-
-**练习26：225输入的7/4/3 overlap stem输出56还是57？**
-
-**解析：** $\lfloor(225+6-7)/4\rfloor+1=57$。若按225整除4得到56，就错用了无padding、不重叠的尺寸政策。之后3/2/1为29、15、8，FPN不应盲目将8放大2倍与15相加。
-
-**练习27：LSRA是线性函数，V2去掉绝对表就没有位置吗？**
-
-**解析：** 两个判断都不成立。LSRA的“linear”限定固定摘要大小下对N的复杂度，softmax仍非线性；overlap、DW、padding边界和空间网格组织仍提供位置相关结构。固定表只是位置信息来源之一。
-
-**练习28：residual-post-norm能写成LN(X+attention(X))吗？**
-
-**解析：** 不能。V2形式是$X+\operatorname{LN}(\operatorname{Attn}(X))$再相应FFN残差；主支路是否进入LN不同。V1/V2 merge的LN维度和次序也不同，加载相同shape权重不保证保留函数。
-
-## 十二、复现记录与阅读衔接
-
-保存输入尺寸/长宽比、预处理与坐标、stem kernel/stride/padding、每stage输出位置、通道/depth/head、窗口与shift、partition顺序、relative bias方向与表/MLP、mask数值与padding可见性、merge顺序/LN、SR比例或pool目标、特殊token、FFN局部卷积与激活、checkpoint revision、loss/训练预算、任务head和评价协议。
-
-先验证编号图与逆索引，再做小矩阵、全部梯度、单步训练；之后才在真实数据做精度与系统评测。修改动态尺寸、mask或权重迁移时，增加对应数值对照；不要把一份静态shape检查作为全尺寸保证。
-
-本讲完成Swin/PVT主机制及两者V2的相关改进。位置表示与视觉token的统一专题进入[第15讲](../vision-15-position-tokens/)；回到[课程总览](../vision-00-overview/)查看整体已写/待写状态，[第11讲](../vision-11-attention-transformer/)提供完整通用Attention反传，[第12讲](../vision-12-vit/)提供切块/插值与ViT账本。
-
-## 原始论文与作者实现
-
-- [Liu等：Swin Transformer](https://arxiv.org/abs/2103.14030)，ICCV2021；[作者V1模型代码](https://github.com/microsoft/Swin-Transformer/blob/f82860bfb5225915aca09c3227159ee9e1df874d/models/swin_transformer.py)。核对分窗、roll/区域mask、bias索引、Pre-LN、merge和分类接口。
-- [Wang等：Pyramid Vision Transformer](https://arxiv.org/abs/2102.12122)，ICCV2021；[作者仓库V1分类模型](https://github.com/whai362/PVT/blob/57e2dfaa5a46f9050d76f306a4fcd9a7c061f520/classification/pvt.py)。核对SR卷积、共享KV摘要、stage位置表、CLS与配置；其他任务目录的输出接口需另外核对。
-- [Wang等：PVT V2](https://arxiv.org/abs/2106.13797)，Computational Visual Media2022；[作者V2分类模型](https://github.com/whai362/PVT/blob/57e2dfaa5a46f9050d76f306a4fcd9a7c061f520/classification/pvt_v2.py)。核对overlap、卷积FFN、linear开关、固定池化和分类平均。
-- [Liu等：Swin Transformer V2](https://arxiv.org/abs/2111.09883)，CVPR2022；[作者V2模型代码](https://github.com/microsoft/Swin-Transformer/blob/f82860bfb5225915aca09c3227159ee9e1df874d/models/swin_transformer_v2.py)。核对residual-post-norm、cosine尺度、连续bias和merge顺序。
-- [Lin等：Feature Pyramid Networks for Object Detection](https://arxiv.org/abs/1612.03144)：本讲用独立简化递推说明骨干输出与FPN的区别，完整检测方法将在后续感知章节展开。
-
-资料核对：2026-10-08。以上四个作者模型代码链接已固定到本次读取且逐字核对的commit；完整复现还需锁定配置、训练代码与依赖。本章的计数与四组标准库程序可在本文直接核查；没有执行真实模型训练、GPU显存或端到端速度实验。
+*本笔记基于三篇原论文整理，截图来自论文 PDF，讲解为笔记作者补充。资料核对日期 2026-10-19。*

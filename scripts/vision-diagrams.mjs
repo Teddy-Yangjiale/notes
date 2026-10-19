@@ -688,7 +688,6 @@ outputs.push(save('vision-24-sam','data-engine','数据引擎：模型、标注�
 // One route map per lecture keeps the historical papers connected to the
 // question that motivates the next technique.
 const storylines = [
- ['vision-14-swin-pvt','高分辨率如何变得可计算？',['高分辨率网格','Swin 窗口与移位','PVT 压缩 K/V','多尺度任务'],['小物体需要密集位置','全局注意力太昂贵','局部计算、跨窗传递','空间降采样、保留查询','稠密头读取各层特征']],
  ['vision-15-position-tokens','位置从哪里来，又在哪里失效？',['像素与 patch 坐标','绝对与相对位置','RoPE 的旋转','打包与合并边界'],['先定义坐标原点','再问模型怎样读取','相加或加入注意力偏置','相对位移进入相位差','重排时检查位置语义']],
  ['vision-16-contrastive','同一图像的两个视图如何靠近？',['同图双视图','InfoNCE 多选题','CPC 与 MoCo','SimCLR 的双路径'],['增强决定正样本语义','负样本定义比较背景','从未来预测到队列字典','动量编码稳定队列','大批量直接提供负例']],
  ['vision-17-noncontrastive','去掉负样本后，为什么不全变一样？',['常数解风险','BYOL 慢教师','SimSiam 停梯度','Barlow 与 VICReg'],['先构造塌缩反例','预测器与 EMA 目标网络','固定一侧优化方向','跨样本相关矩阵约束','方差与协方差显式约束']],

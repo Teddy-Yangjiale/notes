@@ -32,7 +32,7 @@ shortTitle: "总览、路线与覆盖进度"
 | 11 | [Attention与Transformer逐步精讲](../vision-11-attention-transformer/) | Q/K/V、mask、多头、位置、完整反传与计算/缓存 |
 | 12 | [ViT 论文逐图精讲](../vision-12-vit/)（新模板样板） | 论文图 1 与公式 (1)–(4)、归纳偏置、账本、表 2 / 图 3–5 的数据量证据、图 6–12 的模型诊断 |
 | 13 | [DeiT 论文逐图精讲](../vision-13-deit/) | 图 1 吞吐—精度、公式 (2)(3) 软/硬蒸馏、图 2 蒸馏 token、表 2–5 教师与主结果、表 8/9 配方消融 |
-| 14 | [Swin与PVT逐步精讲](../vision-14-swin-pvt/) | 窗口/移位mask、相对位置梯度、分层、SRA与V2改进 |
+| 14 | [Swin 与 PVT 论文逐图精讲](../vision-14-swin-pvt/) | Swin 图 1–4 与公式 (1)–(4)、表 1/2/4/5；PVT 图 1/3/4 与 SRA；Swin V2 图 1/2、Log-CPB 与消融 |
 | 15 | [视觉token与位置逐步精讲](../vision-15-position-tokens/) | 坐标/插值/伪逆、2D/3D RoPE、打包隔离与质量合并 |
 | 16 | [对比学习逐步精讲](../vision-16-contrastive/) | InfoNCE/密度比/MI、CPC因果、MoCo状态、SimCLR双路径与评估 |
 | 17 | [无显式负样本逐步精讲](../vision-17-noncontrastive/) | sg与半梯度、BYOL/SimSiam更新、Barlow/VICReg完整反向及全局统计 |
