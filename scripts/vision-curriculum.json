@@ -5,7 +5,8 @@
   "frontierSeries": "vision-frontiers",
   "reference": {
     "series": "sta5007",
-    "criterion": "概念逐项解释、公式逐步推导、维度核对、图中元素解释、具体手算、练习详解；根据知识范围决定篇幅。"
+    "criterion": "概念逐项解释、公式逐步推导、维度核对、图中元素解释、具体手算、练习详解；先问题后机制，易错点集中进 ⚠️ 框，每张图配逐元素图解，练习按模块折叠；根据知识范围决定篇幅。",
+    "styleGuide": "scripts/vision-style-guide.md"
   },
   "chapters": [
     {

@@ -312,6 +312,18 @@ outputs.push(save('vision-12-vit','vit-transfer','迁移分清骨干、接口与
  card(645,430,495,170,'全量微调',['骨干也参与梯度更新','分辨率、位置与预算一起记录'],palette.blue)+
  txt(55,680,'零头第一步：头梯度可非零，骨干的该loss梯度为零；以后可回传。',24),760));
 
+outputs.push(save('vision-12-vit','vit-pipeline','ViT-B/16 整体数据流：从一张图到一个类别','每个方块下面标出张量形状；batch 轴省略。',
+ card(45,150,205,190,'输入图像',['3×224×224','RGB，已 normalize'],palette.green)+arrow(255,245,290,245)+
+ card(300,150,205,190,'切块 + 展平',['196 × 768','196 块，每块 16×16×3'],palette.green)+arrow(510,245,545,245)+
+ card(555,150,205,190,'线性投影 E',['196 × 768','E：768×768，共享'],palette.blue)+arrow(765,245,800,245)+
+ card(810,150,345,190,'拼 CLS，加位置表',['197 × 768','c：768；P_pos：197×768'],palette.orange)+
+ line(985,345,985,390)+arrow(985,390,985,400)+
+ card(45,410,1110,150,'12 × Transformer 块：LN → 多头注意力 → 残差；LN → MLP(GELU, 3072) → 残差',['进 197 × 768，出 197 × 768；序列长度在 12 层里始终是 197，没有下采样。'],palette.blue)+
+ line(600,560,600,600)+arrow(600,600,600,610)+
+ card(45,620,345,135,'最终 LN，取第 0 行（CLS）',['768'],palette.orange)+arrow(395,690,430,690)+
+ card(440,620,345,135,'分类头 W：768×1000',['1000 个 logit → softmax'],palette.green)+arrow(790,690,825,690)+
+ card(835,620,320,135,'交叉熵损失',['标量；反传回到像素'],palette.white)+
+ txt(45,810,'参数 86,567,656；矩阵乘加约 17.56 G MAC；形状链里唯一改变序列长度的是"拼 CLS"这一步。',24),860));
 outputs.push(save('vision-13-deit','dual-token','CLS与DIST：共享骨干，分别接收直接监督','特殊token是输入参数，教师类别通过loss进入；教师无需成为学生推理输入。',
  card(55,160,310,145,'图像 → patch投影',['N个patch，宽D'],palette.green)+
  card(55,350,310,145,'输入特殊位置',['CLS c / DIST d','拼接后T=N+2'],palette.blue)+
