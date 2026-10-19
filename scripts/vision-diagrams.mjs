@@ -343,12 +343,6 @@ outputs.push(save('vision-13-deit','augmentation-targets','混合输入与两个
  card(55,405,500,185,'真实标签分支',['目标：λ r_i + (1−λ)r_j','CutMix λ使用裁剪后的实际面积'],palette.green)+
  card(640,405,510,185,'教师分支',['目标来自g_teacher(x̃)','一般不等于两原图教师输出的线性混合'],palette.blue)+
  txt(55,655,'缓存原图logits再混合，是不同监督协议，需独立验证。',26),725));
-outputs.push(save('vision-13-deit','distillation-cost','学生参数增量、教师训练与部署分账','固定教师省去其反向更新，仍有前向计算；学生推理通常不需要教师。',
- card(55,155,500,205,'学生新增参数',['DIST向量：D','一行位置：D','第二头：(D+1)K'],palette.green)+
- card(640,155,510,205,'Base / 1000类增量',['768 + 768 + 769,000','总新增：770,536','蒸馏学生：87,338,192'],palette.blue)+
- card(55,410,500,205,'蒸馏训练每批',['学生前向 + 学生反向','教师前向；另记录教师来源/训练成本'],palette.orange)+
- card(640,410,510,205,'部署学生',['学生骨干 + 两分类头','指定CLS/DIST/融合政策','MAC不直接等于实测延迟'],palette.green),700));
-
 outputs.push(save('vision-14-swin-pvt','window-shift','移位窗口：规则容器与真实允许连接','4×4网格，M2、s1；编号图无需跟特征再次roll。图中数值是教学位置身份。',
  txt(55,155,'原始网格',27)+grid(55,185,[[1,2,3,4],[5,6,7,8],[9,10,11,12],[13,14,15,16]],57,
  [['#d9e8de','#d9e8de','#dce8f4','#dce8f4'],['#d9e8de','#d9e8de','#dce8f4','#dce8f4'],['#f3dfc4','#f3dfc4','#e7dbea','#e7dbea'],['#f3dfc4','#f3dfc4','#e7dbea','#e7dbea']])+

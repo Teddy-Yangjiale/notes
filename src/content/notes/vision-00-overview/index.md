@@ -31,7 +31,7 @@ shortTitle: "总览、路线与覆盖进度"
 | 10 | [视觉任务、HRNet与RAFT](../vision-10-structured-tasks/) | 输出与坐标、指标、多尺度融合、对应和迭代光流 |
 | 11 | [Attention与Transformer逐步精讲](../vision-11-attention-transformer/) | Q/K/V、mask、多头、位置、完整反传与计算/缓存 |
 | 12 | [ViT 论文逐图精讲](../vision-12-vit/)（新模板样板） | 论文图 1 与公式 (1)–(4)、归纳偏置、账本、表 2 / 图 3–5 的数据量证据、图 6–12 的模型诊断 |
-| 13 | [DeiT逐步精讲](../vision-13-deit/) | 硬/软蒸馏梯度、双token、增强、正则与数据效率 |
+| 13 | [DeiT 论文逐图精讲](../vision-13-deit/) | 图 1 吞吐—精度、公式 (2)(3) 软/硬蒸馏、图 2 蒸馏 token、表 2–5 教师与主结果、表 8/9 配方消融 |
 | 14 | [Swin与PVT逐步精讲](../vision-14-swin-pvt/) | 窗口/移位mask、相对位置梯度、分层、SRA与V2改进 |
 | 15 | [视觉token与位置逐步精讲](../vision-15-position-tokens/) | 坐标/插值/伪逆、2D/3D RoPE、打包隔离与质量合并 |
 | 16 | [对比学习逐步精讲](../vision-16-contrastive/) | InfoNCE/密度比/MI、CPC因果、MoCo状态、SimCLR双路径与评估 |

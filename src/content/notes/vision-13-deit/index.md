@@ -1,680 +1,722 @@
 ---
-title: "13 · DeiT逐步精讲：数据效率、蒸馏梯度、双token与训练配方"
+title: "13 · DeiT 论文逐图精讲：不用 3 亿张图，也能把 ViT 训好"
 date: 2026-10-08
-summary: "从教师与学生的分类概率开始，逐步推导硬蒸馏、温度软蒸馏与双头骨干梯度；拆解distillation token、训练/推理接口、概率与logit融合的差别，核算Ti/S/B额外参数和计算；手算Mixup、CutMix、label smoothing、DropPath与EMA，解释数据效率、消融和复现协议，附可运行核查与练习详解。"
-tags: ["视觉大模型", "DeiT", "知识蒸馏", "数据效率", "训练增强", "论文精读"]
+updated: 2026-10-19
+summary: "Touvron 等人 DeiT 论文的逐图拆解：14 张关键图表直接截自原论文，图下先给原文要点，再补机制解释、设计动机、手算例子与易错点。从'蒸馏是什么'讲到'蒸馏 token 为什么比普通蒸馏好'，再到'训练配方里每一项各值几个点'；面向零基础、顺着本专栏学下来的读者。"
+tags: ["视觉大模型", "DeiT", "知识蒸馏", "数据增强", "训练配方", "论文精读"]
 series: "vision-foundations"
 order: 13
-shortTitle: "DeiT：数据效率与蒸馏"
+shortTitle: "DeiT 论文逐图精讲"
 ---
 
-> [第12讲](../vision-12-vit/)说明了ViT从图像到分类输出的计算。现在追问：同一种骨干，怎样在较有限的独立图像数据上学得更好？本讲先把“教师提供什么监督”算清楚，再解释额外token和训练配方。先修概率与loss见[第03讲](../vision-03-probability/)，优化与正则见[第05讲](../vision-05-training/)，attention反传见[第11讲](../vision-11-attention-transformer/)。下文所有小矩阵与虚构准确率都用于教学，不是本文训练出的ImageNet结果。
+> Touvron 等《Training data-efficient image transformers & distillation through attention》（ICML 2021）逐图拆解。**每张关键图表都截自原论文**，图下先给原文要点，再补上机制解释、设计动机、手算例子与易错点。关键图附「🖼 逐元素图解」；每个模块末尾有带详解的练习；文末附录是概念速查、数字速查与面试高频问题。
 
-## 一、数据效率首先是一个有条件的实验问题
+*14 张论文图表 · 5 张手绘图解 · 7 个模块 · 3 段可运行核查 · 24 道带解析的练习*
 
-### 1. DeiT改变了什么
+> **📌 这一讲在课程中的位置**
+>
+> [第 12 讲](../vision-12-vit/)的 ViT 论文留下了一句很诚实的话：在 ImageNet 这种"中等规模"的数据上从头训练，ViT 比同等大小的 ResNet 差几个点；它的好成绩靠的是 3 亿张私有图片的预训练。这对绝大多数没有 JFT-300M 的人来说等于"用不了"。DeiT（Data-efficient image Transformers）就是来解决这个问题的：**只用 ImageNet 的 128 万张图、一台 8 卡机器、不到 3 天，把同样的 ViT-B 训到 83.1%**，再用一个叫"蒸馏 token"的小技巧推到 85.2%。
+>
+> 主线跟着论文页码走：先看它想证明什么和那张"吞吐量 vs 准确率"的总图（第 1—2 页），然后是方法的两部分：蒸馏损失（第 6 页）和蒸馏 token（第 7—8 页）；接着是实验：模型、教师、蒸馏方式的比较（第 9—11 页）、主结果（第 11—14 页）、训练配方的逐项消融（第 15—16 页）。[第 14 讲](../vision-14-swin-pvt/)转向 Swin 和 PVT，看结构本身怎样改。
 
-DeiT是Data-efficient Image Transformers的简称。它沿用ViT的图像切块和Transformer编码器，研究训练策略与教师监督怎样改善图像分类。需要区分两种模型：不带蒸馏token的DeiT仍是单CLS分类骨干；带蒸馏token的版本增加第二个全局读取位置和第二个分类头。不能把所有DeiT都画成双token。
+---
 
-训练配方和结构是两条轴。更强的增强、正则和优化可以用于单token模型；知识蒸馏也可以直接约束单一分类输出。DeiT的特定结构创新，是将真实标签与教师标签的直接监督分配给两个输出接口，同时让它们在共同的attention骨干中交换信息。
+`Part 1 · 论文第 1—2 页`
 
-后面会比较四种组合：基础骨干、改进配方、普通输出蒸馏、双token蒸馏。只有把其余条件固定，才能讨论某项改变带来的贡献。[DeiT原论文](https://arxiv.org/abs/2012.12877)
+## 一、这篇论文想证明什么
 
-### 2. “较少数据”不等于“没有数据成本”
+#### 封面与摘要　两件事：训练配方和蒸馏 token
 
-数据规模至少有三个数量：独立原图数、训练期间看到的增强视图数、优化更新步数。一本教材的不同裁剪不会变成三本新的教材，但读三遍和读一遍也不是相同学习预算。比较模型时，这三项都应记录。
+*Training data-efficient image transformers & distillation through attention*
 
-另有教师的成本。若学生使用一个预先训练的教师，学生训练中额外的教师前向、教师训练所用图像以及教师的选择过程，都属于整个方案的来源和成本。教师只用同一训练集，不会自动构成外部图像；但这也不是“只训练一次学生”的计算预算。
+![论文封面与摘要](./images/paper-p1-abstract.png)
 
-因此，数据效率应表述为：在指定原图、标签、教师信息、训练预算和评估条件下达到某个质量。不能把一个成功的ImageNet分类实验扩大为任何小数据、任何视觉任务都能同样训练好。
+摘要三段话对应三个主张：
 
-### 算例A：独立样本和曝光次数
+| 原文 | 意思 | 本讲哪里展开 |
+|---|---|---|
+| *These high-performing vision transformers are pre-trained with hundreds of millions of images using a large infrastructure, thereby limiting their adoption.* | 问题：ViT 要几亿张图和大型基础设施，大多数人用不起 | 模块一 |
+| *we produce competitive convolution-free transformers by training on Imagenet only. We train them on a single computer in less than 3 days. Our reference vision transformer (86M parameters) achieves top-1 accuracy of 83.1% (single-crop) on ImageNet with no external data.* | 主张一：**只用 ImageNet、一台机器、3 天**，ViT-B 到 83.1%。靠的是训练配方，模型结构一点没改 | 模块四、六 |
+| *we introduce a teacher-student strategy specific to transformers. It relies on a distillation token ensuring that the student learns from the teacher through attention. … especially when using a convnet as a teacher. This leads us to report results competitive with convnets for both Imagenet (where we obtain up to 85.2% accuracy)* | 主张二：一种**专为 Transformer 设计的蒸馏**，用一个"蒸馏 token"向 CNN 教师学习，到 85.2% | 模块二、三、五 |
 
-假设训练集只有1000张独立原图。实验甲训练100次完整遍历，每张每次产生一个随机视图，则总曝光数约100,000；实验乙训练100次、每次对每张产生3个视图，则约300,000。两者独立原图仍为1000张。
+> **💡 先弄清三个词**
+>
+> - **知识蒸馏（knowledge distillation）**：让一个"学生"模型去模仿一个已经训练好的"教师"模型的输出，而不只是模仿人工标签。模块二从头讲。
+> - **数据效率（data-efficient）**：用同样多的（或更少的）**独立图片**达到同样的精度。注意它不等于"训练算力少"：DeiT 把每张图反复增强、训 300 个 epoch，还要跑一个教师。它省的是"要收集多少张图"，不是"要算多少次"。
+> - **吞吐量（throughput）**：推理时每秒能处理多少张图。论文用它衡量"速度"，比 FLOPs 更接近真实使用。
 
-若全局batch分别为100和300，且没有截断，两者每次遍历都约10次更新，但乙每步处理3倍视图。若乙保持batch=100，就约30次更新。只写“都训练100 epoch”不能判定更新数或计算公平；实际sampler可能改变epoch定义，后文继续核对。
+#### 图 1　吞吐量 vs 准确率：DeiT 站在了 EfficientNet 的曲线上
 
-### 3. 教师、学生与真实标签是三个对象
+*Figure 1: Throughput and accuracy on Imagenet of our methods compared to EfficientNets, trained on Imagenet1k only. The throughput is measured as the number of images processed per second on a V100 GPU. DeiT-B is identical to VIT-B, but the training is more adapted to a data-starving regime. It is learned in a few days on one machine. The symbol ⚗ refers to models trained with our transformer-specific distillation.*
 
-真实标签$y$来自训练任务的标注。教师是参数为$\phi$的模型$g_\phi$，它在当前输入上产生logits $t\in\mathbb R^K$。学生是参数为$\theta$的模型$f_\theta$，产生logits $s\in\mathbb R^K$。K是类别数，二者需要使用相同类别顺序，才能逐类比较。
+![图 1 · 吞吐量与准确率](./images/paper-fig1-throughput.png)
 
-教师可以有不同架构、不同宽度，也可以比学生慢。它不必提供与学生同形状的内部特征：输出蒸馏只要求类别语义对应。将CNN的空间特征图直接当成ViT的token，则是另一类特征蒸馏，需要额外定义空间对齐、投影和损失。
+**🖼 逐元素图解**
 
-“教师”这个称呼不保证其每次预测正确。一个错误教师可以给出高置信度的错误标签；真实标注也可能有噪声。后面的混合监督正是同时面对这些信息源，而不是把其中之一宣布为绝对真理。
+- **横轴**：每秒处理的图片数（V100 GPU，对数刻度），越靠右越快。**纵轴**：ImageNet Top-1 准确率，越靠上越准。所以**右上角是最好的位置**。
+- **黄色方点连成的虚线：EfficientNet B0 到 B7**。这是 2020 年 CNN 里"速度—精度"权衡做得最好的一族模型，经过了多年架构搜索。它是这张图的**基准线**。
+- **两个蓝色圆点：ViT-B 和 ViT-L**。按第 12 讲的论文在 ImageNet 上从头训的结果，77.9 和 76.5，远在黄线下面，而且 ViT-L 比 ViT-B 还差（模型越大、数据越不够）。
+- **粉红色点线："Ours"，即 DeiT-Ti、S、B**。模型和 ViT 一模一样，只换了训练配方。DeiT-B 从 ViT-B 的 77.9 升到 81.8，**4 个点来自训练方法**。但这条线还在黄线下面。
+- **红色点划线："Ours⚗"，即带蒸馏 token 的 DeiT**。DeiT-S⚗ 82.6、DeiT-B⚗ 84.2、DeiT-B⚗↑384 85.2。**这条线压到了 EfficientNet 的黄线上面**。⚗ 是蒸馏（alembic，蒸馏器）的符号，↑384 表示在 384 分辨率上微调过。
 
-### 4. 当前增强图决定教师看到什么
+**读图顺序：** 先看两个蓝点有多低，再看粉线比蓝点高多少（配方的贡献），最后看红线比粉线高多少（蒸馏的贡献）。这张图就是整篇论文的摘要：**配方 + 蒸馏，两步把 ViT 从远远落后推到略微领先**。
 
-把原图$x$通过随机增强$a$变成$\tilde x=a(x)$。一种在线输出蒸馏协议让教师与学生都读取同一个$\tilde x$，因此教师目标是$g_\phi(\tilde x)$，而不是永久绑定在原图上的一个常量类别。
+> **⚠️ "只用 ImageNet"不等于"没有额外信息"**
+>
+> 红线的模型用了一个 CNN 教师（RegNetY-16GF），教师也是在 ImageNet 上训的，所以"没有外部图片"是对的；但教师的预测是一种额外的监督信号，训练时每一步都要多跑一次教师的前向。比较"数据效率"时要说清楚：独立图片数相同，监督信息和算力不同。
 
-这是实际可影响结果的选择。某张图中心裁剪留下猫，另一裁剪只留下沙发，教师的输出可能不同。Mixup或CutMix生成的新输入，也可能使教师做出与两张原图各自预测不同的决定。缓存原图教师logits再给所有增强视图复用，通常不等价于在线预测。
+### 🖊 本模块练习
 
-作者训练代码先执行混合增强，再将同一批samples传给学生与蒸馏criterion；criterion在该输入上执行教师前向。[训练循环](https://github.com/facebookresearch/deit/blob/main/engine.py) 这是核对过的代码路径，不代表所有蒸馏算法必须采用相同视图。
+1. ★ 图 1 里 ViT-B 和 DeiT-B 是同一个模型，为什么准确率差 4 个点？
 
-### 5. 冻结教师必须同时处理梯度和运行模式
+<details><summary>解析</summary>
 
-输出蒸馏通常把教师视为固定监督源：教师前向不建立反向图，教师参数不放入学生optimizer。这样学生loss不会沿教师分支更新$\phi$。但“没有梯度”和“预测稳定”不是同一件事。
+结构完全相同（12 层、D=768、12 头、P=16），差别只在训练配方：优化器超参数、数据增强（RandAugment、Mixup、CutMix、随机擦除）、正则（随机深度、标签平滑、repeated augmentation）。模块六的表 8 会把每一项值多少点列出来。
 
-教师若有BatchNorm，train模式可能更新running mean/variance；有Dropout时，train模式可能产生随机输出。因此固定教师通常还需eval模式，并核对BN buffer、随机算子和预处理。`no_grad`控制自动微分记录，`eval`切换模块行为；两者互不替代。
+这题考的是**"模型"和"训练方法"是两个独立变量**：第 12 讲说 ViT 在 ImageNet 上差几个点，是在当时的配方下的结论。
 
-教师预测无需对argmax求导；学生根据教师产生的目标更新自己。另一些自蒸馏方法用EMA缓慢更新教师，那是不同算法，后续DINO等专题会说明。不要把固定外部教师、学生EMA评价权重与EMA教师混成一个机制。
+</details>
 
-## 二、硬蒸馏：教师给一个类别，梯度仍由学生概率产生
+2. ★ 图 1 的横轴为什么用"每秒图片数"而不用参数量或 FLOPs？
 
-### 6. logits、概率和argmax各做什么
+<details><summary>解析</summary>
 
-logits是实数打分，不必为正，也不必和为1。softmax将它转换为类别概率：
+因为用户真正关心的是速度，而参数量和 FLOPs 都不能直接换算成速度。第 12 讲的账本已经说明：B/32 参数比 B/16 多、计算却少四倍；而 FLOPs 相同的两个模型，一个全是矩阵乘法（GPU 友好）、一个全是深度可分离卷积（访存受限），真实速度可以差好几倍。EfficientNet 就是后者：FLOPs 很低，但吞吐量不如同精度的 DeiT。
 
-$$
-p_k=\frac{e^{s_k}}{\sum_{j=1}^K e^{s_j}}.
-$$
+</details>
 
-全部logits加同一常数不会改变p。预测类别为$\arg\max_k s_k$，它与$\arg\max_k p_k$相同。教师硬目标$k_t=\arg\max_k t_k$只保留最大类别，丢弃第二名、置信度以及其他类别的相对排序。
+3. DeiT 说"不用外部数据"，但它用了一个 CNN 教师。这算不算作弊？
 
-这并不意味着学生输出必须变成一个不可导整数再训练。训练仍对学生logits计算交叉熵；argmax只用于制作教师目标。把学生argmax结果当loss输入，反向传播通常无法得到需要的概率梯度。
+<details><summary>解析</summary>
 
-### 7. 一个目标的交叉熵梯度怎样推出来
+不算，但要说清楚。教师 RegNetY-16GF 也只在 ImageNet 上训练，没有引入新图片；它引入的是**额外的监督信号**（对每张增强图的预测）和**额外的算力**（教师前向）。论文在表 3 里把"不蒸馏 / 普通蒸馏 / 蒸馏 token"分开报告，读者可以看到每一步的贡献。
 
-设目标为类别r，其one-hot向量$e_r$只有第r项为1。loss为：
+这题考的是**读"数据效率"主张时要分清三件事：独立图片数、监督信息、训练算力。**
 
-$$
-L_r=-\log p_r=-s_r+\log\sum_j e^{s_j}.
-$$
+</details>
 
-对$s_k$求导，第一项贡献$-\mathbf1[k=r]$，第二项贡献$p_k$，所以：
+---
 
-$$
-\frac{\partial L_r}{\partial s_k}=p_k-(e_r)_k.
-$$
+`Part 2 · 论文第 6 页`
 
-梯度和为0，与softmax平移不变性一致。梯度下降减去此梯度：目标类别的logit向上，其余向下。具体变化还受后面的权重矩阵与优化器影响，但这一层的方向可以直接核对。
+## 二、蒸馏：教师、学生与两种损失
 
-### 8. 单头硬蒸馏等价于一个混合目标
+论文第 4 节的标题是 *Distillation through attention*。要读懂它，先得知道普通的知识蒸馏是怎么回事。这一模块从零讲起，把论文的公式 (2)、(3) 逐符号拆开，并算几个小例子。
 
-若真实标签y和教师类别$k_t$都监督同一组学生logits，令教师权重为$\alpha\in[0,1]$：
+#### 零基础先修　什么是知识蒸馏
 
-$$
-L=(1-\alpha)L_y(s)+\alpha L_{k_t}(s).
-$$
-
-利用交叉熵对目标分布的线性性，可写成$L=-\sum_k r_k\log p_k$，其中$r=(1-\alpha)e_y+\alpha e_{k_t}$。梯度为$p-r$。这是一组logits面对两个目标来源，并非两个骨干或两个分类器。
-
-当教师与真实标签一致时，r退化为同一个one-hot，监督梯度与普通交叉熵完全相同；当二者不同，r在两个类别上分配权重。目标变软来自信息源冲突与线性混合，教师自身依旧只提供硬类别。
-
-### 算例B：教师与标签冲突时的一头梯度
-
-三类学生概率$p=(1/2,1/3,1/6)$，真实类别是1，教师类别是2，$\alpha=1/2$。目标$r=(1/2,1/2,0)$，故：
-
-$$
-\nabla_sL=(0,-1/6,1/6).
-$$
-
-第一类在当前点恰好不直接改变logit，第二类上升，第三类下降。loss是$-\tfrac12\log(1/2)-\tfrac12\log(1/3)=\tfrac12\log6\approx0.895880$。这里的0并不表示第一类参数永远不更新：共享参数还可能被其他样本、其他输出和weight decay更新。
-
-### 9. 教师硬标签为何会跳变
-
-教师logits为$(0.01,0,-1)$时，硬类别是1；若很小的输入变化使它变为$(0,0.01,-1)$，硬类别成为2。最大打分仅相差0.01，目标one-hot却跨到另一个顶点。
-
-学生对固定目标的loss仍可导，但目标关于教师输出存在不连续决策边界。接近并列时要注意tie-break规则、精度和随机增强。若想保留不确定性，可以考虑软分布蒸馏；这是否改善质量需要实际比较，而不是只凭“更连续”作结论。
-
-argmax把教师校准信息也丢掉。例如两组教师概率$(0.51,0.49)$与$(0.999,0.001)$都成为类别1。硬蒸馏若没有额外置信度权重，就不会因后者更有把握而提高其loss权重。
-
-### 10. 蒸馏不是“学生必须小于教师”
-
-蒸馏常用于压缩，但监督迁移和参数压缩是不同目标。两个模型参数量相近，甚至学生更多，仍可让教师输出作为辅助目标。需要解释的是教师提供的函数行为是否帮助学生，而不是名字中的大小关系。
-
-教师与学生的错误可能互补，学生还有真实标签和自身架构偏置，因而学生在某个评估集上超过教师并不逻辑矛盾。反过来，教师更高accuracy也不保证蒸馏有效：输出类别、增强适配、错误置信度和学生容量都可能影响训练。
-
-不能从一次超越推导教师信息被完整复制，更不能把教师架构的局部性变成学生架构的严格平移等变性。约束的是训练样本上的行为，学生的运算结构仍然由自己的计算图决定。
-
-## 三、软蒸馏：分布、温度和损失尺度都要写清
-
-### 11. 温度如何改变分布
-
-给定温度$\tau>0$，学生与教师分布分别为$p^\tau=\operatorname{softmax}(s/\tau)$、$q^\tau=\operatorname{softmax}(t/\tau)$。温度增大，打分差距在指数前被缩小，分布趋于均匀；温度接近0时，通常集中在最大类别上。
-
-温度不是直接把原概率除以一个数。对于两个类别，有$p^\tau_1/p^\tau_2=\exp((s_1-s_2)/\tau)$。类别概率的比值由logit差决定；更高温度保留排序，却改变差距的强弱。
-
-同一温度用于二者，才是在一致的尺度上比较软目标。温度属于训练目标的设计，推理是否仍用它需要另行规定。知识蒸馏中的高温不自动表示推理必须降低置信度。[Hinton等蒸馏原论文](https://arxiv.org/abs/1503.02531)
-
-### 算例C：用对数构造精确温度例子
-
-教师$t=(\log4,\log2,0)$。温度1时，指数为$(4,2,1)$，故$q^1=(4/7,2/7,1/7)$。温度2时，指数为$(2,\sqrt2,1)$，需重新用$3+\sqrt2$归一化，约为$(0.453082,0.320377,0.226541)$。
-
-第一类仍最大，但第三类不再只有约0.143。这里所有类别都有正概率，能描述非最大类别之间的关系；它们是否包含有用相似性，取决于教师训练和当前输入，不能由softmax形式保证。
-
-### 12. 前向KL与反向KL不能互换
-
-本讲采用固定教师分布在前的KL：
+一个分类模型最后输出 K 个数（K 是类别数），叫 **logits**，记作 $Z\in\mathbb R^K$。它们经过 softmax 变成概率：
 
 $$
-\operatorname{KL}(q^\tau\Vert p^\tau)=\sum_k q^\tau_k\log\frac{q^\tau_k}{p^\tau_k}.
+\psi(Z)_k=\frac{e^{Z_k}}{\sum_{j=1}^K e^{Z_j}} .
 $$
 
-它等于教师熵的负数加上教师到学生的交叉熵：$\sum q\log q-\sum q\log p$。固定q时，第一项对学生梯度为0。若反过来算$\operatorname{KL}(p\Vert q)$，权重p也随学生变化，梯度就不同。
+普通训练用交叉熵让 softmax 的输出靠近人工标签 $y$（一个 one-hot 向量）：$\mathcal L_{CE}(\psi(Z),y)=-\log\psi(Z)_y$。
 
-论文或库函数的参数写法可能让方向难辨。本讲始终用上面的展开式消除歧义；作者`losses.py`的`kl_div(log_student, log_teacher, log_target=True)`实际对应$\sum q(\log q-\log p)$，不能仅按函数第一个参数的位置猜测KL方向。[作者损失实现](https://github.com/facebookresearch/deit/blob/main/losses.py)
+**知识蒸馏**（Hinton 等，2015）的想法是：一个训练好的**教师**模型对每张图的输出不只是"这是猫"，还包含"有 10% 像狗、1% 像狐狸"这样的**相似性信息**（Hinton 叫它 dark knowledge）。让**学生**去拟合教师的整个输出分布，比只拟合 one-hot 标签学到的更多。
 
-### 13. 为什么常乘温度的平方
+三个角色要分清：
 
-把教师看作常量，对高温softmax交叉熵求导：
+| 角色 | 记号 | 来自哪里 | 训练时更新吗 |
+|---|---|---|---|
+| 真实标签 | $y$ | 人工标注 | 否 |
+| 教师 | $Z_t=g_\phi(x)$ | 一个已训练好的模型，DeiT 用 CNN | **否**（冻结） |
+| 学生 | $Z_s=f_\theta(x)$ | 正在训练的 ViT | 是 |
 
-$$
-\frac{\partial\operatorname{KL}(q^\tau\Vert p^\tau)}{\partial s_k}=\frac{p^\tau_k-q^\tau_k}{\tau}.
-$$
+#### 公式 (2) 与 (3)　软蒸馏和硬蒸馏
 
-链式法则里的$1/\tau$来自$s/\tau$。在高温、小logit差近似下，$p^\tau-q^\tau$本身也约随$1/\tau$缩小，因此未缩放梯度约以$1/\tau^2$减小。乘$\tau^2$能补偿这项主要尺度变化，得到$\tau(p^\tau-q^\tau)$。
+![公式 (2) 与 (3)](./images/paper-eq2-3-distill.png)
 
-这是尺度分析，不是温度任意变化时梯度恰好恒定的定理。高温近似要相对于logit差成立；低温、极端打分、不同loss reduction和其他监督权重都可能改变总梯度。调$\tau$同时不记录$\alpha$和reduction，会混淆目标内容与目标强度。
+（截图最后一行被页面排版截断，公式 (3) 完整写出来是 $\mathcal L^{\text{hardDistill}}_{\text{global}}=\tfrac12\mathcal L_{CE}(\psi(Z_s),y)+\tfrac12\mathcal L_{CE}(\psi(Z_s),y_t)$。）
 
-### 14. 从softmax展开看logit匹配近似
-
-设$\bar s=\tfrac1K\sum s_k$，当$|s_k-\bar s|/\tau$都很小时，把指数展开到一阶：
-
-$$
-p^\tau_k\approx\frac1K+\frac{s_k-\bar s}{K\tau}.
-$$
-
-教师同理，故$\tau(p^\tau_k-q^\tau_k)\approx[(s_k-\bar s)-(t_k-\bar t)]/K$。在此近似范围内，高温KL倾向于匹配去均值后的logits，而不匹配任意共同偏移。
-
-为什么一定要去均值？因为softmax对共同平移不敏感。若教师$t=(2,1,0)$、学生$s=(102,101,100)$，二者概率完全相同，KL为0；原始logits的普通MSE却很大。这种MSE会要求模型拟合本来不影响分类的偏移，已经是另一目标。
-
-### 算例D：高温KL的梯度与数值
-
-取$\tau=2$、学生logits全部0，故$p=(1/3,1/3,1/3)$；教师$t=2(\log4,\log2,0)$，则$q=(4/7,2/7,1/7)$。缩放KL为$4\sum q\log(3q)$，约0.57165，精确数值由本章实验一输出。
-
-梯度$2(p-q)$等于$(-10/21,2/21,8/21)$。三项和为0，第一类上升最多，第二类略下降，第三类下降更多。若还乘教师权重$\alpha$，这整组梯度再乘$\alpha$，不要将它与真实标签梯度的系数漏掉。
-
-### 15. batchmean和逐元素mean差一个类别因子
-
-batch=B、类别数K时，逐样本KL求平均为：
+**公式 (2)，软蒸馏（soft distillation）：**
 
 $$
-L_{\rm batch}=\frac{\tau^2}{B}\sum_{b,k}q_{bk}\log\frac{q_{bk}}{p_{bk}}.
+\mathcal L_{\text{global}}=(1-\lambda)\,\mathcal L_{CE}\bigl(\psi(Z_s),y\bigr)+\lambda\tau^2\,\mathrm{KL}\bigl(\psi(Z_s/\tau),\psi(Z_t/\tau)\bigr).
 $$
 
-如果改为除以所有输出元素$BK$，得到$L_{\rm elem}=L_{\rm batch}/K$，学生梯度也缩小K倍。它们最小值位置可能相同，但与真实标签loss混合后，教师的相对权重不同。K=1000时，差异尤其不能忽略。
+| 符号 | 读法 |
+|---|---|
+| $\mathcal L_{CE}(\psi(Z_s),y)$ | 学生对真实标签的普通交叉熵 |
+| $\tau$ | **温度**。logits 先除以 $\tau$ 再做 softmax，$\tau$ 越大分布越"平" |
+| $\mathrm{KL}(\cdot,\cdot)$ | KL 散度，衡量两个分布差多远（[第 3 讲](../vision-03-probability/)） |
+| $\psi(Z_t/\tau)$ | 教师的高温分布，是**固定目标**，梯度不传回教师 |
+| $\lambda$ | 两项的权重，论文取 0.1 |
+| $\tau^2$ | 补偿高温让梯度变小的系数，下面解释 |
 
-核对日期的作者soft loss先求sum，再除`outputs_kd.numel()`，即BK；硬loss使用默认cross entropy的batch平均。复现软/硬对比时需要记录这一点。改成batchmean并保留相同$\alpha$，并不是单纯修复一个不影响训练的显示数字。
+**公式 (3)，硬蒸馏（hard-label distillation）：** 不要教师的整个分布，只要它的**最大类别** $y_t=\arg\max_c Z_t(c)$，把它当成第二个"真实标签"，两项交叉熵各占一半。没有温度，没有 λ，没有任何超参数。
 
-### 算例E：一个loss被缩小三倍
+> **💡 作者的关键观察：硬蒸馏反而更好**
+>
+> 表 3 会看到：软蒸馏 81.8，硬蒸馏 83.0。这和 NLP 里的经验相反。作者给的解释是：*For a given image, the hard label associated with the teacher may change depending on the specific data augmentation.* DeiT 用的增强非常强（Mixup 把两张图叠在一起、CutMix 把一张图的一块贴到另一张上、RandAugment 大幅改颜色和几何），**增强后的图可能已经不像原标签了**。教师看的是增强后的图，它的硬标签相当于一个"修正过的标签"。软分布在这种情况下反而把教师的犹豫一起传给了学生。
 
-沿算例D取B=1、K=3。batch平均梯度是$(-10/21,2/21,8/21)$；元素平均变成$(-10/63,2/63,8/63)$。若两者都与$\alpha=1/2$的真实标签loss混合，教师对最终更新的影响不同。
+#### 跟着算　温度把分布变平
 
-若希望把元素平均恢复为同一总尺度，可以显式乘K。也可以重新调整混合权重，但需注意真实标签系数$1-\alpha$也会变化；只说“alpha乘三”不一定保持两分量与整体学习率都一致。
+取一个三类教师，logits 是 $Z_t=(\ln4,\ln2,0)$，这样指数正好是整数：
 
-### 16. hard、soft和label smoothing保留的信息不同
+- $\tau=1$：指数 $(4,2,1)$，概率 $(4/7,2/7,1/7)\approx(0.571,0.286,0.143)$。
+- $\tau=2$：logits 变成 $(\ln2,\tfrac12\ln2,0)$，指数 $(2,\sqrt2,1)$，概率 $(2,1.414,1)/4.414\approx(0.453,0.320,0.227)$。
 
-hard目标只有教师最大类别；soft目标包含教师在所有类别上的分布；label smoothing则通常把真实one-hot与一个人为指定的分布混合。三者都能形成概率目标，但来源和含义不同。
+**排序没变，差距变小了。** 第三类从 14% 升到 23%，"这张图有点像第三类"这个信息被放大了。温度不是把概率除以 2，而是把 **logit 之差**除以 2：两类概率之比 $p_1/p_2=\exp((Z_1-Z_2)/\tau)$。
 
-soft teacher的第二类概率可能因图像包含相似物体而提高；均匀smoothing不会随当前图像变化，只是降低标签的尖锐程度。因此“硬蒸馏加smoothing”等价于某个平滑硬目标，却不等价于任意软教师分布。
+#### 跟着算　KL 的梯度，以及为什么乘 $\tau^2$
 
-选择还涉及噪声：软目标可能保留有用关系，也可能传播教师错误置信度；硬目标可以丢掉不可靠的小概率结构，也可能丢掉重要不确定性。这些是待测权衡，而不是哪一种必然更高级。
-
-### 17. 稳定实现使用log-softmax而不是先求极小概率
-
-log-softmax可写为$s_k-\operatorname{LSE}(s)$，其中$\operatorname{LSE}(s)=m+\log\sum_j e^{s_j-m}$、$m=\max s$。先减最大值，避免对大正数直接求指数溢出。对小概率直接先softmax再log，则可能先下溢为0，得到$-\infty$。
-
-KL允许教师某些目标质量为0，但计算$0\log0$要按极限视为0，不能在普通浮点表达式里写成$0\times(-\infty)$而得到NaN。本章教学程序对有限logits使用稳定log概率，避免先求概率再取log造成下溢；直接处理含零的目标概率时，还须明确零质量项的计算约定。
-
-还需核对dtype和停止梯度。教师概率在数值上不是一个“永远正确”的常量，它是某次前向的输出；固定教师只意味着不把此loss的反向传播回教师。检查其值、运行模式与NaN仍然必要。
-
-## 四、蒸馏token：两种直接监督进入同一骨干
-
-### 18. 输入多了一个可训练的全局位置
-
-基础分类ViT的输入是CLS加N个patch，$T=N+1$。蒸馏版增加一个DIST token，输入次序可以记为$[c;d;x_1E;\ldots;x_NE]+P$，其中$c,d\in\mathbb R^D$，$P\in\mathbb R^{(N+2)\times D}$。
-
-作者实现按CLS、DIST、patch排列，最终取序列第0、第1位置送到两个独立线性头。c和d分别跨batch共享，其初始向量是训练参数；它们不是教师输出、标签one-hot或两张额外图像。[作者模型实现](https://github.com/facebookresearch/deit/blob/main/models.py)
-
-教师类别只出现在loss目标里。DIST通过骨干读取图像，并根据loss调整自己的输入参数与上下文状态。把教师logits直接拼进学生输入，会让学生在推理时依赖一个本来不需要的外部教师，已经改变了原算法。
-
-![双token共享图像骨干，两头分别接收标签与教师监督](./images/dual-token.svg)
-
-### 算例F：两个特殊位置怎样进入形状链
-
-batch=2，输入224×224，P=16，D=384。patch投影为$2\times196\times384$；CLS和DIST各扩展为$2\times1\times384$；拼接得到$2\times198\times384$。
-
-位置表是$1\times198\times384$，按batch广播。最终两个状态各为$2\times384$，两个1000类头各输出$2\times1000$。训练时通常保留两组logits用于两个loss；不是将它们拼成2000个类别。
-
-### 19. DIST是特定角色，attention本身不懂教师
-
-对任一token，attention仍按Q/K/V计算。CLS和DIST都可以读取patch、彼此以及自己；没有一套“教师attention公式”专门只给DIST使用。结构上的区别主要是独立输入向量、对应位置和输出监督。
-
-为什么它们会学到不同作用？因为反向传播分别施加真实标签与教师目标，且两个头的参数独立。不同直接监督使它们有机会组织不同的全局信息，共同骨干又允许信息共享。
-
-这不保证两个向量在每张图上都互补或正交。相似度、决策一致率和双头融合收益需要观察；同维度只表示接口形状相同。把某一次attention热图看成“蒸馏token必然只看教师关注区域”，超出了结构本身能保证的性质。
-
-### 20. 两个分类头的loss写到哪一行
-
-设最终归一化CLS特征$u_c$、DIST特征$u_d$，两头logits为$s_c=u_cW_c+b_c$、$s_d=u_dW_d+b_d$。双头硬蒸馏的一个明确目标是：
+把教师分布 $q=\psi(Z_t/\tau)$ 当常数，学生分布 $p=\psi(Z_s/\tau)$。KL 对学生 logit 的梯度是
 
 $$
-L=(1-\alpha)\operatorname{CE}(s_c,r)+\alpha\operatorname{CE}(s_d,e_{k_t}).
+\frac{\partial\,\mathrm{KL}(q\,\|\,p)}{\partial Z_{s,k}}=\frac{p_k-q_k}{\tau}.
 $$
 
-这里r可为真实one-hot，也可为训练增强后的软标签。真实分支的梯度$g_c=(1-\alpha)(p_c-r)$，蒸馏分支$g_d=\alpha(p_d-e_{k_t})$。软蒸馏则用第13—15节定义的温度KL替换第二项，连同其reduction。
+推导：$\mathrm{KL}=\sum_k q_k\log q_k-\sum_k q_k\log p_k$，第一项不含学生，第二项是"以 q 为目标的交叉熵"，它对 $Z_s/\tau$ 的梯度是 $p-q$（[第 3 讲](../vision-03-probability/)的 softmax 交叉熵梯度），再乘链式法则的 $1/\tau$。
 
-注意这与第8节的单头混合目标不同：两组logits有各自概率，不能把它们的两个loss一般化简成“一组概率面对混合标签”。它们共享上游骨干，却在输出处仍是两个不同函数。
+**为什么乘 $\tau^2$？** 温度高时 $p$ 和 $q$ 都趋向均匀，$p-q$ 本身也大约按 $1/\tau$ 缩小，所以未缩放的梯度约按 $1/\tau^2$ 缩小。乘 $\tau^2$ 把它拉回原来的量级，这样调 $\tau$ 时不用同时调学习率。
 
-### 21. 两个头的梯度怎样回到特征
+用上面的例子：$\tau=2$，学生 logits 全零（$p=(1/3,1/3,1/3)$），教师 $Z_t=2(\ln4,\ln2,0)$ 使 $q=(4/7,2/7,1/7)$。梯度 $\tau^2\cdot(p-q)/\tau=2(p-q)=(-10/21,\;2/21,\;8/21)$。三项和为 0（softmax 对平移不敏感），第一类 logit 要升、第三类要降。模块七的程序用有限差分核对这组数。
 
-行向量约定下，$W_c,W_d\in\mathbb R^{D\times K}$。由线性层反传：
+> **⚠️ 两个实现细节会改变教师的实际权重**
+>
+> 1. **KL 的方向。** 本讲固定用 $\mathrm{KL}(q\|p)=\sum q\log(q/p)$，教师在前。反过来写 $\mathrm{KL}(p\|q)$，权重 $p$ 也随学生变，梯度完全不同。PyTorch 的 `kl_div(input, target)` 第一个参数是 log 概率的**学生**，容易看反。
+> 2. **求平均的分母。** 逐样本 KL 对 batch 求平均（分母 B）和对所有元素求平均（分母 B×K）差 K 倍；K=1000 时教师项的有效权重差 1000 倍。作者代码的软蒸馏用的是后者（`numel()`），复现时要照抄或相应调 λ。
+
+#### 跟着算　硬蒸馏就是"一组 logits 面对两个标签"
+
+硬蒸馏的两项交叉熵作用在**同一组**学生 logits 上。利用交叉熵对目标的线性性，可以合成一个目标 $r=\tfrac12e_y+\tfrac12e_{y_t}$，损失 $=-\sum_k r_k\log p_k$，梯度 $=p-r$。
+
+例子：学生 $p=(1/2,1/3,1/6)$，真实标签第 1 类，教师说第 2 类。$r=(1/2,1/2,0)$，梯度 $p-r=(0,-1/6,1/6)$：第 2 类 logit 要升，第 3 类要降，第 1 类此刻恰好不动。损失 $=-\tfrac12\ln\tfrac12-\tfrac12\ln\tfrac13=\tfrac12\ln6\approx0.896$。
+
+教师和标签一致时 $r$ 退化成普通 one-hot，和没有蒸馏一样；**只有两者不一致的样本才让蒸馏起作用**。
+
+> **⚠️ 硬标签会"跳"**
+>
+> 教师 logits $(0.01,0,-1)$ 的硬标签是第 1 类；输入稍微变一点变成 $(0,0.01,-1)$，硬标签就跳到第 2 类，目标从一个顶点跳到另一个顶点。软蒸馏没有这个问题，但 DeiT 的实验说明在强增强下这不是坏事。另外硬标签丢掉了教师的置信度：$(0.51,0.49)$ 和 $(0.999,0.001)$ 得到同一个目标。
+
+### 🖊 本模块练习
+
+4. ★ 温度 τ=2 时，能不能把 τ=1 的概率直接除以 2 再归一化？
+
+<details><summary>解析</summary>
+
+不能。温度作用在 logits 上：$p^\tau_k\propto e^{Z_k/\tau}$，等价于把 τ=1 的概率开 τ 次方再归一化（$p^{\tau}_k\propto (p^1_k)^{1/\tau}$），不是除以 τ。正文例子：$(4/7,2/7,1/7)$ 在 τ=2 下变成 $(0.453,0.320,0.227)$，是开平方后归一化。
+
+</details>
+
+5. ★ 教师 $Z_t=(2,1,0)$，学生 $Z_s=(102,101,100)$，软蒸馏的 KL 是多少？如果改用 logits 的均方误差呢？
+
+<details><summary>解析</summary>
+
+两组 logits 只差一个常数 100，softmax 后概率完全相同，KL = 0，蒸馏损失不推动学生。均方误差却是 $3\times100^2$，会逼学生去拟合一个对分类毫无意义的整体偏移。
+
+这题考的是**softmax 对平移不敏感，所以蒸馏目标必须定义在概率上（或去均值的 logits 上）**。
+
+</details>
+
+6. 硬蒸馏里，教师和真实标签一致的样本对训练有什么贡献？不一致的呢？
+
+<details><summary>解析</summary>
+
+一致时合成目标 $r$ 就是普通 one-hot，梯度 $p-e_y$，和不蒸馏完全一样。不一致时 $r$ 在两个类上各 1/2，学生被要求同时给两类较高概率。所以硬蒸馏的"额外信息"全部来自教师和标签不一致的那些样本，在强增强下这类样本不少（Mixup 的图本来就有两个类）。
+
+</details>
+
+7. 把逐元素平均（分母 B×K）误当成 batch 平均（分母 B），K=1000，教师项的权重差多少？怎么补？
+
+<details><summary>解析</summary>
+
+差 1000 倍，教师项几乎不起作用。补法是乘 K，或者把 λ 放大 1000 倍，但后者同时改变了 $(1-\lambda)$ 这一项，不是等价变换。最稳妥的是照抄作者的实现并记录分母。
+
+</details>
+
+---
+
+`Part 3 · 论文第 7—8 页`
+
+## 三、蒸馏 token：让教师的信号从第二个出口进来
+
+普通蒸馏把两个损失都加在同一个输出（CLS）上。DeiT 的新想法是：**给教师的信号单独开一个出口**。
+
+#### 图 2　蒸馏 token
+
+*Figure 2: Our distillation procedure: we simply include a new distillation token. It interacts with the class and patch tokens through the self-attention layers. This distillation token is employed in a similar fashion as the class token, except that on output of the network its objective is to reproduce the (hard) label predicted by the teacher, instead of true label. Both the class and distillation tokens input to the transformers are learned by back-propagation.*
+
+![图 2 · 蒸馏 token](./images/paper-fig2-dist-token.png)
+
+**🖼 逐元素图解**
+
+自下而上读：
+
+| 位置 | 图中元素 | 它是什么 |
+|---|---|---|
+| 最下一排，左边的双圆 | *class token* | 第 12 讲的 CLS：一个可学习向量，所有图共用 |
+| 最下一排，中间 8 个方块 | *patch tokens* | 图像切块投影后的 token，下面的小箭头表示它们来自图片 |
+| 最下一排，右边的八边形 | *distillation token* | **新加的**：又一个可学习向量，和 CLS 一样是模型参数，初始时不含任何教师信息 |
+| 中间四组蓝黄条 | *self-attention / FFN* | 标准 Transformer 块，画了 4 组示意，真实是 12 组。三种 token **在同一条序列里一起过**这些层，彼此可见 |
+| 最上一排 | 输出序列 | 和输入同样长：CLS 输出、8 个 patch 输出、蒸馏 token 输出 |
+| 左上 $\mathcal L_{CE}$ | 真实标签的交叉熵 | 只接 CLS 的输出 |
+| 右上 $\mathcal L_{teacher}$ | 教师的（硬）标签交叉熵 | 只接蒸馏 token 的输出 |
+
+**关键在两件事。** 第一，蒸馏 token 和 CLS 的地位完全对称：同样是可学习参数，同样过所有注意力层，同样在输出处接一个线性分类头；唯一的区别是**监督信号不同**。第二，两个 token 共用同一个骨干，所以教师的信号通过反向传播会改变所有 patch 的表示，CLS 也能间接受益。论文的标题 *distillation through attention* 说的就是这个：教师的知识通过注意力层流进整个网络。
+
+下面这张手绘图把形状标出来：
+
+![双 token 共享图像骨干，两头分别接收标签与教师监督](./images/dual-token.svg)
+
+**🖼 逐元素图解**
+
+- **左上绿卡"图像 → patch 投影"**：N 个 patch，宽 D。
+- **左下蓝卡"输入特殊位置"**：CLS 向量 c 和 DIST 向量 d，拼在最前面，序列长 T = N + 2（DeiT 的顺序是 CLS、DIST、patch）。
+- **中间橙卡"共享 Transformer"**：所有 token 交换信息，最终 LN，取位置 0 和位置 1。
+- **右上绿卡"CLS 分类头"**：目标是真实标签（或增强后的软标签）。**右下蓝卡"DIST 分类头"**：目标是教师的硬标签。两个头参数独立。
+- **底部**：部署时只跑学生骨干和两个头，不需要教师。
+
+**跟着算：形状链。** batch 2、224 输入、P=16、D=384（DeiT-S）：patch 投影 `2×196×384`；CLS 和 DIST 各广播成 `2×1×384`；拼接 `2×198×384`；位置表 `198×384`；12 层后仍 `2×198×384`；取第 0、1 行各 `2×384`；两个 1000 类头各输出 `2×1000`。训练时保留两组 logits 分别算损失，**不是拼成 2000 类**。
+
+#### 两个头的梯度怎样汇到一个骨干
+
+设最终 LN 后的 CLS 特征 $u_c$、DIST 特征 $u_d$，两头 logits $s_c=u_cW_c+b_c$、$s_d=u_dW_d+b_d$。损失
 
 $$
-\nabla_{W_c}L=u_c^\top g_c,\quad \nabla_{u_c}L=g_cW_c^\top.
+L=\tfrac12\,\mathrm{CE}(s_c,y)+\tfrac12\,\mathrm{CE}(s_d,y_t).
 $$
 
-DIST同理。最终序列的初始上游梯度，只在CLS、DIST两行放入相应特征梯度，其余patch行在这一输出接口处为0；再经过最终LN、残差、attention和MLP反传。
-
-“patch行最初为0”不等于patch没有学习。attention把全局输出对patch的依赖传回来，patch投影和输入像素因此获得梯度。第11讲已说明，Q/K/V三条共享输入路径都要累加；两头使上游贡献更多，不能只追踪DIST的V路径。
-
-### 算例G：两个头的精确梯度
-
-取$\alpha=1/2$、两头概率都为$(1/2,1/3,1/6)$，真实类别1、教师类别2。得到：
-
-$$
-g_c=(-1/4,1/6,1/12),\qquad g_d=(1/4,-1/3,1/12).
-$$
-
-若$u_c=(1,2)$，CLS头权重梯度两行为$(-1/4,1/6,1/12)$、$(-1/2,1/3,1/6)$。若$u_d=(3,-1)$，DIST头权重梯度为$(3/4,-1,1/4)$、$(-1/4,1/3,-1/12)$。每个头的bias梯度就是对应g。
-
-此处即使概率相同，两头仍受不同方向监督。要数值检查这些权重梯度，必须固定两组feature和当前概率来自的旧权重；不能一边更新CLS头一边用新概率计算DIST梯度。
-
-### 22. 共享骨干收到的是两条梯度之和
-
-将骨干共同参数记为$\theta$，则：
-
-$$
-\nabla_\theta L=(1-\alpha)\nabla_\theta L_c+\alpha\nabla_\theta L_d.
-$$
-
-两个任务可能在某些参数上同向，也可能抵消。只有两个独立分类头，不表示存在两个完全独立优化系统；attention、MLP、patch投影和归一化多数仍共享。一个loss也会通过共同特征改变另一个头以后收到的输入。
-
-可以用向量夹角或点积诊断梯度关系，但这仍是局部状态。正点积不保证整个训练都相容，负点积也不等于必然训练失败；优化过程会改变特征、概率和梯度。不要从一批样本上的抵消推出双头在所有任务都无效。
+两头各自的 logit 梯度：$g_c=\tfrac12(p_c-e_y)$，$g_d=\tfrac12(p_d-e_{y_t})$。传回特征：$\nabla_{u_c}=g_cW_c^{\top}$，$\nabla_{u_d}=g_dW_d^{\top}$。**在编码器输出的 T 行里，只有第 0 行和第 1 行收到非零梯度，patch 行是零。** 但往回传过注意力层之后，patch 的表示、投影矩阵 E、像素都会收到梯度，因为 CLS 和 DIST 的输出依赖所有 patch。
 
 ![两条监督的特征梯度与共享骨干累加](./images/shared-gradients.svg)
 
-### 算例H：两个监督在一个参数上抵消
+**🖼 逐元素图解**
 
-为解释共享路径，构造局部线性小模型$s_c=w$、$s_d=w$，二分类正类概率$p=\sigma(w)$。真实标签1、教师标签0，权重各1/2。此时$\partial L/\partial w=\tfrac12(p-1)+\tfrac12p=p-1/2$。
+- **左上绿卡"标签分支"**：$g_c=(1-\alpha)(p_c-r)$，特征梯度 $g_cW_c^{\top}$。**右上蓝卡"教师分支"**：$g_d=\alpha(p_d-e_{teacher})$，特征梯度 $g_dW_d^{\top}$。图里用一般的 α，DeiT 取 1/2。
+- **两条线汇到下方橙卡"attention / FFN / patch 投影"**：共享参数的梯度 = 两条反传贡献之**和**。
+- **底部那行字**：输出处 patch 梯度为零，不等于 patch 不学习。
 
-当$w=0$，p=1/2，两梯度完全抵消。若两个头有独立参数或feature，结果会变化，因此这个单标量反例只说明“共享梯度可以抵消”，并不是DeiT双token的完整简化模型。后面的可运行实验将真正经过小型attention骨干核查两头共享路径。
+**跟着算：两个头的精确梯度。** α=1/2，两头概率恰好都是 $(1/2,1/3,1/6)$，真实类别 1，教师类别 2。$g_c=\tfrac12\bigl((1/2,1/3,1/6)-(1,0,0)\bigr)=(-1/4,1/6,1/12)$；$g_d=\tfrac12\bigl((1/2,1/3,1/6)-(0,1,0)\bigr)=(1/4,-1/3,1/12)$。概率相同，两头受到的推力方向却相反：CLS 头要把第 1 类推高，DIST 头要把第 2 类推高。它们在共享参数上相加，可能部分抵消，也可能互补。模块七的程序在一个微型双 token ViT 上对这条路径做有限差分。
 
-### 23. 只增加第二个同标签token不是同一种监督
+> **💡 论文的两个"顺便观察"**
+>
+> 1. *the learned class and distillation tokens converge towards different vectors: the average cosine similarity between these tokens equals 0.06.* 两个输入向量几乎正交（cos 0.06）；越往深层越相似，最后一层 cos 0.93，但始终不到 1。这正是设计想要的：**两个出口看的是同一张图，但带着不同的任务。**
+> 2. 作者做了一个对照：不要教师，只是再加一个也预测真实标签的"第二个 CLS"。结果两个 token 收敛到几乎同一个向量（cos 0.999），精度毫无提升。**说明带来提升的不是"多一个 token"，而是"多一种监督"。**
 
-如果两个头都预测同一个真实标签，模型得到的是两份同来源监督。它可以作为结构对照，帮助检查额外读取位置或参数是否有效，但它没有引入教师对增强图的判断。
+#### 推理时怎么用两个头
 
-从计算图看，两个头仍有独立参数，可能因初始化和训练获得不同状态；不能仅凭“目标相同”证明它们必然严格相等。反之，观察它们越来越相似也不能推出所有双头都会如此。应把理论条件、某次实验观察和普遍命题分开。
+论文第 8 页：*At test time, both the class or the distillation embeddings produced by the transformer are associated with linear classifiers and able to infer the image label. Yet our referent method is the late fusion of these two separate heads, for which we add the softmax output by the two classifiers to make the prediction.*
 
-比较蒸馏token时，一个有意义的消融是保持第二token和第二头，改第二目标为相同真实标签；另一个是移除第二token，把教师loss约束到CLS输出。这样分别检查额外接口和教师信息的贡献，而不是同时改动两项后归因于其中一项。
+三种选择：只用 CLS 头、只用 DIST 头、两头融合。表 3 会看到融合最好。但"融合"有两种做法，结果不同：
 
-### 24. 双头训练接口和推理接口不同
+![两头融合的顺序：先 softmax 与后 softmax](./images/head-fusion.svg)
 
-训练criterion需要知道哪组logits用于标签、哪组用于教师，因此蒸馏版模型的train输出是二元组$(s_c,s_d)$。评估通常需要一组K类打分，模型会按约定融合两个输出。
+**🖼 逐元素图解**
 
-若错误地把eval的融合输出送进要求双输出的蒸馏criterion，会丢失对应关系或直接报错；若把二元组送进普通交叉熵，也未必符合接口。`model.train()`/`eval()`除了正则行为，在该实现里还会改变返回形式，调试时须先打印类型与shape。
+- **左绿卡"先 softmax，再平均概率"**：$(p+q)/2$，算术平均。例子里得到 $(0.405,0.2975,0.2975)$，第 1 类最大。
+- **右蓝卡"先平均 logits，再 softmax"**：等价于归一化的几何平均 $\sqrt{p_kq_k}/\sum_j\sqrt{p_jq_j}$。同一个例子得到 $(0.167,0.416,0.416)$，第 2、3 类并列最大。
+- **下方橙框**：softmax 是非线性的，两种顺序一般不交换；论文文字说的是前者，作者代码 `models.py` 的 eval 路径返回 `(x + x_dist) / 2`，x 是 logits，即后者。
 
-教师不需要参与学生推理。蒸馏知识进入学生训练后的权重和表示；推理只执行学生两头。但评估者必须记录取CLS、DIST还是融合结果，否则同一个checkpoint也可能得到不同指标。
+**跟着算。** $p=(0.8,0.1,0.1)$，$q=(0.01,0.495,0.495)$。概率平均：$(0.405,0.2975,0.2975)$。几何平均：$\sqrt{0.008}=0.0894$，$\sqrt{0.0495}=0.2225$（两次），归一化后 $(0.167,0.416,0.416)$。**top-1 都变了。** 这是一个构造的极端例子，真实模型两头意见很少差这么远，但它说明复现时必须写清用的是哪一种。
 
-### 25. 平均logits与平均概率不同
+#### 位置表现在有两行特殊位置
 
-设两头logits为a,b。平均logits再softmax得到$\operatorname{softmax}((a+b)/2)$；平均概率得到$[\operatorname{softmax}(a)+\operatorname{softmax}(b)]/2$。softmax是非线性函数，两种顺序一般不交换。
+换分辨率时（第 12 讲的位置插值），DeiT 的位置表前两行是 CLS 和 DIST，都要单独保留，只对后面 N 行恢复网格插值。
 
-令$p=\operatorname{softmax}(a)$、$q=\operatorname{softmax}(b)$，对每一项写$a_k=\log p_k+c_a$、$b_k=\log q_k+c_b$，则logit融合的概率为：
+**跟着算。** 2×2 的网格、单通道，完整位置表 $[99,77,0,2,4,6]$：99 是 CLS，77 是 DIST，余下排成 $\begin{bmatrix}0&2\\4&6\end{bmatrix}$。升到 3×3 后是 $[99,77,0,1,2,2,3,4,4,5,6]$，11 行。如果照抄第 12 讲"只留一行"的代码，77 会被混进图像网格，197 行也凑不出 14×14。
 
-$$
-r_k=\frac{\sqrt{p_kq_k}}{\sum_j\sqrt{p_jq_j}}.
-$$
+### 🖊 本模块练习
 
-它是归一化几何平均，概率融合是算术平均。前者更强调两头同时支持的类别。核对资料时，论文文字描述了概率late fusion，而作者`models.py`的eval路径返回`(x+x_dist)/2`，x为线性头logits。复现须说明采用的实际路径，不将二者当作数学恒等式。
+8. ★ 蒸馏 token 的输入向量是教师的 logits 吗？推理时需要教师吗？
 
-![两头融合的顺序：先softmax与后softmax](./images/head-fusion.svg)
+<details><summary>解析</summary>
 
-### 算例I：融合方式甚至会改变预测类别
+都不是。DIST 是一个可学习的 D 维参数，和 CLS 一样随机初始化、靠反传学习，初始时不含任何教师信息；教师只在损失里出现。推理时只跑学生骨干和两个头，教师不参与。如果把教师 logits 拼进输入，推理就得永远带着教师，那是另一种（不划算的）算法。
 
-取$p=(0.8,0.1,0.1)$、$q=(0.01,0.495,0.495)$。概率平均为$(0.405,0.2975,0.2975)$，第一类最大。
+</details>
 
-logit平均对应未归一化几何权重$(\sqrt{0.008},\sqrt{0.0495},\sqrt{0.0495})$，约$(0.08944,0.22249,0.22249)$，归一化后第一类仅约0.1674，第二/第三并列最大。按首个最大值规则选第二类。
+9. ★ 编码器输出处只有 CLS 和 DIST 两行有梯度，patch 投影矩阵 E 还能学吗？
 
-此处logits可直接取$\log p$和$\log q$，因为概率和都为1。例子不需要使用奇怪的偏移或溢出，就能说明top-1也可能不同，故更不能认为只是置信度显示略有差别。
+<details><summary>解析</summary>
 
-### 26. 双token位置迁移须保留两行特殊位置
+能。CLS 和 DIST 的输出是所有 patch 的函数（通过 12 层注意力），梯度沿注意力的 K、V 路径传回每个 patch 的表示，再传回 E 和像素。"输出处为零"只是最后一层的边界条件。模块七的程序会验证像素和 E 的梯度非零。
 
-蒸馏版位置表有N+2行。改变分辨率时，前两行对应CLS/DIST，要与patch位置分开；其余N行才恢复为二维网格、按每个通道插值、展平并重新拼接。第12讲保留一行CLS的程序不能直接原样套用。
+</details>
 
-以224→384、P16为例，序列198→578，patch位置196→576；特殊位置始终2行。若从第1行就开始reshape，会把DIST位置混入图像网格，197也无法正常还原14×14；即使代码通过错误裁剪凑出形状，语义仍错。
+10. "再加一个预测真实标签的 CLS"和"加一个预测教师标签的 DIST"，结构一样，为什么效果不同？
 
-不同checkpoint还可能没有DIST，或采用其他位置设计。加载单token权重到双token模型，需要显式处理新增向量、位置行和第二头，记录哪些键初始化而非加载。`strict=False`只改变加载检查，不会自动创造正确映射。
+<details><summary>解析</summary>
 
-### 算例J：小位置表的迁移
+结构确实一样，差别只在监督。两个 token 都预测真实标签时，它们收到的梯度来源相同，最后收敛到几乎相同的向量（cos 0.999），第二个 token 没有带来新信息。DIST 接的是教师在增强图上的判断，和真实标签经常不一致（Mixup、CutMix 之后尤其如此），所以两个 token 学到不同的东西（cos 0.06）。
 
-设二维patch网格2×2，每个位置只用一个数表示。完整位置表是$[99,77,0,2,4,6]$：99是CLS，77是DIST，余下恢复为$\begin{bmatrix}0&2\\4&6\end{bmatrix}$。
+这题考的是**一个消融实验怎样把"多一个接口"和"多一种监督"分开**。
 
-按第12讲端点对齐的双线性教学约定，升到3×3得到$\begin{bmatrix}0&1&2\\2&3&4\\4&5&6\end{bmatrix}$；完整表是$[99,77,0,1,2,2,3,4,4,5,6]$，共11行。两个特殊位置没有进入插值，也没有变成两枚图像patch。作者实际实现还需核对插值核与坐标约定。
+</details>
 
-## 五、Ti、S、B以及蒸馏的额外成本
+11. 两头 logits 先平均再 softmax，和先 softmax 再平均，什么时候结果相同？
 
-### 27. 三个规模保留相同层数和每头宽度
+<details><summary>解析</summary>
 
-原DeiT的Tiny、Small、Base配置分别为D=192/384/768，头数3/6/12，编码器深度均12，patch16，FFN宽度4D。每头宽度都是64，但这是这组配置的选择，不是所有ViT必须满足的结构定理。
+一般不同。两者相同的充分条件是两头 logits 相等（这时两种平均都退化成单头）。几何平均偏向"两头都同意"的类别，算术平均对一头的极端自信更宽容。正文的例子里连 top-1 都不同。
 
-较小D会同时缩小QKV/输出投影与FFN矩阵；减小头数保持每头64维。输入224和patch16仍有196个patch，因而三个规模在同一分辨率的序列长度相同；小模型不是靠丢弃patch来变小。
+</details>
 
-若宽度约减半，主要D平方参数/计算项约变成四分之一，但patch投影、位置表和类别头是D一次方，不能把整个网络精确乘1/4。接下来用逐项账本得到真实标量数。
+---
 
-### 28. 普通DeiT的精确参数账本
+`Part 4 · 论文第 9—11 页`
 
-沿第12讲约定：RGB、224、P16、1000类；所有线性/patch层带bias，LN带scale/shift，每块两处LN、最后一处LN，没有额外pre-logits。单块参数为$12D^2+13D$，全网为：
+## 四、表 1—4：模型、教师与蒸馏方式
 
-$$
-P_{\rm plain}=769D+D+197D+12(12D^2+13D)+2D+1000(D+1).
-$$
+实验部分先回答三个问题：模型有几档（表 1）、什么教师好（表 2）、哪种蒸馏好（表 3），再用表 4 解释为什么。
 
-769D包括$16^2\times3\times D$投影权重和D bias。中间D为CLS，197D为位置表；末尾1000(D+1)是类别头。它是一个具体基础实现的账本，不包括优化器状态或教师。
+#### 表 1　三档 DeiT
 
-代入D=192、384、768，分别得到5,717,416、22,050,664、86,567,656。论文常以百万数四舍五入，精确值需要同时说明输入分辨率和head类别数。
+*Table 1: Variants of our DeiT architecture. The larger model, DeiT-B, has the same architecture as the ViT-B. The only parameters that vary across models are the embedding dimension and the number of heads, and we keep the dimension per head constant (equal to 64).*
 
-### 29. 蒸馏新增参数并非只有一个D维token
+![表 1 · DeiT 的三个规模](./images/paper-table1-variants.png)
 
-相对相同规模普通版，新增DIST向量D、一行位置D、第二分类头$(D+1)K$，所以：
+| 模型 | D | 头数 | 层数 | 参数 | 吞吐量 |
+|---|---:|---:|---:|---:|---:|
+| DeiT-Ti | 192 | 3 | 12 | 5M | 2536 |
+| DeiT-S | 384 | 6 | 12 | 22M | 940 |
+| DeiT-B | 768 | 12 | 12 | 86M | 292 |
 
-$$
-\Delta P=2D+(D+1)K.
-$$
+**三档只改宽度 D 和头数，层数都是 12，每头 64 维，patch 都是 16。** 和 ViT 不同，DeiT 不往上加大（没有 L、H），而是往下做小：Ti 和 S 是作者新定义的，后来成了整个领域的标准小模型。
 
-编码器层数、宽度和其内部矩阵不变。K=1000时，第二头是新增参数的主要部分；若K很小，token/位置的占比会上升。这里新增位置是一行，不能把整张N+2位置表重新当作增量。
+**跟着算：三档的精确参数。** 用第 12 讲的账本公式（RGB、224、P16、1000 类）：$P=769D+D+197D+12(12D^2+13D)+2D+1000(D+1)$。代入 D=192、384、768 得到 5,717,416、22,050,664、86,567,656。带蒸馏 token 的版本多一个 D 维向量、一行位置、一个 $(D+1)\times1000$ 的头，即 $\Delta P=2D+(D+1)K$：Base 多 770,536，成为 87,338,192。**新增参数几乎全在第二个分类头，不是"多了 768 个数"。**
 
-最终蒸馏Ti/S/B参数分别5,910,800、22,436,432、87,338,192。前两个特殊token跨batch共享，不会因batch翻倍而参数翻倍。训练还需加载教师参数，但那是另外一个模型，不应混进学生部署参数数目。
+宽度减半时 $D^2$ 项变成四分之一，所以 S 约是 B 的 1/4、Ti 约是 S 的 1/4；吞吐量差不多也是这个比例（292 → 940 → 2536）。
 
-### 算例K：Base新增了多少
+#### 表 2　CNN 教师比 Transformer 教师好
 
-D=768、K=1000：DIST 768、一行位置768、第二头769,000，总新增770,536。普通86,567,656加上它得到87,338,192。
+*Table 2: We compare on ImageNet the performance (top-1 acc., %) of the student as a function of the teacher model used for distillation.*
 
-如果错误地只说“多768参数”，会漏770千量级的类别头和位置。若迁移到10类，新增量是$1536+769\times10=9226$；可见额外成本受任务类别数影响，不能把1000类结论复制到所有任务。
+![表 2 · 不同教师](./images/paper-table2-teachers.png)
 
-### 30. 多一个token怎样改变矩阵MAC
+**🖼 逐元素图解**
 
-标准FFN扩张4倍时，一块矩阵乘加MAC为$12TD^2+2T^2D$。T由197变198，增量是：
+- **第一列**：教师模型。第一行 DeiT-B 是 Transformer 教师，下面四行 RegNetY 是不同大小的 CNN 教师。**第二列**：教师自己的准确率。
+- **第三、四列**：用这个教师蒸馏出来的 DeiT-B⚗ 学生，224 预训练后的精度和 384 微调后的精度。
 
-$$
-\Delta M_{\rm block}=12D^2+2(198^2-197^2)D=12D^2+790D.
-$$
+**读法：** 教师 DeiT-B（81.8）教出的学生 83.1；教师 RegNetY-16GF（82.9）教出的学生 84.2。**CNN 教师好 1 个点以上。** 作者的解释：*the convnet is a better teacher is probably due to the inductive bias inherited by the transformers through distillation.* 回看第 12 讲：ViT 缺的正是 CNN 的局部性和平移等变性，而教师的硬标签把 CNN 的判断方式间接传给了学生。
 
-还需在全网加第二头的$DK$ MAC，故12层总增量为$12(12D^2+790D)+DK$。patch投影没有多一个patch，保持原计数；norm、softmax、激活等逐元素运算沿第12讲约定另计。
+> **💡 学生超过了教师**
+>
+> 表 2 最后一行：教师 82.9，学生 84.2，高了 1.3 个点。这不矛盾：学生同时有真实标签和教师两种信息，还有自己的架构；蒸馏传递的是"行为"，不是"上限"。所以"蒸馏只能用大模型教小模型"是误解，DeiT-B（86M）用 RegNetY-16GF（84M）教，两者一样大。
 
-代入Ti/S/B得到7,320,576、25,257,984、92,983,296增量MAC。相对于学生整网是较小增加，但不能由此推断蒸馏训练只慢这一点：训练期间还执行教师前向。
+#### 表 3　哪种蒸馏好
 
-### 31. 教师训练、教师前向与学生推理要分账
+*Table 3: Distillation experiments on Imagenet with DeiT, 300 epochs of pre-training. We report the results for our new distillation method in the last three rows. We separately report the performance when classifying with only one of the class or distillation embeddings, and then with a classifier taking both of them as input.*
 
-蒸馏训练每批的主要模型工作包括学生前向、学生反向和教师前向。冻结教师使它无需计算用于自身更新的反向梯度，但它的读取输入、卷积/attention等前向仍消耗计算、显存和带宽。
+![表 3 · 蒸馏方式比较](./images/paper-table3-distill.png)
 
-部署学生时通常没有教师，成本是学生骨干加两个头；如果部署者改为同时运行教师集成，已经是不同系统。报告“参数约87M”时须明确是学生存储，不代表训练进程只持有87M参数。
+**🖼 逐元素图解**
 
-实际速度还涉及batch、dtype、编译、算子、内存和设备。历史论文吞吐只在其测量条件下成立，不能直接当成本机或现代硬件成绩。比较数据效率时也要记教师来源和训练成本，而不是只拿学生部署MAC替代整套训练预算。
+- **列**："Supervision" 两列是用了什么监督（label 真实标签、teacher 教师）；后四列是 Ti、S、B 三档在 224 下的精度和 B 在 384 微调后的精度。
+- **上三行：普通蒸馏**（只有 CLS 一个出口）。不蒸馏 81.8；软蒸馏 81.8（没用！）；硬蒸馏 83.0。
+- **下三行：蒸馏 token**（DeiT⚗）。只用 CLS 头 83.0；只用 DIST 头 83.1；两头融合 83.4。
 
-![学生部署、教师训练与蒸馏前向分别计账](./images/distillation-cost.svg)
+**三个结论，按表格从上往下：**
 
-## 六、训练增强怎样改变输入和目标
+1. **软蒸馏在这里完全没用**（81.8 = 81.8），硬蒸馏 +1.2。模块二的 💡 解释了原因。
+2. **DIST 头单独用比 CLS 头单独用高一点**（83.1 vs 83.0）：它更直接地受教师影响。
+3. **两头融合最好**（83.4），说明两个出口的错误不完全重叠，有互补。
 
-### 32. 增强是在定义哪些变化应保持类别
+#### 表 4　两个头分别像谁
 
-随机裁剪、翻转、颜色变化等方法，用同一训练原图产生不同视图，并通常沿用类别。这个做法隐含一个任务假设：在采用的变换范围内，图像仍足以支持同一标签。没有这个条件，增强可能制造错误监督。
+*Table 4: Disagreement analysis between convnet, image transformers and distillated transformers: We report the fraction of sample classified differently for all classifier pairs, i.e., the rate of different decisions.*
 
-例如裁剪动物照片留下毛发局部，类别仍可能可辨；裁剪只留下背景，则标签可能不再由可见内容支持。左右翻转对一般物体类别通常合理，对写着特定方向文字的图像可能改变语义。增强策略应与任务适配，不能用“更强”代替检查。
+![表 4 · 不一致率分析](./images/paper-table4-agreement.png)
 
-增强增加视图变化，不新增独立采样对象。它可以帮助模型减少对固定位置、颜色或背景的依赖，但也可能删掉必要信息。对于弱空间偏置的ViT，增强是训练条件的一部分；成效仍依赖数据和预算。
+**🖼 逐元素图解**
 
-### 33. label smoothing的两种约定
+- 这是一张**对称矩阵**：行列都是分类器（真实标签、CNN 教师 RegNetY、不蒸馏的 DeiT、DeiT⚗ 的 CLS 头、DIST 头、融合），每格是两者**预测不一致的样本比例**，对角线为 0。
+- 看第二行（CNN 教师）：和不蒸馏的 DeiT 不一致 0.133；和 DeiT⚗ 的 CLS 头 0.112；和 **DIST 头 0.100**；和融合 0.102。
+- 看第三行（不蒸馏的 DeiT）：和 CLS 头 0.109；和 DIST 头 0.110。
 
-一种常见平滑目标是$r=(1-\varepsilon)e_y+\varepsilon u$，其中均匀$u_k=1/K$，故目标类$r_y=1-\varepsilon+\varepsilon/K$，其余$\varepsilon/K$。
+**读法：** DIST 头是和 CNN 教师最像的（0.100），CLS 头离不蒸馏的 DeiT 更近（0.109）。两个头确实"分工"了：一个更像教师，一个更像原来的 ViT。融合头在中间。
 
-另一种把$\varepsilon$全部分给非目标类：$r_y=1-\varepsilon$，$r_{k\ne y}=\varepsilon/(K-1)$。两者都归一化，但数值不同。论文叙述、库版本或实现若用不同约定，应在复现记录中明确。
+> **⚠️ 一致率高不等于更准**
+>
+> 10 张图，教师对 8 张。学生甲完全照抄教师：准确率 80%、一致率 100%。学生乙在教师的 2 张错题里纠正了 1 张，其余相同：准确率 90%、一致率 90%。乙更好却"更不像教师"。表 4 测的是"像不像"，表 3 测的是"准不准"，两张表回答不同的问题，要一起读。
 
-平滑目标的交叉熵梯度仍是$p-r$。它把“希望目标概率为1”改为“希望匹配一个非极端分布”；可能降低训练上的过度置信，却不保证模型在任意分布上得到良好校准。标签有噪声时，也不能代替检查错误标注。
+### 🖊 本模块练习
 
-### 算例L：三类平滑目标与梯度
+12. ★ DeiT-B⚗ 比 DeiT-B 多多少参数？多在哪里？
 
-K=3、$\varepsilon=0.1$、真实类别1。均匀混合约定给$r=(14/15,1/30,1/30)$，约$(0.933333,0.033333,0.033333)$；只分其他类约定给$(0.9,0.05,0.05)$。
+<details><summary>解析</summary>
 
-若$p=(0.8,0.15,0.05)$，第一种梯度为$(-2/15,7/60,1/60)$，第二种为$(-0.1,0.1,0)$。仅在这一个点就已不同，因此不能在抄写公式后用另一种库实现而声明完全等价。
+$\Delta P=2D+(D+1)K=2\times768+769\times1000=770{,}536$：DIST 向量 768、一行位置 768、第二个分类头 769,000。99.8% 在第二个头。如果任务只有 10 类，新增只有 $1536+7690=9{,}226$。
 
-### 34. soft target交叉熵并非把目标argmax回来
+</details>
 
-对归一化目标$r\in[0,1]^K$，定义$L=-\sum r_k\log p_k$。softmax导数给出$p_k\sum_jr_j-r_k$，在$\sum r=1$时为$p-r$。这同时覆盖smoothing、Mixup等产生的软标签。
+13. ★ 为什么 CNN 教师比 Transformer 教师教得好？这个解释能被"证明"吗？
 
-如果把软标签先argmax为一个整数，会丢掉混合权重。比如$r=(0.6,0.4,0)$变成类别1，已经不是用60%第一类和40%第二类的监督。普通整数标签接口与软目标接口须核对，而不是只看loss名称包含CrossEntropy。
+<details><summary>解析</summary>
 
-归一化也很关键。若误把两个one-hot直接相加得到目标和为2，梯度为$2p-r$，整体监督尺度翻倍。多标签BCE则另有独立sigmoid与各类二元目标，不要求类别质量和为1，是不同任务。
+作者的假设是教师的归纳偏置（局部性、平移等变）通过硬标签传给了学生，弥补了 ViT 的弱先验。它不能被严格证明，论文用表 4 给出**行为证据**：DIST 头的预测和 CNN 更一致（0.100）。但一致可能来自"都答对了容易的题"，所以这只是相关性证据。
 
-### 35. Mixup同时混合图像与标签
+</details>
 
-Mixup取两张输入$x_i,x_j$及权重$\lambda\in[0,1]$：
+14. 表 3 里软蒸馏对 DeiT-B 一点用都没有，这和 Hinton 的蒸馏论文矛盾吗？
 
-$$
-\tilde x=\lambda x_i+(1-\lambda)x_j,\qquad \tilde r=\lambda r_i+(1-\lambda)r_j.
-$$
+<details><summary>解析</summary>
 
-混合按每个像素/通道进行，不是拼接两幅图；目标按同一权重混合。常用Beta分布采样$\lambda$，参数控制接近端点还是中间的程度，但随机变量的具体采样与batch/pair/elem模式需要按实现记录。[Mixup原论文](https://arxiv.org/abs/1710.09412)
+不矛盾，条件不同。Hinton 的设置里学生看到的是正常图片，教师的软分布携带类间相似性。DeiT 的输入经过 Mixup/CutMix，一张图里本来就有两个类，教师的软分布"犹豫"得有道理却难学；硬标签反而给出一个干净的、对当前增强图最合理的目标。这题考的是**蒸馏的效果取决于输入分布**。
 
-把输入混合后只保留第一张标签，会改变目标；把标签混合而不给模型混合输入，也不是同一算法。Mixup是假设邻近组合上的预测可受线性目标约束，不表示真实语义世界里的物体可以物理透明叠加成一类。
+</details>
 
-### 算例M：smoothing与Mixup的手算
+15. 表 4 里 DIST 头和教师的不一致率 0.100，比 CLS 头的 0.112 低。能据此说 DIST 头更准吗？
 
-两类标签分别是第1、第2类，K=3、均匀smoothing $\varepsilon=0.1$。平滑后分别$(14/15,1/30,1/30)$、$(1/30,14/15,1/30)$。取$\lambda=0.6$，混合目标：
+<details><summary>解析</summary>
 
-$$
-\tilde r=(43/75,59/150,1/30)\approx(0.573333,0.393333,0.033333).
-$$
+不能。表 4 只说 DIST 头更像教师；准不准要看表 3（DIST 头 83.1、CLS 头 83.0，几乎一样）。像教师和准确是两回事：教师自己也只有 82.9，完全照抄教师反而会比两头都低。
 
-这也等于先混one-hot得到$(0.6,0.4,0)$，再做相同均匀smoothing：因为这两步都是对目标的仿射操作。此等价依赖同一$\varepsilon$和同一平滑分布；若两样本用不同平滑强度则不能照搬。
+</details>
 
-### 36. 教师预测混图不等于混合教师预测
+---
 
-在线蒸馏可能使用$g(\lambda x_i+(1-\lambda)x_j)$产生目标。预先计算两个教师输出后线性混合，则使用$\lambda g(x_i)+(1-\lambda)g(x_j)$。一般神经网络不是线性函数，这两项不必相等；softmax又增加一层非线性。
+`Part 5 · 论文第 11—14、17 页`
 
-因此需要分别说明输入协议和目标协议。DeiT代码路径中的硬教师在混合后的samples上取argmax，而真实标签分支可保留Mixup软目标。两头此时直接收到不同类型的监督，是算法允许的情况，不是必须把教师硬标签也按同一比例拆成两类。
+## 五、表 5、图 3、表 7、表 10：主结果
 
-若教师不适合极强的混合图，可能给出不可靠硬目标。检查混合输入上的教师行为、增强强度和学生收益，可以帮助诊断；不能仅用教师在干净验证集的accuracy代替这些检查。
+#### 表 5　和所有 CNN 放在一张表上
+
+*Table 5: Throughput on and accuracy on Imagenet, Imagenet Real and Imagenet V2 matched frequency of DeiT and of several state-of-the-art convnets, for models trained with no external data. The throughput is measured as the number of images that we can process per second on one 16GB V100 GPU.*
+
+![表 5 · 主结果](./images/paper-table5-results.png)
+
+**🖼 逐元素图解**
+
+- **列**：参数量、输入分辨率、吞吐量（图/秒）、ImageNet top-1、ImageNet-Real top-1（重新标注过的验证集）、ImageNet-V2 top-1（新采的测试集，防止在验证集上过拟合）。
+- **上半 "Convnets"**：ResNet、RegNetY、EfficientNet 各系列。带 ★ 的 RegNetY 是作者用 DeiT 配方重训的，也是后面的教师。注意 EfficientNet-B7 要 600×600 的输入，吞吐量只有 55。
+- **下半 "Transformers"**：先是第 12 讲的 ViT-B/16 和 ViT-L/16（在 ImageNet 上从头训，77.9 和 76.5）；然后 DeiT-Ti/S/B（72.2 / 79.8 / 81.8）；DeiT-B↑384（83.1）；带 ⚗ 的三档（74.5 / 81.2 / 83.4）；再训到 1000 epoch 的版本；最后 DeiT-B⚗↑384 的 300 epoch（85.2）和 1000 epoch（85.2）。
+
+**读法，抓几组对比：**
+
+| 对比 | 数字 | 说明 |
+|---|---|---|
+| ViT-B/16 vs DeiT-B | 77.9 → 81.8 | 同一个模型，配方的贡献 |
+| DeiT-B vs DeiT-B⚗ | 81.8 → 83.4 | 蒸馏 token 的贡献 |
+| DeiT-B⚗ vs DeiT-B⚗↑384 | 83.4 → 85.2 | 高分辨率微调的贡献 |
+| DeiT-B⚗↑384 vs ViT-B（JFT 预训练，384） | 85.2 vs 84.15 | **只用 ImageNet 超过了用 3 亿张图预训练的 ViT-B** |
+| DeiT-S⚗ vs EfficientNet-B4 | 81.2 @ 936 img/s vs 82.9 @ 349 img/s | 同精度档 DeiT 快 2–3 倍 |
+
+> **⚠️ 这张表里的"训练预算"并不相同**
+>
+> 300 epoch 和 1000 epoch 的行混在一起；带 ↑384 的多了一轮微调；带 ⚗ 的多了教师前向。看到 85.2 时要记得它是 "⚗ + ↑384 + 300 epoch" 的组合，单独一项都到不了。好的做法是像作者这样把每种组合单列一行，让读者自己拆。
+
+#### 图 3　蒸馏让"训练更久"重新有用
+
+*Figure 3: Distillation on ImageNet with DeiT-B: performance as a function of the number of training epochs. We provide the performance without distillation (horizontal dotted line) as it saturates after 400 epochs.*
+
+![图 3 · 训练轮数](./images/paper-fig3-epochs.png)
+
+**🖼 逐元素图解**
+
+- **横轴**：训练 epoch，300 到 1000。**纵轴**：top-1。
+- **灰色水平虚线：不蒸馏**。作者说它在 400 epoch 后饱和，所以画成一条线（约 82.2）。
+- **黄色：普通软蒸馏**。在 82 上下晃，和不蒸馏差不多。
+- **深红：硬蒸馏**（单出口）。从 83.0 升到 84.1，500 epoch 后变平。
+- **浅红：蒸馏 token**。从 83.4 升到 84.2。
+- **亮红：蒸馏 token + ↑384**。从 84.5 升到 85.2，**到 1000 epoch 还在涨**。
+
+**这张图说的是：** 不蒸馏时，再训久一点也没用（数据不够，模型开始记住训练集）；有了教师信号，训练更久持续有收益。教师相当于给每张增强图提供了"新的标签"，变相扩大了数据。
+
+#### 表 7 与表 10　迁移和分辨率
+
+*Table 7: We compare Transformers based models on different transfer learning task with ImageNet pre-training.*
+
+![表 7 · 迁移学习](./images/paper-table7-transfer.png)
+
+把 ImageNet 预训练的模型微调到 CIFAR、Flowers、Cars、iNaturalist 等小数据集。DeiT-B⚗↑384 在各数据集上和 EfficientNet-B7 相当（CIFAR-10 99.2 vs 98.9，Flowers 98.9 vs 98.8），吞吐量却是它的 1.6 倍。**说明 DeiT 学到的表示可以迁移，不是只在 ImageNet 上过拟合了配方。**
+
+*Table 10: Performance of DeiT trained at size 224² for varying finetuning sizes on ImageNet-1k, ImageNet-Real and ImageNet-v2 matched frequency.*
+
+![表 10 · 微调分辨率](./images/paper-table10-resolution.png)
+
+同一个 224 训练的 DeiT-B，微调到不同分辨率：160 → 79.9（609 img/s），224 → 81.8（291），320 → 82.7（134），384 → 83.1（86）。**分辨率每升一档约 +1 点，吞吐量约减半。** 这是第 12 讲"分辨率是一条独立扩展轴"的实测版。
+
+> **💡 作者在位置插值上的一个发现**
+>
+> 第 17 页：*a bilinear interpolation of a vector from its neighbors reduces its ℓ2-norm compared to its neighbors. These low-norm vectors are not adapted to the pre-trained transformers and we observe a significant drop in accuracy if we employ use directly without any form of fine-tuning. Therefore we adopt a bicubic interpolation that approximately preserves the norm of the vectors.* 双线性插值出来的新位置向量是邻居的加权平均，模长会变小（想想两个方向不同的单位向量的平均，长度小于 1）；预训练模型没见过"短"的位置向量，精度掉得厉害。换成双三次插值能大致保持模长。第 12 讲说"插值是一族函数，选哪个有影响"，这就是一个具体后果。
+
+**另一个小实验：** 完全不用 ImageNet 预训练，直接在 CIFAR-10（5 万张 32×32 的图）上从头训 DeiT，训 7200 个 epoch（对应 ImageNet 300 epoch 的图片数），放大到 224：DeiT-B 97.5，DeiT-B⚗ 98.5，教师 RegNetY 98.0。**5 万张图也能从头训出一个像样的 Transformer**，虽然比 ImageNet 预训练再微调的 99.1 差一些。
+
+### 🖊 本模块练习
+
+16. ★ 从 ViT-B 的 77.9 到 DeiT-B⚗↑384 的 85.2，这 7.3 个点各来自哪里？
+
+<details><summary>解析</summary>
+
+按表 5 拆：配方 77.9 → 81.8（+3.9）；蒸馏 token 81.8 → 83.4（+1.6）；384 微调 83.4 → 85.2（+1.8）。注意这三项不严格可加（交互作用），但量级清楚：**训练配方是最大的一项**，而它一行代码的模型改动都没有。
+
+</details>
+
+17. ★ 图 3 里为什么不蒸馏的模型 400 epoch 后就饱和，蒸馏的到 1000 epoch 还在涨？
+
+<details><summary>解析</summary>
+
+不蒸馏时监督只有 128 万个固定的 one-hot 标签，训久了模型开始记忆训练集，验证精度不再提升。蒸馏时教师对**每一张增强图**都给一个新标签（Mixup、CutMix 后的图标签和原图不同），监督信号的多样性随训练一起增长，所以更长的训练持续有收益。
+
+</details>
+
+18. 表 10 里分辨率从 224 升到 384，精度 +1.3，吞吐量从 291 降到 86。按第 12 讲的账本，这个速度下降合理吗？
+
+<details><summary>解析</summary>
+
+token 数 197 → 577，约 2.93 倍；总 MAC 约 3.16 倍（注意力项按平方涨）；吞吐量 291/86 = 3.4 倍。实测比理论略差一点（更大的注意力矩阵访存更重），量级一致。
+
+</details>
+
+19. DeiT-B⚗↑384 的 85.2 超过了 JFT 预训练的 ViT-B（84.15）。能不能说"训练配方比 3 亿张图更有用"？
+
+<details><summary>解析</summary>
+
+不能这么泛化。两者的差别不只是数据：DeiT 有教师、强增强、300 epoch；ViT-B 在 JFT 上只训 7 epoch、弱增强。正确的说法是：**在 ViT-B 这个规模上，好的配方 + 蒸馏可以替代大数据预训练**。到 ViT-H/14 的规模（第 12 讲的 88.55），没有大数据仍然训不出来。
+
+</details>
+
+---
+
+`Part 6 · 论文第 15—16 页`
+
+## 六、表 8、表 9：配方里的每一项各值几个点
+
+这是论文最有"实用价值"的部分：作者把训练 ViT 用到的每一样东西列出来（表 9），再一项一项拿掉看掉多少点（表 8）。
+
+#### 表 9　DeiT 配方 vs ViT 配方
+
+*Table 9: Ingredients and hyper-parameters for our method and Vit-B.*
+
+![表 9 · 超参数与配方](./images/paper-table9-hparams.png)
+
+**🖼 逐元素图解**
+
+表分三块，左列 ViT-B（第 12 讲论文在 ImageNet 上的配方），右列 DeiT-B：
+
+| 块 | 项 | ViT-B | DeiT-B | 说明 |
+|---|---|---|---|---|
+| 优化 | batch | 4096 | 1024 | 一台 8 卡机器放得下 |
+| | 学习率 | 0.003 | $0.0005\times\frac{\text{batch}}{512}$ | 按 batch 线性缩放；1024 时是 0.001 |
+| | weight decay | 0.3 | **0.05** | 小了 6 倍；作者说 ViT 的 0.3 在他们的设置下伤收敛 |
+| | warmup | 3.4 epoch | 5 epoch | |
+| 正则 | label smoothing | ✗ | 0.1 | |
+| | dropout | 0.1 | **✗** | **DeiT 不用 dropout** |
+| | 随机深度 | ✗ | 0.1 | |
+| | repeated aug | ✗ | ✓ | |
+| 增强 | RandAugment | ✗ | 9/0.5 | 9 是强度，0.5 是每次操作的概率 |
+| | Mixup | ✗ | 0.8 | Beta 分布的参数 |
+| | CutMix | ✗ | 1.0 | |
+| | 随机擦除 | ✗ | 0.25 | 概率 |
+
+**一句话概括差别：ViT-B 几乎不做增强、靠 dropout 和大 weight decay 正则；DeiT 把增强开到最强、换成随机深度和标签平滑，并把 weight decay 调小。** 这些都是在 CNN 社区（尤其 timm 库）已经成熟的技巧，DeiT 的贡献是证明它们对 Transformer 同样有效甚至更关键。
+
+下面把零基础读者可能不熟的几项各用一个小例子说清。
+
+#### 跟着算　标签平滑、Mixup、CutMix 改的是"目标"
+
+**标签平滑（label smoothing）**：把 one-hot 标签 $e_y$ 换成 $r=(1-\varepsilon)e_y+\varepsilon u$，u 是均匀分布。K=3、ε=0.1、真实类 1：$r=(0.9+0.1/3,\;0.1/3,\;0.1/3)=(0.933,0.033,0.033)$。另一种约定把 ε 全分给其他类：$(0.9,0.05,0.05)$。两种都见得到，复现要写清。损失仍是 $-\sum r_k\log p_k$，梯度 $p-r$。
+
+**Mixup**：两张图按比例 λ 像素级叠加，标签也按 λ 混合：$\tilde x=\lambda x_i+(1-\lambda)x_j$，$\tilde r=\lambda r_i+(1-\lambda)r_j$。λ 从 Beta(0.8, 0.8) 采样。两个标签分别是第 1、2 类，λ=0.6，先各自平滑再混合：$\tilde r=(0.573,0.393,0.033)$；先混合 one-hot 得 $(0.6,0.4,0)$ 再平滑，结果相同（两步都是仿射操作，可交换，前提是用同一个 ε）。
+
+**CutMix**：不是叠加，是把 $x_j$ 的一个矩形贴到 $x_i$ 上；标签按**实际贴上的面积**混合。8×8 的图，打算贴的矩形横跨 [−2,4)、纵跨 [1,7)，理论面积 36；越界裁掉后是 [0,4)×[1,7)，实际 24 个像素。第一张图保留 $1-24/64=0.625$，目标 $0.625r_i+0.375r_j$。**用理论面积 36 会算成 0.4375，连哪张图占多数都反了。**
 
 ![增强输入、软真实目标与在线教师目标的路径](./images/augmentation-targets.svg)
 
-### 37. CutMix复制区域，目标权重来自实际面积
+**🖼 逐元素图解**
 
-CutMix用一个空间mask M决定保留第一图哪些像素：$\tilde x=M\odot x_i+(1-M)\odot x_j$。若M在保留区域为1，目标取$\tilde r=\lambda_{\rm actual}r_i+(1-\lambda_{\rm actual})r_j$，其中$\lambda_{\rm actual}$是第一图实际保留的面积比例。
+- **左上绿卡"两张原图"** $x_i,x_j$ 和各自的标签 → **中上橙卡"产生增强输入"**（Mixup 叠加或 CutMix 贴块）→ **右上蓝卡"当前图 $\tilde x$"**：学生和教师**都读这一张**。
+- **左下绿卡"真实标签分支"**：目标 $\lambda r_i+(1-\lambda)r_j$，CutMix 用实际面积算 λ。
+- **右下蓝卡"教师分支"**：目标是教师在 $\tilde x$ 上的预测 $g(\tilde x)$，**一般不等于** $\lambda g(x_i)+(1-\lambda)g(x_j)$，因为网络不是线性的。作者代码就是先做增强、再把同一批图送给学生和教师。
+- **底部**：缓存原图的教师 logits 再混合，是另一种协议。
 
-常见实现先采样混合比例，再确定矩形边长和中心；矩形碰到边界会被裁剪，因此最终实际面积可能与采样比例不同。标签通常要据裁剪后的矩形重新计算，而不是保留裁剪前的理论面积。[CutMix原论文](https://arxiv.org/abs/1905.04899)
+> **⚠️ 图像级标签不是 patch 级标签**
+>
+> CutMix 的矩形可以穿过 patch 的边界，一个 16×16 的块可能一半来自 $x_i$、一半来自 $x_j$。混合后的软标签是**整张图**的目标，没有任何一个 patch 带着"我是第 2 类"的标注。把 Mixup/CutMix 的标签拿去做逐 patch 的监督需要另外定义。
 
-它保留局部纹理而非透明叠加，但面积比例也只是监督规则，不是“图中物体语义占比”的精确测量。一个小区域可能刚好覆盖唯一关键物体，背景大面积却无分类信息，所以需结合数据和任务评价。
+#### 跟着算　随机深度、EMA、学习率缩放改的是"训练过程"
 
-### 算例N：矩形越界后的真实比例
+**随机深度（stochastic depth / DropPath）**：训练时以概率 p 把整个残差分支丢掉（输出只剩 $x$），保留时除以 $1-p$ 保持期望：$y=x+\frac{m}{1-p}F(x)$，$m\sim\mathrm{Bernoulli}(1-p)$。x=2、F(x)=3、p=0.25：75% 得 $2+3/0.75=6$，25% 得 2，期望 5 = 2+3。但方差是 $0.75\cdot1+0.25\cdot9=3$，不是 0；推理时关掉随机性、直接用 $x+F(x)$。它丢的是一整层的分支，不是某个 patch，也不是 dropout 那样逐元素丢。
 
-8×8图共64像素。拟粘贴矩形覆盖横坐标[−2,4)、纵坐标[1,7)，理论宽6高6、面积36；裁剪到图内后横坐标[0,4)、纵坐标[1,7)，宽4高6、面积24。
+**EMA（指数移动平均）权重**：$\theta^{ema}_t=\beta\theta^{ema}_{t-1}+(1-\beta)\theta_t$，用来评估的是平滑后的权重。β=0.9、初值 0，参数依次 10、20：EMA 依次 1、2.9。初值改成 10 的话第二步是 11，所以初始化不是细节。表 8 显示 EMA 只有 +0.1，微调后消失。
 
-第一图实际保留$1-24/64=0.625$，目标是$0.625r_i+0.375r_j$。若错误用理论面积36，权重变成0.4375/0.5625，甚至把哪张图占更大比例都颠倒。半开区间边界和像素计数在小图里尤其要精确。
+**学习率按 batch 线性缩放**：基准 $5\times10^{-4}$ 对应 batch 512；1024 → $10^{-3}$，256 → $2.5\times10^{-4}$。8 卡每卡 128 时全局 batch 是 1024，不是 128。这是经验规则，不是定理，batch 大到一定程度后失效。
 
-### 38. CutMix矩形不必对齐patch边界
+**Repeated augmentation**：同一个 batch 里放同一张原图的 3 个不同增强视图。作者的采样器先打乱原图索引、每个重复 3 次、再按 GPU 切分；所以"300 epoch"实际上每张原图只被独立采样了 100 次（论文脚注 3 说明了这一点）。小例子：索引 [2,0,3,1] 各重复 3 次成 12 项，两个 GPU 隔一个取一个，各得 6 项，身份有重叠；再截到每卡 4 项时，身份 1 在这个 epoch 被丢掉了。**比较 epoch 数之前先看采样器。**
 
-ViT之后才按固定网格切块。CutMix先在像素域粘贴，矩形可以穿过patch内部，因此一个token的局部输入可能同时来自两张图。没有理由在原算法里自动将每个patch指派给单一来源。
+#### 表 8　逐项消融
 
-例如4×4灰度图P=2，在中央2×2矩形粘贴第二图，会同时改变四个patch的各一个像素。四个patch都成了混合来源，而目标仍按整幅图面积计算。将矩形取整到patch网格，可以成为另一种设计，但需重新说明增强分布和实际面积。
+*Table 8: Ablation study on training methods on ImageNet. The top row ("none") corresponds to our default configuration employed for DeiT. The symbols ✓ and ✗ indicates that we use and do not use the corresponding method, respectively. We report the accuracy scores (%) after the initial training at resolution 224×224, and after fine-tuning at resolution 384×384. The hyper-parameters are fixed according to Table 9, and may be suboptimal.*
 
-这也提醒我们：分类软标签是图像级目标，不是每个patch的真实语义标注。将Mixup/CutMix标签直接拿作局部检测、像素分割或token类别目标，需要额外定义空间对应。
+![表 8 · 训练方法消融](./images/paper-table8-ablation.png)
 
-### 39. RandAugment把操作次数和强度分开
+**🖼 逐元素图解**
 
-RandAugment的基本思想是从候选变换中选择若干操作，控制操作次数与幅度，从而减少增强策略的搜索空间。操作可能涉及颜色、对比度或几何变换；某个“强度数字”必须结合实现中每项操作的幅度映射解释。[RandAugment原论文](https://arxiv.org/abs/1909.13719)
+- **第一行 "none: DeiT-B"**：完整配方，81.8（224）/ 83.1（384）。每一行只改一处（黑色的 ✓/✗ 是改动的那一项，灰色的是沿用默认）。
+- **"optimizer" 两行**：预训练换 SGD → 74.5（**−7.3**）；只在微调换 SGD → 83.1（无差别）。
+- **"data augmentation" 五行**：去 RandAugment → 79.6（−2.2）；RandAugment 换 AutoAugment → 81.2（−0.6）；去 Mixup → 78.7（−3.1）；去 CutMix → 80.0（−1.8）；Mixup 和 CutMix 都去 → 75.8（**−6.0**）。
+- **"regularization" 五行**：去随机擦除 → **4.3\***（训练崩了）；去随机深度 → **3.4\***（崩了）；去 repeated aug → 76.5（−5.3）；加 dropout → 81.3（−0.5）；用 EMA → 81.9（+0.1）。
 
-不同操作并不交换。例如先旋转再裁剪与先裁剪再旋转，保留视野不同；颜色增强先后也可能因clamp而不同。记录一个简写名称而不保存库版本、插值与填充值，可能不足以复现原输入分布。
+**三个结论：**
 
-强增强与soft labels/正则一起作用。比较去掉某增强的消融时，其余参数若不重新调优，测得的是“在当前固定配方里去掉该项”的影响，不是该增强对所有配置的绝对价值。
+1. **优化器是最大的一项。** Transformer 对优化器敏感，SGD 掉 7 个点；而 CNN 用 SGD 一直很好。
+2. **增强几乎每项都重要**，而且**互相不可替代**：Mixup 和 CutMix 各自去掉掉 2–3 点，一起去掉掉 6 点。
+3. **两个带星号的"崩了"要小心读。** 去掉随机擦除或随机深度后模型只有 3–4%，这不是说这两项"值 78 个点"，而是说其余超参数（学习率、weight decay）是为完整配方调的，拿掉一项后整套参数不再匹配。作者在 caption 里写了 *may be suboptimal*，脚注写了 *possibly because hyper-parameters are not adapted*。
 
-### 40. Random Erasing有不同于CutMix的标签政策
+> **⚠️ 固定超参数的消融只回答一个问题**
+>
+> "在其他条件固定不变时，去掉这一项掉多少"。它不等于"这一项的绝对价值"（可能重新调参后差距变小），也不能相加（有交互）。构造一个例子：都不用 A/B 得 70，只 A 得 74，只 B 得 75，都用得 81。完整配方去 A 掉 6、去 B 掉 7，相加 13，但完整比基线只高 11，多出的 2 是交互项被算了两次。表 8 的 Mixup/CutMix 三行就是这样：−3.1、−1.8、一起 −6.0。
 
-Random Erasing通常将图内一个矩形用常数、随机数或特定噪声替换，沿用原图标签；它模拟部分遮挡，要求剩余内容仍足以支持类别。CutMix则从另一张图复制区域，并相应混合两个目标。
+> **💡 为什么 Transformer 比 CNN 更需要强增强**
+>
+> 第 12 讲的结论：ViT 缺少 CNN 的归纳偏置，数据少时容易过拟合。强增强是在**用数据的方式注入先验**：翻转和裁剪告诉模型"位置变了类别不变"，Mixup/CutMix 告诉模型"局部证据要能组合"。作者原话：*transformers require a strong data augmentation: almost all the data-augmentation methods that we evaluate prove to be useful.* 唯一的例外是 dropout，它对 Transformer 反而有害（−0.5）。
 
-两种方法都改一块像素，但复制内容来源和loss目标不同。若在擦除后套用第二图标签权重，已经引入并不存在的第二来源；若CutMix却保持原one-hot，也改变了监督。
+### 🖊 本模块练习
 
-还要记录擦除在normalize前还是后、填充值的数值单位、发生概率和区域范围。均值归一化后的0可能对应原像素均值，并不一定是纯黑。增强可帮助遮挡鲁棒性，但不能保证对任何大遮挡仍正确识别。
+20. ★ 表 8 里去掉随机擦除后精度只有 4.3%，能说"随机擦除值 77 个点"吗？
 
-## 七、正则、优化与样本组织共同构成配方
+<details><summary>解析</summary>
 
-### 41. DropPath丢的是残差分支，不是随机删一个patch
+不能。4.3% 是训练发散的结果（星号），原因很可能是学习率、weight decay 等是为完整配方调的，去掉一项后不匹配。正确的读法是"在这套固定超参数下，随机擦除是训练稳定所必需的"；它的"绝对价值"需要重新调参后再比。作者自己也在 caption 里写了 *may be suboptimal*。
 
-训练中令$m\sim\operatorname{Bernoulli}(1-p)$，一种保持期望的残差随机深度形式为：
+</details>
 
-$$
-y=x+\frac{m}{1-p}F(x).
-$$
+21. ★ Mixup 单独去掉 −3.1，CutMix 单独去掉 −1.8，一起去掉 −6.0。为什么不是 −4.9？
 
-通常对每个样本采样一个分支mask，在token和通道轴广播。它与逐元素Dropout不同，也不等于把某些图像token从序列里删除。模型有两条残差子层时，具体mask的采样和调度还需核对实现。
+<details><summary>解析</summary>
 
-因为$\mathbb E[m/(1-p)]=1$，固定x时这层输出期望为$x+F(x)$。但后续非线性使“最终网络期望等于关闭随机正则的网络”一般不成立。eval模式通常直接保留整个分支；不要为了补偿再乘一次$1-p$。
+有交互作用：两者部分互补，一个在时另一个的边际价值小，两个都没有时损失更大。消融的数字只在"其余固定"的条件下成立，不能相加。正文的 70/74/75/81 例子里交互项是 $81-74-75+70=2$。
 
-### 算例O：期望与方差一起算
+</details>
 
-x=2，F(x)=3，p=0.25。75%概率输出$2+3/0.75=6$，25%概率输出2。期望$0.75\times6+0.25\times2=5$，等于2+3。
+22. CutMix 的矩形贴到图外一部分，标签比例应该用哪个面积？
 
-输出方差$0.75(6-5)^2+0.25(2-5)^2=3$，不是0。若错误地不除0.75，输出为5或2，期望4.25；这改变了分支尺度。若分支后又经过平方，期望是$0.75\times36+0.25\times4=28$，而期望输出的平方是25，说明不能把单层期望结论推广到整网。
+<details><summary>解析</summary>
 
-### 42. AdamW衰减与loss梯度是两条更新来源
+裁剪后实际落在图内的面积。8×8 的例子：理论 36 像素、实际 24 像素，第一张图保留 0.625。用理论面积会得到 0.4375，把两张图的主次搞反。timm 的实现就是按裁剪后的矩形重算 λ。
 
-AdamW将自适应梯度更新与weight decay分开组织；decay作用在参数上，而不是先混入loss梯度再由同一预条件器缩放。一个简化形式是$\theta_{t+1}=(1-\eta\lambda)\theta_t-\eta\widehat m_t/(\sqrt{\widehat v_t}+\epsilon)$。
+</details>
 
-它与在loss中加L2后通过同一自适应预条件器处理，不一般等价。即使某一分支当前监督梯度为0，参数仍可能因decay或旧momentum更新。第12讲零头阻断骨干当前loss梯度的例子，不能据此说优化器绝对不会改任何骨干参数。
+23. 论文说训了"300 epoch"，但脚注说每张图只被看了 100 次。为什么？
 
-还需列明哪些参数免decay，例如bias、归一化参数或特殊token/位置向量。模型或optimizer分组函数可能有不同政策；只写一个weight decay数字不够说明每个参数实际如何更新。
+<details><summary>解析</summary>
 
-### 43. EMA评价权重平滑训练轨迹
+Repeated augmentation 在一个 epoch 里把每张原图重复 3 次（3 个不同的增强视图），所以一个"epoch"的样本数是 3 倍，但独立原图只过了 1/3 遍。作者为了和不用 repeated aug 的训练比较"有效训练时间"，仍然叫它 300 epoch。比较不同论文的 epoch 数之前要先看采样器。
 
-参数指数移动平均可写为$\theta^{\rm ema}_t=\beta\theta^{\rm ema}_{t-1}+(1-\beta)\theta_t$。这是在参数空间平滑历史，不等于平均每步预测概率，也不等于重新训练一个独立模型。
+</details>
 
-本讲讨论将EMA权重用于评价或保存checkpoint；若EMA模型又生成训练目标，则会成为动态教师算法，需另外说明。初始化EMA、是否累计buffers、更新频率、衰减是否warmup、CPU/GPU存放均影响实际状态。
+24. 表 9 里 DeiT 的 weight decay 是 0.05，ViT 是 0.3。这说明 weight decay 越小越好吗？
 
-EMA可能平滑优化噪声，但不自动提高任意模型质量。选用EMA权重还是最后权重评估必须记录；两者可以对同一输入产生不同结果。恢复训练时也应恢复其状态，不能只加载学生权重却把EMA从零重新开始而称为精确续训。
+<details><summary>解析</summary>
 
-### 算例P：两个EMA更新
+不是。ViT 的 0.3 是为"弱增强 + JFT/ImageNet-21k 大数据"调的；DeiT 有强增强和随机深度提供正则，再加大 weight decay 就过度了。正则是一个总量，来源之间可以替换，不能把某一项单独拿出来说"越小越好"。
 
-一维参数初值$\theta_0=0$，EMA也初始化0，$\beta=0.9$。若训练后参数依次为10、20，EMA分别为1、2.9：第一步$0.9\times0+0.1\times10=1$，第二步$0.9\times1+0.1\times20=2.9$。
+</details>
 
-若EMA初值就是10，第二步会是11而非2.9，说明初始化不是无关细节。这里没有做bias correction；不要自动把Adam一阶矩的校正公式套到任意模型EMA实现。
+---
 
-### 44. warmup和cosine定义的是更新过程
+`Part 7`
 
-warmup在初始阶段把学习率从较小值逐渐升到目标，减少刚初始化时过大的更新。一种线性warmup按步t写为$\eta_t=\eta_{\rm start}+(\eta_{\rm peak}-\eta_{\rm start})t/T_w$。端点计数、按epoch还是按step需要统一。
+## 七、三段可运行核查
 
-warmup后，一种cosine schedule为：
+下面三段程序只用 Python 标准库。它们核对本讲的数学，不训练模型，也不加载任何权重。
 
-$$
-\eta_t=\eta_{\min}+\frac{\eta_{\rm peak}-\eta_{\min}}2\left[1+\cos\left(\pi\frac{t-T_w}{T-T_w}\right)\right].
-$$
+### 实验一：目标、温度、KL 和融合
 
-这只是一个明确的教学约定。真实scheduler可有cooldown、额外noise或不同端点。恢复训练时应恢复scheduler步数；若从中间checkpoint重新warmup，会改变整个训练轨迹，不能算原run的无缝继续。
-
-### 算例Q：全局batch和学习率缩放
-
-采用基准学习率$5\times10^{-4}$对应batch512，按全局batch线性缩放：全局1024得到$10^{-3}$，256得到$2.5\times10^{-4}$。若8个进程每进程128、无累积，则全局1024，不是128。
-
-若再累计4步后才optimizer.step，名义有效batch4096，但是否应继续线性放大学习率，还依赖随机增强、loss归一化和收敛。线性缩放是配方假设，不是任意大batch下保证等价的数学定理。warmup长短也需与更新步数一起记录。
-
-### 45. repeated augmentation重复的是原图身份，视图不同
-
-Repeated augmentation在一批或相近批次组织同一原图的多个随机视图。其直觉是让模型在不同增强之间共享监督，学习同一类别的稳定表示。但它是否改善训练，需在给定sampler和预算下评价。
-
-同一身份出现多次不表示复制同一tensor三次：如果随机增强每次独立采样，看到的像素可以不同。若在缓存后只复制同一个已增强tensor，则失去这部分视图变化，算法改变。
-
-分布式sampler还需要明确重复索引如何跨rank分配、如何padding、epoch如何shuffle和截断。对这种sampler，epoch未必恰好覆盖每张独立原图一次；应直接统计索引数、独立身份数与更新次数。
-
-### 46. sampler代码比一个epoch数字更有信息
-
-作者`RASampler`先shuffle原图索引，再重复索引、补齐到可按rank划分的长度，按rank步长抽取，并将选择数量取到指定倍数。其set_epoch参与随机种子；因此每个epoch的索引覆盖与普通DistributedSampler不同。[作者sampler](https://github.com/facebookresearch/deit/blob/main/samplers.py)
-
-复现时不应自行把“重复3次”翻译为所有原图每epoch都训练3遍。实际selected样本数会改变有效覆盖；同一epoch内重复视图与跨epoch重新shuffle，也形成不同相关性。
-
-查实验成本时，可从训练日志的实际optimizer.step数和每步处理图像数求总曝光数，再单独统计原图身份。若只拿“300 epoch”比较两个不同sampler，可能把不同预算和数据组织归因于骨干。
-
-### 算例R：分布式取片的小例子
-
-为了展示机制而非完整复刻作者取整规则，设原图索引shuffle后为[2,0,3,1]，每个重复3次，得到[2,2,2,0,0,0,3,3,3,1,1,1]。两个rank按步长2分别取[2,2,0,3,3,1]和[2,0,0,3,1,1]。
-
-两rank看到的身份有重叠，不等于把每个身份永久归属一个rank；每次读取还可执行独立增强。若每rank再只选择前4项，rank0读[2,2,0,3]、rank1读[2,0,0,3]，身份1在此epoch被截掉。这个小例子解释为何必须核对selected长度，下一epochshuffle后覆盖又可能改变。
-
-### 47. 配方不是把所有正则都开到最大
-
-增强、smoothing、Mixup/CutMix、DropPath、weight decay和训练长度之间会相互作用。更强正则可能抑制过拟合，也可能让有限预算下的模型欠拟合；不同宽度、数据量和标签噪声可能需要不同强度。
-
-小数据不等于应同时最大化所有正则。先看训练与验证曲线、增强后的可辨信息、教师目标稳定性，再判断需要增加正则还是解决优化。若训练集本身都学不好，一味加强遮挡或混合可能进一步降低质量。
-
-还要区分loss降低与干净图accuracy变化。软标签与强增强改变训练目标，训练loss的绝对值不一定能与普通one-hot CE直接横比。可以另外在固定干净验证输入上测指标，以确认实际任务表现。
-
-## 八、怎样解释论文成绩与消融
-
-### 48. 历史成绩必须附上训练条件
-
-DeiT原工作表明，在其ImageNet-1k训练配方下，不依赖额外独立图像的ViT可获得有竞争力的分类结果。阅读时至少区分普通版/蒸馏版、224训练/384微调、训练长度和实际评价头；其中普通Base的224结果81.8%，384微调83.1%，双头蒸馏300轮的对应融合结果83.4%与84.5%。[原论文表3](https://arxiv.org/html/2012.12877v2)
-
-这些数字用来说明历史实验，不是本讲执行的训练，也不是今日所有实现都能自动达到的承诺。将不同训练长度或输入尺寸中的最高成绩放入一列，却省略条件，会把额外预算的贡献归入结构。
-
-尤其不要把“使用相同原图集”写成“全部训练成本相同”。蒸馏需要教师，增大分辨率增加学生和教师输入成本，训练更久增加曝光和更新。质量提高需要与这些条件一起解释。
-
-### 49. 消融首先回答固定条件下的反事实
-
-完整配置得到指标a，去掉某组件得到b，差$a-b$表示在其余条件保持不变时这一去除的效果。它不是组件单独产生的绝对百分点，更不是所有任务中的通用收益。
-
-若增强A、B有交互作用，完整配置去A的下降与去B的下降不能直接相加。若移除某方法后原学习率已不适配，则固定配方消融还混入训练适配问题。可以分别报告固定配方去除和各自重新调优的最优比较，它们回答不同问题。
-
-因此看消融表要同时看是否训练正常、是否调参、评价波动和指标定义。明显不收敛的run能说明某配置脆弱，但不能仅凭它断言相关方法在所有超参数下不可缺少。
-
-### 算例S：两个增强的交互
-
-虚构四组同预算结果：都不用A/B=70%，只A=74%，只B=75%，都用=81%。A在没有B时贡献4点，在有B时贡献6点；B对应5点与7点。
-
-交互项$81-74-75+70=2$点。完整模型去A降6、去B降7，相加13，但完整相对基线只增11，重复计入了交互。另需多随机种子和置信区间确认2点是否稳定，而不是用一次数字直接证明机制。
-
-### 50. 教师偏置迁移是行为证据，不是结构证明
-
-CNN教师具有局部卷积与参数共享等结构偏置；让学生拟合其输出可能把某些偏好的函数行为传给学生。但ViT中的attention和位置表仍未被替换成CNN，因此不能据此宣称学生获得严格卷积等变性。
-
-可以测学生与教师的决策一致率、扰动下的行为、局部遮挡响应、错误类型及任务表现。若DIST头更像教师，这提供行为上的证据；也可能只是双方在容易样本上都答对，或共同错误增加。
-
-所以一致率需拆成共同正确、共同错误、学生纠正教师、教师纠正学生等情况。只看一个总体一致百分比，会把“更正确”和“更像教师”混淆。
-
-### 算例T：一致率高不表示accuracy更高
-
-10张图，教师答对8张。学生甲与教师完全同预测，accuracy=80%、一致率100%；学生乙在教师的2张错题中纠正1张，其余相同，则accuracy=90%、一致率90%。
-
-学生乙更好却更不一致。反过来，学生丙在教师2张错题上同错，同时把教师1张正确题改错，则accuracy=70%、一致率90%。相同90%一致率能对应不同accuracy，因此至少要记录标签条件下的四格计数。
-
-### 51. 公平比较须控制教师、配方与测量系统
-
-一个清晰的实验矩阵是：单CLS无教师、单CLS硬/软教师loss、双token同标签对照、双token硬/软蒸馏。每行记录同一骨干规模、原图、目标处理、教师权重与温度/reduction、训练步数、增强和评价输入。
-
-若同时比较不同教师，先固定学生配方与教师输入协议；若比较吞吐，固定设备、dtype、batch、编译、预处理计时范围与融合方式。训练成本与推理吞吐分别测量，教师前向不能漏记到“免费监督”里。
-
-教师选择、超参数选择只能用训练/验证协议；最终测试集不应被反复用于挑教师和增强。一个更强教师如果用过测试图，也不是有效的教师优势。数据泄漏可发生在教师阶段，即使学生的数据目录看似干净。
-
-### 52. 双头失败时怎样分解问题
-
-若loss为NaN，先核对教师/学生logits、stable log-softmax、soft target归一化、dtype和极端温度。若类型错误，核对model模式、单/双头结构、criterion期待的二元组。若训练慢，分开测教师前向和学生步骤。
-
-若DIST头表现很差，检查教师是否eval、类别映射是否一致、混合输入是否可辨、教师硬标签是否变动、alpha/reduction是否正确；若仅高分辨率迁移失败，检查两特殊位置的分离和插值、patch大小与head加载。
-
-若融合不增益，测两头错误重叠和各自校准，并比较指定融合政策。不要因为两head单独accuracy相近就推断融合必然改善；高度相关错误或某头极端错误置信可以使融合无益甚至变差。
-
-### 53. 从DeiT到后续视觉大模型的依赖
-
-DeiT强调架构以外的训练因素，并提供“在共享骨干中设置不同直接监督接口”的例子。后续多模态或自监督模型同样会有多目标、多头、教师、停止梯度和EMA，但每个目标的信息来源需要独立定义。
-
-例如DINO教师是动态更新的无标签目标，不能把它直接解释为DeiT固定CNN类别教师；MAE重建像素也不是教师类别蒸馏。distillation token与register token共享“额外序列位置”这个形式，却不因此具有同一训练角色。
-
-下一讲Swin/PVT转向空间结构与多尺度：窗口、移位和层级表示怎样改变感受信息与计算。训练数据效率、空间归纳偏置和开放词汇迁移仍是不同维度，应沿对应专题分别建立证据。
-
-## 九、三组可运行核查
-
-### 54. 实验一：目标、温度、KL和融合
-
-下面只依赖Python标准库。构造固定教师与学生logits，对硬CE、soft target CE、温度KL以及两种reduction做中心差分；再验证同一头的混合loss等价、两个融合的top-1反例。目标是核查数学和接口，不训练真实分类器。
-
-差分只改变学生打分，固定教师目标；这是第5节停止教师梯度的含义。若对教师参数也求导，将不再是这个固定教师目标。数值容差要覆盖有限差分截断/浮点误差，而不是追求每一位完全相等。
+构造固定的教师与学生 logits，对硬交叉熵、软目标交叉熵、温度 KL 以及两种求平均分母做中心差分；验证单头混合目标的等价性、两种融合的 top-1 反例。差分只改学生 logits、固定教师目标，这就是"教师冻结"的含义。
 
 ~~~python
 import math
@@ -752,11 +794,10 @@ print('logit fusion:',logit_fused)
 print('loss finite-difference max error:',max(errors))
 ~~~
 
-### 55. 实验二：双token小骨干的完整输入与双头梯度
 
-构造4×4灰度图、P2、D4、一个Pre-LN attention/MLP块。它含CLS、DIST和4个patch，序列T6。两组head分别接真实目标和教师硬目标，训练权重为0.5/0.5。
+### 实验二：双 token 微型 ViT 的完整输入与双头梯度
 
-这个教学网络省略块内线性bias和可学习LN affine，固定块内权重，但完整反传经过LN、GELU、Q/K/V、softmax和残差。有限差分核查像素、patch投影、两个输入token、全部位置、两组head/bias的94个标量；它不是对所有生产参数的梯度检查，也不是实际DeiT预训练。
+4×4 灰度图、P=2、D=4、一个 Pre-LN 块，序列含 CLS、DIST 和 4 个 patch（T=6）。两个头分别接真实标签和教师硬标签，权重各 1/2。有限差分核对像素、patch 投影、两个输入 token、全部位置、两组头和偏置共 94 个标量。它能暴露漏掉 DIST 路径、位置路径或残差的错误。块内线性偏置和 LN 仿射参数省略。
 
 ~~~python
 import math
@@ -941,11 +982,10 @@ assert new_loss<loss
 print('one illustrative descent step:',loss,'->',new_loss)
 ~~~
 
-### 56. 实验三：增强、正则、位置与成本账本
 
-最后一组程序核对平滑/Mixup的交换条件、CutMix实际面积、DropPath期望与方差、EMA更新、repeated index示例、双特殊位置保留以及Ti/S/B普通和蒸馏参数/MAC。所有数值都是明确约定下的标量账本。
+### 实验三：增强、正则、位置与成本账本
 
-真实训练需要像素解码、库版本、随机种子、teacher权重、sampler、优化器和评估协议。标准库小例子用于提前发现索引和公式错误，不用它的运行速度代表GPU吞吐，也不用一次小loss代表ImageNet质量。
+核对平滑/Mixup 的交换条件、CutMix 的实际面积、随机深度的期望与方差、EMA 更新、repeated augmentation 的索引例子、双特殊位置的插值，以及 Ti/S/B 普通和蒸馏版本的参数与 MAC。
 
 ~~~python
 import math
@@ -1037,133 +1077,84 @@ assert 81-74-75+70 == 2
 print('illustrative ablation interaction: 2 points')
 ~~~
 
-## 十、练习与逐题解析
 
-### 练习1：每张原图随机增强十次，独立数据规模是否十倍？
+三段程序通过之后，**已经核对的**：两种蒸馏损失的梯度、温度和分母的影响、融合顺序、双 token 的完整梯度链、增强和正则的小算例、三档账本。**没有核对的**：任何真实 checkpoint、ImageNet 精度、GPU 吞吐。
 
-**解析：** 原图身份数仍相同，曝光视图数增加。增强提供了变化，但这些视图来自同一对象，存在相关性。比较训练要记录原图数、曝光数和更新数；不能只用增强tensor总数宣称新增十倍独立数据。
+---
 
-### 练习2：教师只用训练集，蒸馏计算是否免费？
+## 附录 A · 核心概念速查
 
-**解析：** 教师训练与教师在每批增强输入上的前向均有成本。固定教师省去教师的训练反向，但前向仍执行。部署学生一般不需教师，所以训练成本和学生推理成本应分开列账。
+| 概念 | 一句话 | 出处 |
+|---|---|---|
+| **数据效率** | 独立图片数相同（ImageNet）达到同样精度；不等于算力少，教师和 300 epoch 都要算 | 摘要 |
+| **知识蒸馏** | 学生拟合教师的输出；教师冻结，梯度不传回 | 第 4 节 |
+| **软蒸馏** | $(1-\lambda)\mathrm{CE}+\lambda\tau^2\mathrm{KL}(\psi(Z_s/\tau),\psi(Z_t/\tau))$；τ 把分布变平，$\tau^2$ 补偿梯度 | 公式 (2) |
+| **硬蒸馏** | 教师的 argmax 当第二个标签，两项各 1/2；无超参数；在强增强下比软蒸馏好 1.2 点 | 公式 (3)、表 3 |
+| **蒸馏 token** | 和 CLS 对称的可学习向量，输出接教师损失；两 token 输入 cos 0.06，最后一层 0.93 | 图 2 |
+| **对照实验** | 第二个 CLS（同标签）收敛到同一向量（cos 0.999），无提升：提升来自监督不同 | 第 8 页 |
+| **融合** | 论文文字：softmax 后平均；代码：logits 平均再 softmax；两者不等价 | 第 8 页 |
+| **三档** | Ti/S/B：D=192/384/768，头 3/6/12，层 12，每头 64 | 表 1 |
+| **CNN 教师更好** | RegNetY-16GF（82.9）教出 84.2 > DeiT-B（81.8）教出 83.1；学生超过教师 | 表 2 |
+| **表 3 三行** | 软 81.8 = 不蒸馏；硬 83.0；蒸馏 token 融合 83.4 | 表 3 |
+| **一致率** | DIST 头最像 CNN（0.100）；像不等于准 | 表 4 |
+| **主结果** | DeiT-B 81.8 → ⚗ 83.4 → ⚗↑384 85.2 > JFT 预训练的 ViT-B 84.15 | 表 5 |
+| **训练更久** | 不蒸馏 400 epoch 饱和；蒸馏到 1000 epoch 还在涨 | 图 3 |
+| **双三次插值** | 双线性插值会缩短位置向量模长，精度掉；改用双三次 | 第 17 页 |
+| **配方差别** | weight decay 0.3 → 0.05；去 dropout；加随机深度、标签平滑、repeated aug、RandAugment、Mixup、CutMix、擦除 | 表 9 |
+| **消融** | SGD −7.3；去 Mixup+CutMix −6.0；去 repeated aug −5.3；去擦除/随机深度训练崩；dropout −0.5；EMA +0.1 | 表 8 |
 
-### 练习3：为什么教师eval和no_grad要分别检查？
+## 附录 B · 数字速查
 
-**解析：** no_grad不建立自动微分图，不控制Dropout或BN模式；eval切换模块行为，却不必然禁止记录梯度。固定教师通常同时使用二者，并排除在学生optimizer外。还应检查buffer是否更新，避免无梯度但教师运行统计改变。
+| 量 | 数值 |
+|---|---:|
+| DeiT-Ti / S / B 精确参数（224、1000 类） | 5,717,416 / 22,050,664 / 86,567,656 |
+| 带蒸馏 token 的增量 | $2D+(D+1)K$；Base 770,536 → 87,338,192 |
+| 吞吐量（V100，224） | Ti 2536 / S 940 / B 292 img/s |
+| DeiT-B 各版本 top-1 | 81.8 / ↑384 83.1 / ⚗ 83.4 / ⚗↑384 85.2 |
+| 教师 RegNetY-16GF | 84M 参数，82.9% |
+| 软蒸馏超参数 | τ = 3.0，λ = 0.1 |
+| 学习率 | $0.0005\times\text{batch}/512$，batch 1024，warmup 5 epoch，cosine |
+| 训练时间 | DeiT-B 300 epoch：2 节点 37 小时或 1 节点 53 小时；↑384 微调 20 小时 |
+| 分辨率 vs 吞吐 | 160: 609 / 224: 291 / 320: 134 / 384: 86 img/s |
 
-### 练习4：学生argmax之后再算交叉熵可以吗？
+## 附录 C · 面试高频问题
 
-**解析：** 训练需要连续学生logits及其softmax梯度$p-r$。argmax只给类别编号，丢掉置信度和可用的连续导数。教师argmax可制作固定目标，但不意味着学生也先做argmax再训练。
+1. **DeiT 和 ViT 的模型有什么区别？**
+   DeiT-B 和 ViT-B 结构完全相同。差别在训练配方（AdamW + 小 weight decay、强增强、随机深度、标签平滑、repeated augmentation），以及可选的蒸馏 token。Ti 和 S 是新加的小档，只改宽度和头数。
 
-### 练习5：真实标签与硬教师一致时，一头混合loss有什么不同？
+2. **硬蒸馏和软蒸馏哪个好？为什么？**
+   DeiT 的实验里硬蒸馏好（83.0 vs 81.8，软蒸馏和不蒸馏一样）。原因是输入经过 Mixup/CutMix 等强增强后，教师的硬标签相当于对增强图的"修正标签"，而软分布把教师的犹豫一起传给学生。
 
-**解析：** 无额外平滑等处理时，两项目标都是同一个one-hot，系数和为1，loss及当前logit梯度与普通CE相同。若两分支有不同输入、标签处理或分类头，这个等价的前提就不成立。
+3. **蒸馏 token 是什么？和普通蒸馏差在哪？**
+   一个和 CLS 对称的可学习向量，输出接教师损失。普通蒸馏把两个损失都加在 CLS 上；蒸馏 token 给教师信号单独开一个出口，两头通过共享的注意力层互相影响。对照实验证明提升来自"监督不同"而非"多一个 token"。
 
-### 练习6：p=(1/2,1/3,1/6)、y=1、教师=2、alpha=1/2，单头梯度是多少？
+4. **为什么 CNN 教师比 Transformer 教师好？**
+   作者的假设是 CNN 的归纳偏置通过教师的判断传给了 ViT 学生。证据是表 4：蒸馏 token 的头和 CNN 教师的预测最一致。这是行为上的相关性，不是结构证明。
 
-**解析：** 混合目标r=(1/2,1/2,0)，相减$p-r=(0,-1/6,1/6)$。它是一个输出的混合目标；两头版本需分别求$p_c-e_1$、$p_d-e_2$再各乘系数，不能将各自概率省略。
+5. **学生能超过教师吗？**
+   能。表 2 里教师 82.9，学生 84.2。学生同时有真实标签、教师信号和自己的架构；蒸馏传递的是行为不是上限。
 
-### 练习7：教师概率(0.51,0.49)与(0.999,0.001)的硬目标是否不同？
+6. **DeiT 配方里最重要的是哪几项？**
+   按表 8：优化器（SGD −7.3）、Mixup + CutMix（一起 −6.0）、repeated augmentation（−5.3）；随机擦除和随机深度去掉后训练崩溃（需重新调参才能评估）。Dropout 反而有害。
 
-**解析：** 都是第一类。没有另加置信度权重时，hard distillation丢掉这两种信心程度的差别。soft distillation保留分布，但该分布的校准和可靠性还需验证。
+7. **消融实验的数字能相加吗？**
+   不能，有交互：Mixup −3.1、CutMix −1.8、一起 −6.0。固定超参数的消融只回答"其余不变时去掉这一项掉多少"。
 
-### 练习8：温度2能否直接把原概率除以2？
+8. **为什么 DeiT 换分辨率时用双三次而不是双线性插值位置表？**
+   双线性插值出来的向量是邻居的加权平均，模长变小，预训练模型没见过短向量，精度掉。双三次插值大致保持模长。
 
-**解析：** 应对logits除2后重新softmax，保证归一化。原概率逐项除2会使总和变成1/2，也不实现所需的概率比变化。原概率q若已知，可以取$q_k^{1/2}$后重新归一化，正概率情况下与logit温度变换相同。
+9. **"300 epoch"和 ViT 的 300 epoch 一样吗？**
+   不一样。DeiT 用 repeated augmentation，一个 epoch 里每张图出现 3 次，独立原图只过 100 遍。比较训练预算要看采样器和总步数。
 
-### 练习9：为什么KL(q∥p)与KL(p∥q)的学生梯度不同？
+10. **DeiT 证明了什么、没证明什么？**
+    证明了：在 ViT-B 的规模上，好配方 + 蒸馏可以只用 ImageNet 达到甚至超过 JFT 预训练的效果。没证明：这能替代更大规模（ViT-H 级别）的大数据预训练，也没证明软蒸馏在弱增强下也没用。
 
-**解析：** 前者q固定，只有$-\sum q\log p$产生学生梯度；后者p作为权重本身也随学生变化，还存在$p\log p$项。交换参数会改目标，不能因二者都非负而视为等价。复现需展开求和式和核对库函数输入语义。
-
-### 练习10：乘tau²之后梯度是不是对温度完全不变？
-
-**解析：** 缩放后梯度为$\tau(p^\tau-q^\tau)$，概率本身随温度变化，通常不恒定。只在高温且logit差相对较小的一阶近似下，主要温度因子抵消；其他监督和reduction仍影响整体尺度。
-
-### 练习11：teacher=(2,1,0)，student=(102,101,100)，KL如何？
-
-**解析：** 相同温度下两概率相同，KL为0，因为共同平移不影响softmax。未去均值的logit MSE很大，说明这种MSE是不同约束。高温蒸馏的一阶解释匹配的是去均值logits。
-
-### 练习12：B=4、K=1000，除BK和除B的loss相差多少？
-
-**解析：** 相同求和分子下，前者为后者1/1000，梯度也缩小1000倍。与真实标签CE混合时，教师相对影响改变。若调整reduction，必须重新说明alpha和总优化尺度，而非当作日志单位变化。
-
-### 练习13：DIST初始向量是不是教师logits？
-
-**解析：** 不是，它是D维共享输入参数，与K维教师类别打分不同。教师输出通过loss提供监督，DIST读取图像并经反传学习。把教师logits塞进学生输入，会改变形状与推理依赖。
-
-### 练习14：224×320、P16的双token序列多长？
-
-**解析：** patch网格14×20，共280块；增加CLS、DIST得到282。位置表相应282行，训练两头各为K类，不是把两个额外token当两枚patch恢复到14×20网格。
-
-### 练习15：两个loss分配给两头，骨干是否互不影响？
-
-**解析：** 两头各有自己的输出矩阵，但共享attention、FFN、patch投影等。骨干梯度是两分量之和，还可经attention跨token传播。只监督CLS也可能改变DIST输入参数；实验二对这条路径进行了差分与梯度核对。
-
-### 练习16：输出处patch梯度为0，patch embedding还能学吗？
-
-**解析：** 能。输出头初始只把梯度放在两个全局位置，但attention中的读取把它传到patch的K/V以及共享输入路径，之前层也存在更长的依赖。需完整反传，不能根据最终head接口的零行判定patch不学习。
-
-### 练习17：两个头都预测真实标签，就等价于蒸馏token吗？
-
-**解析：** 相同额外结构下，它缺少教师信息，是双同标签头的对照。独立参数可能仍产生不同状态，但不能算教师蒸馏。保持第二token和参数量、只改目标，能帮助检查教师信息的贡献。
-
-### 练习18：softmax((a+b)/2)等于两概率平均吗？
-
-**解析：** 一般不等。前者对应归一化几何平均，后者是算术平均；算例I给出预测类别改变的反例。评价必须说明融合政策，不能把论文文字与代码路径的差别隐藏在“平均两头”四字里。
-
-### 练习19：双token位置插值可以只保留第一行吗？
-
-**解析：** 不可以，CLS和DIST两行都要与patch网格分开。224/P16有196个patch加2，共198；升到384/P16后为576+2=578。把第1行开始的197行当图像位置会把DIST错混进网格。
-
-### 练习20：Base蒸馏新增参数是否只有768？
-
-**解析：** 新增token768、一行位置768、第二1000类头769,000，总770,536。普通86,567,656加上增量得87,338,192。编码器矩阵没有多出一套，教师另记为训练模型。
-
-### 练习21：同一图像加一个DIST，patch投影MAC也要增加吗？
-
-**解析：** patch数未变，因此输入像素到patch的投影MAC不变。Transformer序列多一行，投影/FFN和attention乘法增加，再加第二分类头；教师前向是训练阶段另外的成本。
-
-### 练习22：均匀smoothing和Mixup什么时候能交换？
-
-**解析：** 同一epsilon、同一平滑分布下，平滑是$r\mapsto(1-\varepsilon)r+\varepsilon u$的仿射变换，Mixup权重和为1，因此先后相等。样本使用不同epsilon、非线性目标处理或argmax时，不可直接套用。
-
-### 练习23：CutMix矩形在边界外，标签比例用哪个面积？
-
-**解析：** 用实际复制到图内的像素面积。8×8上算例N裁剪后复制24像素，第一图保留0.625；理论36像素不应参与最终比例。小图需明确半开区间、取整与clip方式。
-
-### 练习24：教师预测Mixup图能由两个原图预测线性混合得到吗？
-
-**解析：** 一般不能，教师及softmax为非线性函数。在线增强图预测和预缓存原图logits的混合是不同协议。若要替换，需要验证目标、训练质量与成本，不能称为自动等价的优化。
-
-### 练习25：DropPath保持期望，最终整网平均预测就一定相同吗？
-
-**解析：** 单残差输出在固定输入下有期望保持，但之后的非线性不与期望交换。算例O中输出均值5，平方均值28而非25。eval行为仍需按实现关闭随机分支规则，不能以期望论证所有输出完全一致。
-
-### 练习26：EMA模型就是对所有历史预测求平均吗？
-
-**解析：** 它平均参数，模型通常是参数的非线性函数，因此不等价于预测平均。初值、衰减、更新频率和buffers都会影响结果。评价EMA与最终学生权重应分别记录。
-
-### 练习27：完整配方去掉A降6点、去掉B降7点，可说二者一共贡献13点吗？
-
-**解析：** 不能直接相加，可能有交互。算例S完整相对无A/B只增11点，交互为2点；两次去除把交互重复计入。还需检查调参、预算与随机波动，限定结论在实验条件内。
-
-### 练习28：学生与教师一致率提高，能否证明学生更准确且获得CNN等变性？
-
-**解析：** 两个结论都不能只由一致率推出。共同错误会提高一致率，学生纠正教师则可能降低一致率；函数行为相似也不改变ViT的严格结构。分别测标签条件下的正确/错误、扰动行为和模型结构，才能支持对应判断。
-
-## 十一、复现清单与后续入口
-
-一次可复查的DeiT实验应保存：原图身份与划分、教师数据来源/权重/类别映射/模式、学生单/双token配置、位置和head加载记录、当前增强图与目标处理、hard/soft/tau/alpha/reduction、全局batch与累积、sampler索引与实际曝光、优化器分组和scheduler、EMA状态、评估预处理与融合政策、随机种子和库revision。
-
-先验证小矩阵和单步梯度，再检查固定batch是否可学习；记录两头单独loss/accuracy与融合指标，最后做相同数据/预算的消融。若改了KL归一化、教师输入或头融合，要作为实际算法条件报告，不能只在代码里静默变更。
-
-本讲完成基础DeiT与其训练机制，不替代所有蒸馏、自监督或现代训练论文。[第14讲](../vision-14-swin-pvt/)进入Swin、PVT与多尺度空间结构；回到[总览](../vision-00-overview/)可查看已写/待写状态，ViT输入和计算账本见[第12讲](../vision-12-vit/)。
+---
 
 ## 原始材料
 
-- [Touvron等：Training data-efficient image transformers & distillation through attention](https://arxiv.org/abs/2012.12877)：原DeiT机制和历史实验，本文手算、账本与程序为独立教学构造。
-- [作者模型](https://github.com/facebookresearch/deit/blob/main/models.py)、[损失](https://github.com/facebookresearch/deit/blob/main/losses.py)、[训练循环](https://github.com/facebookresearch/deit/blob/main/engine.py)、[sampler](https://github.com/facebookresearch/deit/blob/main/samplers.py)：核对双token、双头输出、KL归一化、教师输入和重复采样。main分支可能变化，复现需固定revision。
-- [Hinton等：Distilling the Knowledge in a Neural Network](https://arxiv.org/abs/1503.02531)：温度软目标与知识蒸馏；[Mixup](https://arxiv.org/abs/1710.09412)、[CutMix](https://arxiv.org/abs/1905.04899)、[RandAugment](https://arxiv.org/abs/1909.13719)：训练增强的原始来源。
-- [作者仓库说明](https://github.com/facebookresearch/deit)：实际依赖、训练入口与后续模型。本文主要展开原DeiT，不能把仓库后续增加的选项都当作原论文默认。
+- [Touvron 等：Training data-efficient image transformers & distillation through attention](https://arxiv.org/abs/2012.12877)，ICML 2021。**本讲所有标注"图 N"、"表 N"、"公式"的截图均来自该论文 arXiv v2 版（2021-01-15），版权归原作者；讲解文字为笔记作者补充。** 温度、梯度、融合、CutMix 面积等小例子是本讲构造的，不是论文数据。
+- [作者代码仓库](https://github.com/facebookresearch/deit)：[`models.py`](https://github.com/facebookresearch/deit/blob/main/models.py)（双 token 与 eval 融合路径）、[`losses.py`](https://github.com/facebookresearch/deit/blob/main/losses.py)（KL 方向与分母）、[`samplers.py`](https://github.com/facebookresearch/deit/blob/main/samplers.py)（repeated augmentation）、[`engine.py`](https://github.com/facebookresearch/deit/blob/main/engine.py)（先增强再送学生与教师）。
+- 配方里各项的来源：[Hinton 等：Distilling the Knowledge](https://arxiv.org/abs/1503.02531)；[Mixup](https://arxiv.org/abs/1710.09412)；[CutMix](https://arxiv.org/abs/1905.04899)；[RandAugment](https://arxiv.org/abs/1909.13719)；[Stochastic Depth](https://arxiv.org/abs/1603.09382)；[timm 库](https://github.com/huggingface/pytorch-image-models)。
 
-资料核对日期：2026-10-08。可运行小程序用于数学、梯度与索引核查；本文没有执行真实视觉模型训练或GPU性能评测。
+*本笔记基于 DeiT 原论文整理，截图来自论文 PDF，讲解为笔记作者补充。资料核对日期 2026-10-19。*
