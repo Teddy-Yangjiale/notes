@@ -118,6 +118,17 @@ export const SERIES: Series[] = [
     color: 'lilac',
     weight: 5,
   },
+  {
+    id: 'cs184',
+    title: 'CS184 · 计算机图形学',
+    badge: 'CS184',
+    description:
+      'UC Berkeley CS184/284A Foundations of Computer Graphics（Fall 2026）逐讲中文笔记。' +
+      '不按幻灯片顺序翻译，而是先把一整讲压成一条推理链，每个关键原理配一张手绘示意图讲清「关系」，' +
+      '再补手算、易错点与自测；正文只留关键页截图，全部页面另附索引表。',
+    color: 'sky',
+    weight: 9,
+  },
 ];
 
 export const seriesById = new Map(SERIES.map((s) => [s.id, s]));
