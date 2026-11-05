@@ -22,6 +22,28 @@ export interface Series {
 
 export const SERIES: Series[] = [
   {
+    id: 'sta5007',
+    title: 'STA-5007 · 高级自然语言处理',
+    badge: 'STA-5007',
+    description:
+      '南科大统计与数据科学系，陈冠华老师《高级自然语言处理》课堂笔记。' +
+      '按课件逐页拆解：每页配原始截图，图下先给原文要点，再补推导细节、维度核对、' +
+      '直觉解释与易错点，配逐元素图解和带详解的练习。',
+    color: 'moss',
+    weight: 0,
+  },
+  {
+    id: 'cs184',
+    title: 'CS184 · 计算机图形学',
+    badge: 'CS184',
+    description:
+      'UC Berkeley CS184/284A Foundations of Computer Graphics（Fall 2026）逐讲中文笔记。' +
+      '不按幻灯片顺序翻译，而是先把一整讲压成一条推理链，每个关键原理配一张手绘示意图讲清「关系」，' +
+      '再补手算、易错点与自测；正文只留关键页截图，全部页面另附索引表。',
+    color: 'sky',
+    weight: 1,
+  },
+  {
     id: 'vision-foundations',
     title: '视觉大模型 · 基础与核心论文',
     badge: 'VISION',
@@ -29,7 +51,7 @@ export const SERIES: Series[] = [
       '面向基础不扎实的读者，从图像、数学与训练讲到视觉表征、视觉语言、生成、视频、三维和具身模型。' +
       '逐知识点解释符号、维度和直觉，配完整手算、原创图解与带详解的练习；总览列出完整知识覆盖和写作进度。',
     color: 'moss',
-    weight: 7,
+    weight: 2,
   },
   {
     id: 'vision-frontiers',
@@ -39,7 +61,27 @@ export const SERIES: Series[] = [
       '围绕感知与推理、视觉潜空间、理解生成统一、流式记忆、空间与具身智能组织前沿论文。' +
       '每个专题讲原理、实验依据、分歧与开放问题，并给出可检验的研究假设。',
     color: 'clay',
-    weight: 8,
+    weight: 3,
+  },
+  {
+    id: 'cs336',
+    title: 'CS336 · 从零构建语言模型',
+    badge: 'CS336',
+    description:
+      '斯坦福 CS336 Spring 2026 逐讲中文笔记。从 BPE 分词一路走到分布式训练、Scaling Laws、推理服务与后训练，' +
+      '每讲都按"为什么需要它 → 算法怎么推 → 实现要注意什么 → 怎么判断做对了"重写过。',
+    color: 'sky',
+    weight: 4,
+  },
+  {
+    id: 'cs329a',
+    title: 'CS329A · 自我改进的语言模型智能体',
+    badge: 'CS329A',
+    description:
+      '斯坦福 CS329A 逐讲中文笔记。主题是推理时扩展与自我改进：验证器、工具反馈、规划、' +
+      '强化学习、深度研究智能体与长时程任务评估，外加三篇补充专题。',
+    color: 'clay',
+    weight: 5,
   },
   {
     id: 'cs323',
@@ -50,7 +92,7 @@ export const SERIES: Series[] = [
       '从编译器的七个阶段讲起，沿着 正则表达式 → NFA → DFA → 上下文无关文法 这条主线，' +
       '把每个定义、算法和易错点都配上完整推导与例子，每讲末尾附复习自测。',
     color: 'plum',
-    weight: 0,
+    weight: 6,
   },
   {
     id: 'cs201',
@@ -62,50 +104,7 @@ export const SERIES: Series[] = [
       '命题逻辑 → 逻辑等价 → 谓词逻辑 → 形式证明 → 证明方法层层递进，' +
       '课件里的练习全部附完整解答，每章末尾有符号速查与易错清单。',
     color: 'sand',
-    weight: 1,
-  },
-  {
-    id: 'sta5007',
-    title: 'STA-5007 · 高级自然语言处理',
-    badge: 'STA-5007',
-    description:
-      '南科大统计与数据科学系，陈冠华老师《高级自然语言处理》课堂笔记。' +
-      '按课件逐页拆解：每页配原始截图，图下先给原文要点，再补推导细节、维度核对、' +
-      '直觉解释与易错点，配逐元素图解和带详解的练习。',
-    color: 'moss',
-    weight: 2,
-  },
-  {
-    id: 'cs336',
-    title: 'CS336 · 从零构建语言模型',
-    badge: 'CS336',
-    description:
-      '斯坦福 CS336 Spring 2026 逐讲中文笔记。从 BPE 分词一路走到分布式训练、Scaling Laws、推理服务与后训练，' +
-      '每讲都按"为什么需要它 → 算法怎么推 → 实现要注意什么 → 怎么判断做对了"重写过。',
-    color: 'sky',
-    weight: 3,
-  },
-  {
-    id: 'cs329a',
-    title: 'CS329A · 自我改进的语言模型智能体',
-    badge: 'CS329A',
-    description:
-      '斯坦福 CS329A 逐讲中文笔记。主题是推理时扩展与自我改进：验证器、工具反馈、规划、' +
-      '强化学习、深度研究智能体与长时程任务评估，外加三篇补充专题。',
-    color: 'clay',
-    weight: 4,
-  },
-  {
-    id: 'ai-infra-survey',
-    title: 'AI Infra 前沿调研 2026',
-    badge: 'INFRA',
-    description:
-      '面向 LLM 系统的十二方向文献综述：推理服务与调度、KV Cache、投机解码、PD 分离、MoE、' +
-      '量化低精度、显存卸载、长上下文、分布式训练、RL 后训练、GPU 算子编译器、Agent 基础设施。' +
-      '每个方向按「问题定义 → 历史脉络 → 2025–2026 前沿 → 开放问题 → 论文速查」展开，' +
-      '并附 PD 分离三部曲、KV 准入决策全链路讲解与顶会论文清单。每篇配可视化图解。',
-    color: 'sky',
-    weight: 6,
+    weight: 7,
   },
   {
     id: 'mlsys-failures',
@@ -116,16 +115,17 @@ export const SERIES: Series[] = [
       '每篇按一条完整的研究链路复盘一个方向：背景原理、动机与假设、预注册判据、实验与数据、' +
       '怎么死的、哪些测量仍然有效、犯过的错和学到的教训。',
     color: 'lilac',
-    weight: 5,
+    weight: 8,
   },
   {
-    id: 'cs184',
-    title: 'CS184 · 计算机图形学',
-    badge: 'CS184',
+    id: 'ai-infra-survey',
+    title: 'AI Infra 前沿调研 2026',
+    badge: 'INFRA',
     description:
-      'UC Berkeley CS184/284A Foundations of Computer Graphics（Fall 2026）逐讲中文笔记。' +
-      '不按幻灯片顺序翻译，而是先把一整讲压成一条推理链，每个关键原理配一张手绘示意图讲清「关系」，' +
-      '再补手算、易错点与自测；正文只留关键页截图，全部页面另附索引表。',
+      '面向 LLM 系统的十二方向文献综述：推理服务与调度、KV Cache、投机解码、PD 分离、MoE、' +
+      '量化低精度、显存卸载、长上下文、分布式训练、RL 后训练、GPU 算子编译器、Agent 基础设施。' +
+      '每个方向按「问题定义 → 历史脉络 → 2025–2026 前沿 → 开放问题 → 论文速查」展开，' +
+      '并附 PD 分离三部曲、KV 准入决策全链路讲解与顶会论文清单。每篇配可视化图解。',
     color: 'sky',
     weight: 9,
   },
