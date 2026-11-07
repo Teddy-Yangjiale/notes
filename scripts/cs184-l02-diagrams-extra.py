@@ -123,12 +123,12 @@ def d16():
 # ------------------------------------------------- d17 解析覆盖率
 def d17():
     fig, ax = canvas(9.8, 3.4, (0, 9.8), (0, 3.4), eq=False)
-    ax.text(0.30, 3.14, "边缘的三种处理：0/1 采样、4× 采样、解析覆盖率", fontsize=10.0,
+    ax.text(0.30, 3.14, "边缘的三种处理：点采样、4× 采样、高密度覆盖参考", fontsize=10.0,
             color=INK, fontweight="bold")
     NX, NY, CW, CH = 5, 4, 0.42, 0.36
     for k, (ox, lab, c) in enumerate([(0.55, "1 采样（0/1）", RED),
                                       (3.55, "4× 采样（5 级）", ORANGE),
-                                      (6.55, "解析（无穷级）", GREEN)]):
+                                      (6.55, "40 切片积分近似", GREEN)]):
         y_base = 1.15
         y_top = y_base + NY * CH
         # 斜边：从左上走到右下，斜率让它在格子里穿过
@@ -164,9 +164,9 @@ def d17():
                                        facecolor=(shade, shade, shade), ec="#d1d5db",
                                        lw=0.4))
         ax.text(ox + NX * CW / 2, 0.85, lab, fontsize=7.6, color=c, ha="center")
-    ax.text(0.30, 0.55, "解析覆盖率：直接算「像素方块被三角形盖住的比例」—— 理论上完美，"
-                        "但每个像素要算多边形裁剪，太贵。", fontsize=7.6, color=INK)
-    ax.text(0.30, 0.28, "所以实际用的是 4×/8×/16× 采样逼近（上图中列）—— 级数够多时肉眼看不出差别。",
+    ax.text(0.30, 0.55, "右列以 40 个水平切片近似 box 覆盖积分，仍有数值误差；"
+                        "解析多边形裁剪则可给此几何的面积真值。", fontsize=7.6, color=INK)
+    ax.text(0.30, 0.28, "所以实际用的是 4×/8×/16× 采样逼近（上图中列）—— 误差取决于样本布局和边缘位置。",
             fontsize=7.6, color=MUTED)
     save(fig, "d17-coverage.png")
 

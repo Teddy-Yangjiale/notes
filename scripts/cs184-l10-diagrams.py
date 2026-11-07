@@ -440,27 +440,30 @@ def d12():
             color=INK, fontweight="bold")
     cases = [("$C^0$：位置连续", "两段端点相接", 0.55, TEAL),
              ("$C^1$：一阶连续", "切线方向一致，且长度比 1:1", 3.65, ORANGE),
-             ("$C^2$：二阶连续", "再加 A-frame 约束（曲率也连续）", 6.75, PURPLE)]
+             ("$C^2$：二阶连续", "再加二阶参数导数向量相等", 6.75, PURPLE)]
     for name, note, ox, c in cases:
-        A = np.array([[ox, 1.30], [ox + 0.55, 2.35], [ox + 1.15, 2.35]])
-        B = np.array([[ox + 1.15, 2.35], [ox + 1.75, 2.35], [ox + 2.30, 1.30]])
+        # All panels use quadratic segments, each parameterized on [0, 1].
+        A = np.array([[ox, 1.45], [ox + 0.55, 2.00], [ox + 1.15, 2.15]])
+        B = np.array([A[2], [ox + 1.75, 1.45], [ox + 2.40, 1.30]])
         if name.startswith("$C^1"):
-            A[2] = [ox + 1.15, 2.05]
-            B[0] = [ox + 1.15, 2.05]
-            B[1] = [ox + 1.75, 2.05]
+            B[1] = 2 * A[2] - A[1]
         if name.startswith("$C^2"):
-            A[2] = [ox + 1.15, 2.05]
-            B[0] = [ox + 1.15, 2.05]
-            B[1] = [ox + 1.55, 2.55]
+            B[1] = 2 * A[2] - A[1]
+            B[2] = 2 * B[1] - B[0] + A[2] - 2 * A[1] + A[0]
+        assert np.allclose(A[2], B[0])
+        if not name.startswith("$C^0"):
+            assert np.allclose(A[2] - A[1], B[1] - B[0])
+        if name.startswith("$C^2"):
+            assert np.allclose(A[2] - 2*A[1] + A[0], B[2] - 2*B[1] + B[0])
         for seg in (A, B):
-            ax.plot(np.append(seg[:, 0], seg[0, 0]), np.append(seg[:, 1], seg[0, 1]),
+            ax.plot(seg[:, 0], seg[:, 1],
                     ls=(0, (3, 2)), color="#cbd5e1", lw=0.9)
             ax.plot(bez_curve(seg)[:, 0], bez_curve(seg)[:, 1], color=c, lw=2.0)
         ax.text(ox + 1.15, 0.72, name, fontsize=8.8, color=c, ha="center",
                 fontweight="bold")
         ax.text(ox + 1.15, 0.42, note, fontsize=7.6, color=MUTED, ha="center")
     ax.text(0.30, 0.08, "C1 的条件：$a_n=b_0=\\frac{1}{2}(a_{n-1}+b_1)$ —— "
-                        "即「上一个控制点、连接点、下一个控制点」三点共线且等距",
+                        "（同次数、同参数区间）；三点共线且等距",
             fontsize=8.6, color=MUTED)
     save(fig, "d12-continuity.png")
 

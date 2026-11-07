@@ -608,10 +608,10 @@ def d16():
                 ax.add_patch(Circle((ox + 0.45 + i * 0.75, 1.35 + j * 0.75), 0.11,
                                     facecolor="#f3e8ff", ec=PURPLE, lw=0.7))
         ax.text(ox + 2.05, 0.62, lab, fontsize=7.6, color=MUTED, ha="center")
-        ax.text(ox + 2.05, 0.32, f"估计代价 {cost}", fontsize=8.4, color=c, ha="center",
+        ax.text(ox + 2.05, 0.32, "几何布局示意，代价需另算", fontsize=8.4, color=c, ha="center",
                 fontweight="bold")
 
-    ax.text(0.30, 0.02, "SAH 公式：$Cost = C_{trav} + SA(L)\\,N(L) + SA(R)\\,N(R)$ —— "
+    ax.text(0.30, 0.02, "SAH：$C=C_t+C_i[S_LN_L+S_RN_R]/S_P$ —— "
                         "面积比 ≈ 命中概率，$N$ 是子树的三角形数", fontsize=8.6, color=INK)
     save(fig, "d16-sah.png")
 

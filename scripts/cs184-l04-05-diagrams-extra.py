@@ -133,33 +133,30 @@ def d20():
 # ------------------------------------------------- d21 深度非线性
 def d21():
     fig, ax = canvas(9.8, 3.4, (0, 9.8), (0, 3.4), eq=False)
-    ax.text(0.30, 3.14, "透视投影后的深度是非线性的：80% 精度花在最近的那一小段", fontsize=9.6,
+    ax.text(0.30, 3.14, "常规透视 + 定点深度：约 90% 的取值范围落在近处 0.9 米", fontsize=9.6,
             color=INK, fontweight="bold")
     n, f = 0.1, 1000.0
     z = np.logspace(-1, 3, 400)  # 0.1 .. 1000
     ndc = (f + n) / (f - n) - 2 * f * n / ((f - n) * z)
     xs = 0.70 + 3.30 * (np.log10(z) + 1) / 4.0
-    ax.plot(xs, 0.80 + 1.90 * ndc, color=TEAL, lw=2.0)
-    ax.text(2.40, 2.90, "$z_{ndc}$ vs $z_{eye}$（对数横轴）", fontsize=7.8, color=MUTED,
+    ax.plot(xs, 0.80 + 1.90 * (ndc + 1) / 2, color=TEAL, lw=2.0)
+    ax.text(2.40, 2.90, "$z_{ndc}$ vs $s=-z_{eye}$（对数横轴）", fontsize=7.8, color=MUTED,
             ha="center")
     # 标几个点
     for zz, lab in [(0.1, "0.1"), (1.0, "1"), (10.0, "10"), (100.0, "100"), (1000.0, "1000")]:
         v = (f + n) / (f - n) - 2 * f * n / ((f - n) * zz)
         x = 0.70 + 3.30 * (np.log10(zz) + 1) / 4.0
-        ax.plot(x, 0.80 + 1.90 * v, "o", ms=4, color=ORANGE, zorder=8)
+        ax.plot(x, 0.80 + 1.90 * (v + 1) / 2, "o", ms=4, color=ORANGE, zorder=8)
         ax.text(x, 0.58, lab, fontsize=6.8, color=MUTED, ha="center")
 
     ax.text(4.55, 2.55, "读法：", fontsize=8.2, color=INK)
-    ax.text(4.55, 2.25, "$z=0.1$（近裁剪面）→ $z_{ndc}=-1$", fontsize=7.4, color=MUTED)
-    ax.text(4.55, 1.98, "$z=1$ → 已经到 $z_{ndc}\\approx0.998$", fontsize=7.4, color=ORANGE)
-    ax.text(4.55, 1.70, "$z=1000$（远裁剪面）→ $z_{ndc}=+1$", fontsize=7.4, color=MUTED)
-    ax.text(4.55, 1.30, "$z\\in[0.1,1]$ 这一段（1 米）", fontsize=7.4, color=RED)
-    ax.text(4.55, 1.05, "占掉了约 80% 的深度精度", fontsize=7.4, color=RED)
-    box(ax, 6.65, 1.35, 2.85, 1.05, "后果：远处 z-fighting\n（两表面精度不够，闪烁）", fs=7.6,
-        fc="#fff7ed", ec=ORANGE, tc="#7c3a00")
-    ax.text(6.65, 0.95, "缓解：", fontsize=7.6, color=TEAL)
-    ax.text(6.85, 0.70, "① 把近裁剪面推远（`n` 从 0.1 → 0.5）", fontsize=6.8, color=MUTED)
-    ax.text(6.85, 0.46, "② 用反向 Z（reversed-Z）+ 浮点深度", fontsize=6.8, color=MUTED)
+    ax.text(4.55, 2.25, "$s=0.1$（近裁剪面）→ $z_{ndc}=-1$", fontsize=7.4, color=MUTED)
+    ax.text(4.55, 1.98, "$s=1$ → 已经到 $z_{ndc}\\approx0.80018$", fontsize=7.4, color=ORANGE)
+    ax.text(4.55, 1.70, "$s=1000$（远裁剪面）→ $z_{ndc}=+1$", fontsize=7.4, color=MUTED)
+    ax.text(4.55, 1.35, "$s\\in[0.1,1]$：约占定点深度取值范围的 90%", fontsize=7.4, color=RED)
+    ax.text(4.55, 1.05, "远处距离分辨率低 → 邻近表面易发生 z-fighting", fontsize=7.4, color=ORANGE)
+    ax.text(4.55, 0.70, "缓解①：把近裁剪面推远（n 从 0.1 → 0.5）", fontsize=7.2, color=TEAL)
+    ax.text(4.55, 0.42, "缓解②：反向 Z（reversed-Z）配合浮点深度", fontsize=7.2, color=TEAL)
     ax.text(0.30, 0.08, "注意：横轴是 log 尺度 —— 如果用线性横轴，曲线会在最左边几乎垂直，"
                         "右侧完全贴平", fontsize=7.4, color=MUTED)
     save(fig, "d21-depth-nonlinear.png")

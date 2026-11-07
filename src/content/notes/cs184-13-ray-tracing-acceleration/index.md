@@ -1,7 +1,7 @@
 ---
 title: "CS184 第 13 讲：光线追踪与加速结构"
 date: 2026-11-05
-summary: "光栅化是「三角形投影到屏幕」，光线追踪是「从眼睛发射光线问它撞到谁」——同一个可见性问题的两个方向。本讲从 Appel 1968 的光线投射讲到 Whitted 的递归模型，把四类求交（平面、三角形、球、隐式曲面）的方程逐个推一遍，再解决真正的难点：1070 万个三角形时怎么不逐一遍历。答案是包围盒 + 网格 + KD 树 + BVH，而选切法的依据是 SAH。配 22 张原创图解、13 个手算、193 页全索引。"
+summary: "光栅化是「三角形投影到屏幕」，光线追踪是「从眼睛发射光线问它撞到谁」——同一个可见性问题的两个方向。本讲从 Appel 1968 的光线投射讲到 Whitted 的递归模型，把四类求交（平面、三角形、球、隐式曲面）的方程逐个推一遍，再解决真正的难点：1070 万个三角形时怎么不逐一遍历。答案是包围盒 + 网格 + KD 树 + BVH，而选切法的依据是 SAH。本轮核对易错推导，新增三组可运行实验；共 25 张原创图解、16 个手算、33 道自测。"
 tags: ["计算机图形学", "光线追踪", "BVH", "加速结构", "CS184"]
 series: "cs184"
 order: 13
@@ -31,7 +31,7 @@ shortTitle: "L13 · 光线追踪与加速"
 
 *眼睛 → 像素 → 光线 → 最近的交点 → 在该点着色 → 向光源发阴影光线。**这一页就是整个光线追踪算法的骨架**，后面全是"怎么让求交更快"。*
 
-*193 页 · 103 张关键页截图 · 22 张原创图解 · 13 个手算 · 30 道自测*
+*193 页 · 103 张关键页截图 · 25 张原创图解 · 16 个手算 · 33 道自测*
 
 > **💡 这一讲与前面所有讲的关系**
 >
@@ -388,6 +388,7 @@ $$
 $$
 \cos\theta_i=0.7071,\qquad \cos^2\theta_i=0.5
 $$
+
 $$
 k=1-0.6667^2\times(1-0.5)=1-0.4444\times0.5=0.7778>0
 $$
@@ -624,13 +625,13 @@ $$
 
 $$
 \begin{bmatrix}-d & B-A & C-A\end{bmatrix}
-\begin{bmatrix}t\\u\\v\end{bmatrix}=A-o
+\begin{bmatrix}t\\u\\v\end{bmatrix}=o-A
 $$
 
 **用 Cramer 法则解**，三个分量都是三重积：
 
 $$
-t=\frac{S\cdot(E_1\times E_2)}{d\cdot(E_1\times E_2)},\qquad
+t=-\frac{S\cdot(E_1\times E_2)}{d\cdot(E_1\times E_2)},\qquad
 u=\frac{d\cdot(S\times E_2)}{d\cdot(E_1\times E_2)},\qquad
 v=\frac{d\cdot(E_1\times S)}{d\cdot(E_1\times E_2)}
 $$
@@ -662,26 +663,13 @@ $$
 
 `α ≥ 0`、`β ≥ 0`、`α+β = 0.4 ≤ 1` ⇒ **在三角形内** ✓
 
-> **⚠️ Möller-Trumbore 的 `u/v` 到底对应谁 —— 一个真实的踩坑**
+> **⚠️ 符号和顶点对应要分别检查**
 >
-> 我第一次推这段时把 `u` 写成了 `S×E₂` 那一项，结果算出 `u = −0.2`（负数 ⇒ 判为未命中），但用重心坐标验算发现点**明明在三角形内**。
+> S=o−A 时，线性系统右端是 S，平面法给 t=−(S·N)/(d·N)。负号来自 A−o，不是“u/v 对应不同教材”的问题。
 >
-> 原因：**不同教材里 `u/v` 与 `B/C` 的对应关系是反的**。原论文与 Wikipedia 的写法是：
+> 一套一致的实现为 h=d×E2，a=E1·h，q=S×E1，u=(S·h)/a，v=(d·q)/a，t=(E2·q)/a。
 >
-> ```
-> h = cross(d, E2);
-> a = dot(E1, h);
-> f = 1/a;
-> s = o - A;
-> u = f * dot(s, h);      // 注意：u 对应 B
-> q = cross(s, E1);
-> v = f * dot(d, q);      // v 对应 C
-> t = f * dot(E2, q);
-> ```
->
-> **判据是 `u >= 0 && v >= 0 && u + v <= 1`**，一旦把 `u` 和 `v` 弄反，判据边界就变了（`u+v` 对称所以有时看不出来，但插值颜色时会错位）。
->
-> **可靠的兜底**：写完这段代码，**用一个已知答案的三角形跑一遍**，并打印重心坐标与手算对比。这个手算就是为此准备的。
+> u、v 单纯交换不改变 u≥0、v≥0、u+v≤1 的对称包含判据，但会错配 B、C 的属性。应采用 u≠v 的测试点，并分别回代光线和重心表示；深入练习给出这样的检查。
 
 #### P55–P59　Ray Intersection With Sphere
 ![P58 · 两个根对应进入与穿出](images/p058.png)
@@ -876,7 +864,7 @@ $$
 **判据**：
 
 $$
-t_{\min}<t_{\max}\quad\text{且}\quad t_{\max}>0
+t_{enter}\le t_{exit},\quad[t_{enter},t_{exit}]=[t_{\min},t_{\max}]\cap[t_{ray,min},t_{ray,max}]
 $$
 
 **🔧 手算 8：算一次 AABB 求交**
@@ -902,7 +890,7 @@ $$
 
 `d_y = 0`，光线永远停在 `y = 0`，而盒子要求 `y ≥ 1` ⇒ **`y` 方向无解（空区间）** ⇒ 未命中。
 
-**实现上**：`d` 分量为 0 时会除零，标准做法是用 `±∞` 代替，让 `max/min` 自动得到正确结果。
+**实现上**：d 分量为 0 时，先判断原点是否位于该 slab 内；在外直接拒绝，在内则该轴不限制区间。倒数优化还需正确处理 signed zero、0×∞ 的 NaN 和保守舍入，不能认为 max/min 自动兜底。
 
 #### P79　Optimize Ray-Plane Intersection For Axis-Aligned Planes?
 ![P77 · 区间取交集](images/p077.png)
@@ -1442,12 +1430,12 @@ $$
 ![P186 · SAH 的评估](images/p186.png)
 
 $$
-\text{Cost}=C_{trav}+SA(L)\cdot N(L)+SA(R)\cdot N(R)
+\text{Cost}_{split}=C_{trav}+C_{isect}\left[\frac{SA(L)}{SA(P)}N(L)+\frac{SA(R)}{SA(P)}N(R)\right]
 $$
 
-**注意**：`SA(父)` 被约掉了（对所有候选切法都一样），所以实际比较时只需算后两项。
+**注意**：只在同一父节点比较不同切法的排序时，可省略公共 Ct、Ci 和父面积，比较 SA(L)N(L)+SA(R)N(R)。与叶子比较时必须恢复完整公式，保持单位一致。
 
-**`C_trav` 的取值（P188）**：
+**课件 P188 给出的历史代价比例示例**（不代表当前版本默认值或本机实测）：
 
 | 实现 | `C_trav : C_isect` |
 |---|---|
@@ -1477,23 +1465,18 @@ $$
 $$
 \text{Cost}(A)=1200\times50+1200\times50=120000
 $$
+
 $$
 \text{Cost}(B)=700\times40+1100\times60=94000
 $$
 
-**B 更优**（快 22%）。
+**B 的未归一化模型分数低约 21.67%**；这是模型比较，不是实测加速比。
 
 **现在把 `C_trav` 加进去**。取 PBRT 的 `C_trav = 1`、`C_isect = 8`，则两者都要加同一个 `C_trav`，**不影响比较** ✓
 
-**但 `C_trav` 会影响"要不要继续切"的判断**：如果当前节点是叶子，代价是 `8 × 100 = 800`；切开后的代价是 `1 + 94`（把上面的 94000 归一化到 `C_isect = 8` 的尺度）……**所以只有当切开后代价低于 `800` 时才值得切**。
+**与不切分比较时必须知道父表面积。** 补充设 SA(P)=2000、Ct=1、Ci=8，则 A 的代价为 481，B 为 377，叶子为 800。二者都值得切，B 的模型代价较小。
 
-> **📌 SAH 不追求"物体数均衡"**
->
-> B 的物体数分配是 `40 : 60`，很不均衡，但它**赢了**。
->
-> 直觉：左边盒子小（`700`），那片区域本来就紧，光线打中的概率低，多放物体没关系；右边盒子大（`1100`），光线容易打中，所以要少放物体。
->
-> **"按被访问的概率分配工作量"** —— 这是 SAH 的全部智慧。
+SAH 并不要求数量均衡，而是最小化“命中概率×子节点工作量”的总和。这个例子不能单独推出“较小的盒子一定要放更多物体”；需对实际候选的几何和数量一起计算。深入练习还检查两个孩子命中概率之和大于 1 的情况。
 
 #### P189　候选切分平面
 
@@ -1759,6 +1742,299 @@ for each axis (x, y, z):
 
 ---
 
+扩展核对：[PBRT 第四版 BVH 与 SAH](https://pbr-book.org/4ed/Primitives_and_Intersection_Acceleration/Bounding_Volume_Hierarchies)。本文数值代价为教学模型，候选排序与停止条件分开计算。
+
+<!-- foundations-v2:start -->
+
+## 深入 1. Möller–Trumbore 的符号怎样用回代锁定
+
+本节为补充推导与可复现教学实验。回查本讲 PDF：p49、p50、p51、p52、p54；下列数值由明确的模型计算，不是课件测量。
+
+求交代码最危险的情况是推导、记号和程序各自来自不同约定。先从同一条向量等式整理线性系统，再选 u≠v 的测试点，便能同时查出右端项符号、t 符号和顶点属性对应错误。
+
+### 约定与输入
+
+| 量或条件 | 本节约定 |
+| --- | --- |
+| 三角形 | A=(0,0,0)、B=(1,0,0)、C=(0,1,0)。 |
+| 光线 | o=(0.2,0.3,−2)，d=(0,0,2)，故方向不是单位向量。 |
+| 记号 | E1=B−A、E2=C−A、S=o−A；u 对应 B、v 对应 C。 |
+
+### 推导：把省略的步骤补出来
+
+**第 1 步。** 从光线点等于三角形重心表示出发，将未知项整理到左边。
+
+$$
+o+td=A+uE_1+vE_2\Rightarrow[-d\ E_1\ E_2](t,u,v)^T=S
+$$
+
+**第 2 步。** 将法向 N=E1×E2 点乘原式，u、v 项消失。
+
+$$
+t=-\frac{S\cdot N}{d\cdot N}
+$$
+
+**第 3 步。** 利用标量三重积，可选择一套与常见实现一致的中间变量。
+
+$$
+h=d\times E_2,\ a=E_1\cdot h,\ q=S\times E_1;\quad u=\frac{S\cdot h}{a},\ v=\frac{d\cdot q}{a},\ t=\frac{E_2\cdot q}{a}
+$$
+
+![Möller–Trumbore 的符号怎样用回代锁定](diagrams/d23-v2.png)
+
+*不等的 u=0.2 与 v=0.3 标出交点相对两个顶点的权重；光线方向长度为 2，因此参数 t=1 对应距离 2。*
+
+### 🔧 手算 14：Möller–Trumbore 的符号怎样用回代锁定
+
+1. h=(−2,0,0)，a=−2；负号不表示没命中，只与方向和绕序有关。
+
+2. S·h=−0.4，所以 u=0.2。
+
+3. q=(0,−2,−0.3)，d·q=−0.6，所以 v=0.3。
+
+4. E2·q=−2，t=1。回代 o+td=(0.2,0.3,0)。
+
+5. 重心回代 (1−u−v)A+uB+vC 也得相同点；沿光线的物理距离是 |td|=2，不是 t=1。
+
+### 独立回查与适用边界
+
+必须选 u≠v 的案例才能发现属性槽交换；只用 u=v=0.2 的对称点无法区分。
+
+单纯交换 u、v 不改变对称包含判据，但会错配属性；叉积顺序或分母符号不一致才可能翻转正负。近乎平行、退化三角形与 watertight 求交需要进一步处理。
+
+### 运行验证
+
+下列 Python 程序只依赖标准库。它验证本节的小模型及反例，不代表完整渲染器或网格系统已经通过测试。
+
+```python
+from math import isclose,sqrt
+def cross(a,b):return (a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0])
+def dot(a,b):return sum(x*y for x,y in zip(a,b))
+E1=(1,0,0);E2=(0,1,0);S=(.2,.3,-2);d=(0,0,2)
+h=cross(d,E2);a=dot(E1,h);q=cross(S,E1)
+u=dot(S,h)/a;v=dot(d,q)/a;t=dot(E2,q)/a
+assert all(isclose(x,y) for x,y in zip((t,u,v),(1,.2,.3)))
+ray=tuple(o+t*di for o,di in zip(S,d));bary=(u,v,0)
+assert all(isclose(x,y) for x,y in zip(ray,bary))
+assert -dot(S,cross(E1,E2))/dot(d,cross(E1,E2))==t
+assert u+v<=1 and u>=0 and v>=0
+print('t,u,v:',t,u,v,'hit:',ray,'distance:',t*sqrt(dot(d,d)))
+```
+
+实际运行输出：
+
+```text
+t,u,v: 1.0 0.2 0.3 hit: (0.2, 0.3, 0.0) distance: 2.0
+```
+
+### 实现坑：症状与定位
+
+症状：已知内部点被报为未命中，或方向长度变化后距离错误。先回代向量方程再检查 epsilon；不要把符号错误解释成“不同教材把 u/v 换了”。
+
+### 自测 31. 把 d 改为 (0,0,1)，交点不变时 t 应如何变化？
+
+<details>
+<summary>展开推理与答案</summary>
+
+t 变为 2，u、v 不变。t 是参数，只有方向单位化时才等于沿线距离；所有 t_min/t_max 必须采用同一参数约定。
+
+</details>
+
+## 深入 2. AABB 相切、平行与有限线段要放进同一个区间
+
+本节为补充推导与可复现教学实验。回查本讲 PDF：p71、p75、p76、p77、p78、p93；下列数值由明确的模型计算，不是课件测量。
+
+把三个 slab 区间相交还不够：必须再与射线允许的参数区间相交。对加速结构，擦边命中宁可保守保留；d=0 时如果原点恰好在面上，盲目乘倒数可能产生 0×∞ 的 NaN。
+
+### 约定与输入
+
+| 量或条件 | 本节约定 |
+| --- | --- |
+| 盒子 | 每轴范围 [0,1]，视作闭集。 |
+| 射线 | 允许 t∈[0,tmax]，教学实现显式处理方向分量为零。 |
+| 反例 | o=(−1,0,0.5)、d=(1,1,0)，仅在 t=1 触及角边。 |
+
+### 推导：把省略的步骤补出来
+
+**第 1 步。** 非零方向按两个端面求参数并排序，再收紧当前区间。
+
+$$
+t_{lo}\leftarrow\max(t_{lo},\min(t_0,t_1)),\quad t_{hi}\leftarrow\min(t_{hi},\max(t_0,t_1))
+$$
+
+**第 2 步。** 平行轴若原点在 slab 外则不可能命中；在内则这一轴不限制参数。
+
+$$
+d_i=0:\quad o_i\notin[b_i^{min},b_i^{max}]\Rightarrow\varnothing
+$$
+
+**第 3 步。** 闭包围盒保守测试允许端点相等。
+
+$$
+\operatorname{hit}\Longleftrightarrow t_{lo}\le t_{hi}
+$$
+
+![AABB 相切、平行与有限线段要放进同一个区间](diagrams/d24-v2.png)
+
+*x 与 y 的 slab 区间只在 t=1 相交，第三行将交集画成一个点；z 方向平行且原点在 slab 内，因而不再缩小区间。*
+
+### 🔧 手算 15：AABB 相切、平行与有限线段要放进同一个区间
+
+1. 反例 x 轴给 [1,2]，y 轴给 [0,1]，z 轴平行且在内。
+
+2. 交集只有 {1}，点为 (0,1,0.5)，属于盒子。
+
+3. 若用严格小于会拒绝这一接触，对包围盒可能造成错误漏测。
+
+4. o=(−1,0.5,0.5)、d=(1,0,0) 给区间 [1,2]；若 tmax=0.5，有限线段不能到达盒子。
+
+5. o=(−1,2,0.5)、d=(1,0,0) 在 y slab 外且平行，应立即拒绝，不做除零。
+
+### 独立回查与适用边界
+
+对返回区间端点回代坐标，分别检查每一轴在盒内；点接触与有限 shadow ray 应单独列用例。
+
+此显式分支实现用于教学，不声称已覆盖所有浮点舍入情形。高性能倒数实现必须定义 signed zero、NaN 与保守舍入行为；包围盒和表面图元的边界策略也不必相同。
+
+### 运行验证
+
+下列 Python 程序只依赖标准库。它验证本节的小模型及反例，不代表完整渲染器或网格系统已经通过测试。
+
+```python
+def intersect(o,d,tmax=float('inf')):
+    lo,hi=0.,tmax
+    for origin,direction in zip(o,d):
+        if direction==0:
+            if not 0<=origin<=1:return None
+        else:
+            a,b=sorted(((0-origin)/direction,(1-origin)/direction))
+            lo=max(lo,a);hi=min(hi,b)
+            if lo>hi:return None
+    return lo,hi
+assert intersect((-1,0,.5),(1,1,0))==(1.,1.)
+assert intersect((-1,.5,.5),(1,0,0))==(1.,2.)
+assert intersect((-1,.5,.5),(1,0,0),.5) is None
+assert intersect((-1,2,.5),(1,0,0)) is None
+assert intersect((0,.5,.5),(0,1,0))==(0.,.5)
+print('touch:',intersect((-1,0,.5),(1,1,0)),'segment misses:',intersect((-1,.5,.5),(1,0,0),.5))
+```
+
+实际运行输出：
+
+```text
+touch: (1.0, 1.0) segment misses: None
+```
+
+### 实现坑：症状与定位
+
+症状：相机恰在盒面或光线平行时模型偶尔消失。先用分支版本建立参照，再检查倒数优化是否制造 NaN 或把相切区间丢掉。
+
+### 自测 32. 只判断 t_exit>0，能判断一条到光源为止的阴影线段是否被盒子挡住吗？
+
+<details>
+<summary>展开推理与答案</summary>
+
+不能，还要与 [t_min,t_light] 相交。盒子位于光源之后时，半无限射线会命中，但不应遮挡该光源。
+
+</details>
+
+## 深入 3. SAH 怎样比较切分与不切分，而不丢单位
+
+本节为补充推导与可复现教学实验。回查本讲 PDF：p179、p180、p181、p182、p183、p184、p188；下列数值由明确的模型计算，不是课件测量。
+
+只比较同一父节点内不同切法时，可以略去公共常数；一旦比较叶子与内部节点，就必须恢复父表面积和求交代价。这里重算原文的两个候选，并解释孩子命中概率之和为什么不一定是 1。
+
+### 约定与输入
+
+| 量或条件 | 本节约定 |
+| --- | --- |
+| 父节点 | 表面积 SP=2000，N=100。 |
+| 候选 | A: SL=SR=1200, NL=NR=50；B: SL=700,NL=40,SR=1100,NR=60。 |
+| 代价 | Ct=1，Ci=8，为教学假设，不代表当前 PBRT 默认参数或实测时间。 |
+
+### 推导：把省略的步骤补出来
+
+**第 1 步。** 孩子期望工作量按条件命中概率加权；两个孩子都可能访问。
+
+$$
+C_{split}=C_t+C_i\left(\frac{S_L}{S_P}N_L+\frac{S_R}{S_P}N_R\right)
+$$
+
+**第 2 步。** 同一个父节点的候选排序可只比面积加权数量，但它不是与叶子同单位的代价。
+
+$$
+Q=S_LN_L+S_RN_R,\qquad C_{leaf}=C_iN
+$$
+
+**第 3 步。** 代入归一化后的代价，才能判断是否值得切。
+
+$$
+C_A=1+8\frac{120000}{2000}=481,\quad C_B=1+8\frac{94000}{2000}=377,\quad C_{leaf}=800
+$$
+
+![SAH 怎样比较切分与不切分，而不丢单位](diagrams/d25-v2.png)
+
+*三根柱分别为不切分、候选 A、候选 B 的同单位代价；右侧列出固定的遍历代价与图元测试代价。候选 B 最低，但这里只比较模型期望工作量，不把柱高比当成实测加速比。*
+
+### 🔧 手算 16：SAH 怎样比较切分与不切分，而不丢单位
+
+1. A 的 Q=1200×50+1200×50=120000。
+
+2. B 的 Q=700×40+1100×60=94000。
+
+3. 恢复父面积和 Ci 后得到 481 与 377，二者都低于叶子 800。
+
+4. B 的模型代价较 A 低 (481−377)/481≈21.62%，这是估计量，不是测得加速比。
+
+5. A 的两个概率 0.6+0.6=1.2 不矛盾；沿一条光线可能先后穿过两个孩子，事件并非互斥。
+
+### 独立回查与适用边界
+
+增加一个完全重叠候选：两孩子表面积都等于父面积，代价为 801，比不切分更差，能检验停止条件。
+
+表面积比基于理想化射线分布。实际主光线、阴影光线、缓存和遍历顺序不同，最终性能必须在真实负载上测。
+
+### 运行验证
+
+下列 Python 程序只依赖标准库。它验证本节的小模型及反例，不代表完整渲染器或网格系统已经通过测试。
+
+```python
+from math import isclose
+SP=2000;Ct=1;Ci=8;N=100
+def cost(SL,NL,SR,NR):return Ct+Ci*(SL*NL+SR*NR)/SP
+A=cost(1200,50,1200,50);B=cost(700,40,1100,60);leaf=Ci*N
+assert (A,B,leaf)==(481,377,800)
+assert B<A<leaf
+assert 1200/SP+1200/SP>1
+assert isclose((A-B)/A,104/481)
+bad=cost(2000,50,2000,50)
+assert bad==801 and bad>leaf
+print('A/B/leaf:',A,B,leaf,'full overlap split:',bad)
+```
+
+实际运行输出：
+
+```text
+A/B/leaf: 481.0 377.0 800 full overlap split: 801.0
+```
+
+### 实现坑：症状与定位
+
+症状：树无限倾向切分或极端过深。检查是否拿未归一化的 Q 与 CiN 比较，或丢了 Ct；不要把候选排序中的省略公式直接搬到停止条件。
+
+### 自测 33. 如果把所有空间坐标统一放大 100 倍，SAH 模型应改变吗？
+
+<details>
+<summary>展开推理与答案</summary>
+
+表面积都放大 10000 倍，但孩子/父面积比不变，因此在 Ct、Ci 与物体数不变时模型代价不变。未归一化公式会暴露单位错误。
+
+</details>
+
+[下载本轮 3 张可编辑图解（PPTX 与操作 JSON）](/notes/cs184/figures/foundations-13-editable.zip)
+
+<!-- foundations-v2:end -->
+
 ## 附录 A · 公式速查
 
 | 对象 | 公式 | 备注 |
@@ -1987,15 +2263,3 @@ for each axis (x, y, z):
 3. 加上直接光照，确认明暗方向正确（`n·l` 的符号）
 4. 加上阴影，**先用一个 ε 很大的版本**看到明显阴影，再逐步调小
 5. 最后加 BVH，用同一个场景对比"有/无加速"的耗时和结果（**结果必须完全一致**）
-
-## 附录 F · 待生成图（提示词占位）
-
-> **〔P1〕`diagrams/d23-bvh-visualization.png`**
-> 用途：第 9 节「BVH 结构」
-> 提示词：*A 3D scene of a few hundred scattered spheres and boxes, with the BVH hierarchy drawn as nested semi-transparent colored boxes at three levels of the tree (root = gray wireframe, level 1 = blue/orange, level 2 = many small green boxes). Camera slightly above the scene, no text, 1600×900.*
-> 建议：与 `d15-bvh.png` 相邻，展示"包围盒会重叠"这一点。
-
-> **〔P2〕`diagrams/d24-whitted-1979.png`**
-> 用途：第 3 节「Whitted 1980」
-> 提示词：*Modern re-render of the classic Whitted 1980 scene: a mirror sphere and a glass sphere on a red-and-white checkered floor plane, with visible reflections of each other and refracted light through the glass sphere. Black background, no text, 1600×900.*
-> 建议：标注"1979 年要 74 分钟，2012 年 GPU 只要 1/30 秒"。
