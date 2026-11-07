@@ -320,6 +320,8 @@ const toc = headings.filter((h) => h.depth === 2 || h.depth === 3);
   .prose :global(pre code) {
     padding: 0; background: none; border: 0; font-size: inherit;
   }
+  /* Long filenames and source hashes should wrap on narrow screens. */
+  .prose :global(:not(pre) > code) { overflow-wrap: anywhere; }
   /* Shiki 双主题：跟随页面深浅色切换 */
   :global(:root[data-theme='dark']) .prose :global(.astro-code),
   :global(:root[data-theme='dark']) .prose :global(.astro-code span) {

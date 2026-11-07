@@ -1,0 +1,1892 @@
+---
+title: "CS184 春季 L21–23：动画、蒙皮、动作捕捉与逆运动学"
+date: 2026-11-07
+updated: 2026-11-07
+summary: "表达运动意图 → 随时间变化的参数 → 骨架层级 → 表面变形 → 数据驱动控制 → 从末端目标反求关节。以原课件为依据，配 20 张可编辑图解、12 个数值例子、26 道带答案自测与 PDF 全页索引。"
+tags: ["计算机图形学", "CS184", "课程笔记"]
+series: "cs184"
+order: 21
+shortTitle: "春季 L21–23"
+---
+
+> UC Berkeley · CS184/284A · Spring 2026 · 文件标识 `SP26-L21-23-animation.pdf`。
+> 本文的 **pN 一律是 PDF 的第 N 页**，不是封面讲次或页脚旧编号。文件名与封面可能不同，以下均按文件和页码回查。
+
+## 0. 先抓住这一条推理链
+
+```text
+表达运动意图
+    ↓
+随时间变化的参数
+    ↓
+骨架层级
+    ↓
+表面变形
+    ↓
+数据驱动控制
+    ↓
+从末端目标反求关节
+```
+
+这篇笔记的阅读顺序是：先理解输入和输出，再确认公式的条件，最后用小数值检查。
+正文将课件概念、补充推导和教学例子分开；示意图中的理想几何与数字不冒充真实实验测量。
+
+| 内容 | 本文提供什么 |
+|---|---|
+| 来源 | Spring 2026，PDF 共 202 页；正文选择 87 张关键页 |
+| 图解 | 12 张概念关系图 + 8 张几何或数值图，均有原生可编辑 PPTX |
+| 手算 | 12 个带输入、结果和回代检查的教学例子 |
+| 复习 | 26 道自测及答案，末尾保留全页索引 |
+| 运行证据 | 数值核对脚本覆盖解析小模型，不代表完整渲染器或模拟器已经实现 |
+
+[下载本篇 20 张可编辑图解（PPTX 与操作 JSON）](/notes/cs184/figures/21-editable.zip)
+
+### 课件与推导的使用边界
+
+课件截图用于对照原始定义与几何；正文用中文解释关系，并提供必要的修正与推导。
+后续专题按本地文件的学期和编号组织，不假定它们与秋季一一对应。
+若只做第一遍学习，先读每节前两段和数值例子，再展开原页核对。
+
+### 与前面哪一讲接上
+
+先回顾[相关前置讲义](/notes/cs184-04-05-transforms/)。本篇在已有表示与数学工具上增加新变量或新约束，而不是另起一套互不相关的公式。
+
+## 1. 动画为什么不只是每帧换位置？
+
+动画既要让物体移动，也要表达重量、意图与节奏。挤压拉伸、预备动作、缓入缓出和跟随动作，改变的是观众对因果与材质的理解。
+
+这些原则与物理模拟互补：艺术控制可以主动夸张，物理模拟则让大量次级运动遵守统一规则。不能用“偏离真实轨迹”直接否定有意设计的动画。
+
+![概念关系：动画为什么不只是每帧换位置？](diagrams/d01-relation.png)
+
+*读图：动作意图 → 时间与形变设计 → 观众理解。箭头表示本节的推理或处理顺序，具体条件见正文。*
+
+### 先读符号与条件
+
+| 符号 / 条件 | 含义 |
+| --- | --- |
+| x | 位置 |
+| t | 时间 |
+| 速度 | 节奏的基础而非完整动画质量指标 |
+
+### 核心关系与推导入口
+
+以下关系使用上述条件；标为教学简化或补充的内容是为理解而推导，不是逐字转录课件。
+
+$$
+v\approx\frac{\Delta x}{\Delta t}
+$$
+
+### 🔧 手算 1：把关系落到数字上
+
+相同位移 2 米，1 秒完成平均速度 2 m/s，0.5 秒完成为 4 m/s。两者终点相同但节奏不同；位移分别为速度乘时间。
+
+| 检查步骤 | 操作 |
+| --- | --- |
+| 输入 | 先从例子中抄下给定量及单位，不引入未给定的数值。 |
+| 计算 | 按本节关系求中间量，再得到结果；不要在第一步就做显示裁剪或整数舍入。 |
+| 回查 | 两者终点相同但节奏不同；位移分别为速度乘时间。 |
+| 适用边界 | 只检查关键帧位置会忽略速度突变；先画位置和速度随时间的关系。 |
+
+### ⚠️ 易错点：先识别症状与假设
+
+只检查关键帧位置会忽略速度突变；先画位置和速度随时间的关系。
+
+### 停下来解释一次
+
+**问题：为什么预备动作可能向目标相反方向运动？**
+
+<details>
+<summary>展开参考回答</summary>
+
+它让观众预期接下来的动作，也可表现蓄力，并不违反动画表达目标。
+
+</details>
+
+<details>
+<summary>展开原课件关键页，对照术语与图形</summary>
+
+#### Animation
+
+*PDF p12 · 对应本节：动画为什么不只是每帧换位置？*
+
+![PDF p12：Animation](images/p012.png)
+
+#### Animation Principles
+
+*PDF p34 · 对应本节：动画为什么不只是每帧换位置？*
+
+![PDF p34：Animation Principles](images/p034.png)
+
+#### 12 Animation Principles
+
+*PDF p35 · 对应本节：动画为什么不只是每帧换位置？*
+
+![PDF p35：12 Animation Principles](images/p035.png)
+
+#### Squash and Stretch
+
+*PDF p38 · 对应本节：动画为什么不只是每帧换位置？*
+
+![PDF p38：Squash and Stretch](images/p038.png)
+
+#### Anticipation
+
+*PDF p39 · 对应本节：动画为什么不只是每帧换位置？*
+
+![PDF p39：Anticipation](images/p039.png)
+
+#### Staging
+
+*PDF p40 · 对应本节：动画为什么不只是每帧换位置？*
+
+![PDF p40：Staging](images/p040.png)
+
+#### Follow Through
+
+*PDF p41 · 对应本节：动画为什么不只是每帧换位置？*
+
+![PDF p41：Follow Through](images/p041.png)
+
+#### Ease-In and Ease-Out
+
+*PDF p42 · 对应本节：动画为什么不只是每帧换位置？*
+
+![PDF p42：Ease-In and Ease-Out](images/p042.png)
+
+#### Timing
+
+*PDF p45 · 对应本节：动画为什么不只是每帧换位置？*
+
+![PDF p45：Timing](images/p045.png)
+
+</details>
+
+## 2. 关键帧之间为何需要插值？
+
+把每帧视为参数向量 q(t)，关键帧只约束少数时刻。线性插值易实现，但相邻段速度会跳变；样条通过切线与连续性约束改善运动。
+
+插值必须理解参数语义：位置可线性插值，旋转不能简单逐元素混矩阵，接触脚的位置也不能随意穿地。曲线课的连续性因此变成运动的连续性。
+
+![概念关系：关键帧之间为何需要插值？](diagrams/d02-relation.png)
+
+*读图：稀疏关键帧 → 选择时间插值 → 完整参数轨迹。箭头表示本节的推理或处理顺序，具体条件见正文。*
+
+### 先读符号与条件
+
+| 符号 / 条件 | 含义 |
+| --- | --- |
+| q | 可线性插值的参数 |
+| t0,t1 | 关键时间 |
+| s | 归一化时间 |
+
+### 核心关系与推导入口
+
+以下关系使用上述条件；标为教学简化或补充的内容是为理解而推导，不是逐字转录课件。
+
+$$
+q(t)=(1-s)q_0+s q_1,\quad s=\frac{t-t_0}{t_1-t_0}
+$$
+
+### 🔧 手算 2：把关系落到数字上
+
+t0=0、t1=2，位置从 1 到 5，t=0.5 时 s=0.25，位置 2。回算 (2-1)/(5-1)=0.25。
+
+| 检查步骤 | 操作 |
+| --- | --- |
+| 输入 | 先从例子中抄下给定量及单位，不引入未给定的数值。 |
+| 计算 | 按本节关系求中间量，再得到结果；不要在第一步就做显示裁剪或整数舍入。 |
+| 回查 | 回算 (2-1)/(5-1)=0.25。 |
+| 适用边界 | 把每段时间都当成 1，会让不等时间间隔的关键帧产生错误速度。 |
+
+![几何或数值解释 3](diagrams/d15-curve.png)
+
+*平滑时间参数改变起止速度，位置终点并不是动画的全部。*
+
+### ⚠️ 易错点：先识别症状与假设
+
+把每段时间都当成 1，会让不等时间间隔的关键帧产生错误速度。
+
+### 停下来解释一次
+
+**问题：位置连续是否保证运动看起来平滑？**
+
+<details>
+<summary>展开参考回答</summary>
+
+不保证。速度或加速度不连续也会造成明显顿挫。
+
+</details>
+
+<details>
+<summary>展开原课件关键页，对照术语与图形</summary>
+
+#### Keyframes
+
+*PDF p58 · 对应本节：关键帧之间为何需要插值？*
+
+![PDF p58：Keyframes](images/p058.png)
+
+#### Keyframe Interpolation
+
+*PDF p59 · 对应本节：关键帧之间为何需要插值？*
+
+![PDF p59：Keyframe Interpolation](images/p059.png)
+
+#### Keyframe Interpolation of Each Parameter
+
+*PDF p60 · 对应本节：关键帧之间为何需要插值？*
+
+![PDF p60：Keyframe Interpolation of Each Parameter](images/p060.png)
+
+#### Keyframe Interpolation
+
+*PDF p61 · 对应本节：关键帧之间为何需要插值？*
+
+![PDF p61：Keyframe Interpolation](images/p061.png)
+
+#### Example: Walk Cycle
+
+*PDF p62 · 对应本节：关键帧之间为何需要插值？*
+
+![PDF p62：Example: Walk Cycle](images/p062.png)
+
+#### Example: Walk Cycle
+
+*PDF p64 · 对应本节：关键帧之间为何需要插值？*
+
+![PDF p64：Example: Walk Cycle](images/p064.png)
+
+#### Interpolation
+
+*PDF p67 · 对应本节：关键帧之间为何需要插值？*
+
+![PDF p67：Interpolation](images/p067.png)
+
+</details>
+
+## 3. 旋转为何不能随便平均？
+
+旋转矩阵位于带约束的集合上，逐元素线性平均一般不再正交。用角度或四元数插值时，还需处理周期、符号与最短路径。
+
+二维可以先用角度直观理解；三维常用四元数球面插值。这里只解释约束与失败案例，完整四元数推导属于扩展，不把它伪装成这些页面逐项给出的公式。
+
+![概念关系：旋转为何不能随便平均？](diagrams/d03-relation.png)
+
+*读图：两个合法旋转 → 直接线性平均 → 可能离开旋转集合。箭头表示本节的推理或处理顺序，具体条件见正文。*
+
+### 先读符号与条件
+
+| 符号 / 条件 | 含义 |
+| --- | --- |
+| R | 合法三维旋转矩阵 |
+| I | 单位矩阵 |
+| 条件 | 不含缩放与反射 |
+
+### 核心关系与推导入口
+
+以下关系使用上述条件；标为教学简化或补充的内容是为理解而推导，不是逐字转录课件。
+
+$$
+R^TR=I,\qquad \det R=1
+$$
+
+### 🔧 手算 3：把关系落到数字上
+
+二维 I 与旋转 180° 的 -I 平均得到零矩阵。作用于 (1,0) 得 (0,0)，长度从 1 变成 0；显然不是旋转。
+
+| 检查步骤 | 操作 |
+| --- | --- |
+| 输入 | 先从例子中抄下给定量及单位，不引入未给定的数值。 |
+| 计算 | 按本节关系求中间量，再得到结果；不要在第一步就做显示裁剪或整数舍入。 |
+| 回查 | 作用于 (1,0) 得 (0,0)，长度从 1 变成 0；显然不是旋转。 |
+| 适用边界 | 平均矩阵会压缩或扭曲形状，不能靠“再调权重”普遍修复。 |
+
+![几何或数值解释 2](diagrams/d14-collapse.png)
+
+*合法旋转的逐元素平均可能不是旋转，LBS 扭曲与这个约束有关。*
+
+### ⚠️ 易错点：先识别症状与假设
+
+平均矩阵会压缩或扭曲形状，不能靠“再调权重”普遍修复。
+
+### 停下来解释一次
+
+**问题：两个单位四元数直接平均后能立即使用吗？**
+
+<details>
+<summary>展开参考回答</summary>
+
+通常至少要处理符号一致性并归一化；若要求恒定角速度，还需合适的球面插值。
+
+</details>
+
+<details>
+<summary>展开原课件关键页，对照术语与图形</summary>
+
+#### Interpolation
+
+*PDF p67 · 对应本节：旋转为何不能随便平均？*
+
+![PDF p67：Interpolation](images/p067.png)
+
+#### Interpolation
+
+*PDF p68 · 对应本节：旋转为何不能随便平均？*
+
+![PDF p68：Interpolation](images/p068.png)
+
+#### Interpolation
+
+*PDF p69 · 对应本节：旋转为何不能随便平均？*
+
+![PDF p69：Interpolation](images/p069.png)
+
+#### Interpolation
+
+*PDF p70 · 对应本节：旋转为何不能随便平均？*
+
+![PDF p70：Interpolation](images/p070.png)
+
+#### Why?
+
+*PDF p109 · 对应本节：旋转为何不能随便平均？*
+
+![PDF p109：Why?](images/p109.png)
+
+</details>
+
+## 4. 正向运动学怎样传递父子关系？
+
+骨架是层级结构，子关节局部变换相对父关节定义。某关节的世界变换是从根到该关节的变换连乘，因此转动肩膀会带动整个手臂。
+
+关节坐标、骨骼绑定坐标和世界坐标必须分清。每个局部角度只在自己的关节轴上有意义，矩阵相乘顺序直接对应真实层级。
+
+![概念关系：正向运动学怎样传递父子关系？](diagrams/d04-relation.png)
+
+*读图：根节点姿态 → 父子矩阵连乘 → 关节世界位置。箭头表示本节的推理或处理顺序，具体条件见正文。*
+
+### 先读符号与条件
+
+| 符号 / 条件 | 含义 |
+| --- | --- |
+| T | 齐次变换 |
+| parent | 父关节 |
+| 约定 | 列向量，右侧先作用 |
+
+### 核心关系与推导入口
+
+以下关系使用上述条件；标为教学简化或补充的内容是为理解而推导，不是逐字转录课件。
+
+$$
+T^{world}_j=T^{world}_{parent(j)}T^{local}_j
+$$
+
+### 🔧 手算 4：把关系落到数字上
+
+二维两段长度均为 1，肩角 0°、肘角 90°，末端为 (1,1)。肘的世界角是 90°；若肩也转 90°，末端为 (-1,1)。
+
+| 检查步骤 | 操作 |
+| --- | --- |
+| 输入 | 先从例子中抄下给定量及单位，不引入未给定的数值。 |
+| 计算 | 按本节关系求中间量，再得到结果；不要在第一步就做显示裁剪或整数舍入。 |
+| 回查 | 肘的世界角是 90°；若肩也转 90°，末端为 (-1,1)。 |
+| 适用边界 | 把所有局部变换都当世界变换，会让子肢体脱离父关节。 |
+
+### ⚠️ 易错点：先识别症状与假设
+
+把所有局部变换都当世界变换，会让子肢体脱离父关节。
+
+### 停下来解释一次
+
+**问题：肘关节角不变，手掌位置还能变化吗？**
+
+<details>
+<summary>展开参考回答</summary>
+
+能。肩膀、躯干等祖先节点变化都会影响手掌世界位置。
+
+</details>
+
+<details>
+<summary>展开原课件关键页，对照术语与图形</summary>
+
+#### Forward Kinematics
+
+*PDF p71 · 对应本节：正向运动学怎样传递父子关系？*
+
+![PDF p71：Forward Kinematics](images/p071.png)
+
+#### Skeleton - Hierarchical Representation
+
+*PDF p72 · 对应本节：正向运动学怎样传递父子关系？*
+
+![PDF p72：Skeleton - Hierarchical Representation](images/p072.png)
+
+#### Skeleton - Hierarchical Representation
+
+*PDF p73 · 对应本节：正向运动学怎样传递父子关系？*
+
+![PDF p73：Skeleton - Hierarchical Representation](images/p073.png)
+
+#### Skeleton - Hierarchical Representation
+
+*PDF p74 · 对应本节：正向运动学怎样传递父子关系？*
+
+![PDF p74：Skeleton - Hierarchical Representation](images/p074.png)
+
+#### Skeleton - Hierarchical Representation
+
+*PDF p75 · 对应本节：正向运动学怎样传递父子关系？*
+
+![PDF p75：Skeleton - Hierarchical Representation](images/p075.png)
+
+</details>
+
+## 5. 动作捕捉提供的是答案还是观测？
+
+动作捕捉记录标记点、图像或其他传感器观测，再估计骨架与运动。数据驱动能快速获得真实细节，但遮挡、身份关联、噪声与角色比例差异仍需要处理。
+
+同一个人的标记点轨迹不等于任意角色可以直接使用的关节轨迹。重定向要保持接触和运动意图，同时满足新角色骨长与关节限制。
+
+![概念关系：动作捕捉提供的是答案还是观测？](diagrams/d05-relation.png)
+
+*读图：传感器观测 → 拟合骨架参数 → 重定向到角色。箭头表示本节的推理或处理顺序，具体条件见正文。*
+
+### 先读符号与条件
+
+| 符号 / 条件 | 含义 |
+| --- | --- |
+| q | 待估姿态 |
+| 观测点 | 传感器结果 |
+| 预测点 | 骨架模型生成 |
+
+### 核心关系与推导入口
+
+以下关系使用上述条件；标为教学简化或补充的内容是为理解而推导，不是逐字转录课件。
+
+$$
+e=\sum_i\|\hat p_i(q)-p_i^{obs}\|^2
+$$
+
+### 🔧 手算 5：把关系落到数字上
+
+两个一维观测为 1、3，预测为 1.2、2.7，平方误差和为 0.04+0.09=0.13。把第二预测改为 3，误差降为 0.04。
+
+| 检查步骤 | 操作 |
+| --- | --- |
+| 输入 | 先从例子中抄下给定量及单位，不引入未给定的数值。 |
+| 计算 | 按本节关系求中间量，再得到结果；不要在第一步就做显示裁剪或整数舍入。 |
+| 回查 | 把第二预测改为 3，误差降为 0.04。 |
+| 适用边界 | 误差小不代表姿态唯一；遮挡与模型自由度可能留下多解。 |
+
+### ⚠️ 易错点：先识别症状与假设
+
+误差小不代表姿态唯一；遮挡与模型自由度可能留下多解。
+
+### 停下来解释一次
+
+**问题：无标记动作捕捉是否不需要模型假设？**
+
+<details>
+<summary>展开参考回答</summary>
+
+仍需要。相机投影、人体先验和遮挡处理都影响可恢复的动作。
+
+</details>
+
+<details>
+<summary>展开原课件关键页，对照术语与图形</summary>
+
+#### Motion Capture
+
+*PDF p76 · 对应本节：动作捕捉提供的是答案还是观测？*
+
+![PDF p76：Motion Capture](images/p076.png)
+
+#### Motion Capture
+
+*PDF p77 · 对应本节：动作捕捉提供的是答案还是观测？*
+
+![PDF p77：Motion Capture](images/p077.png)
+
+#### Motion Capture Equipment
+
+*PDF p78 · 对应本节：动作捕捉提供的是答案还是观测？*
+
+![PDF p78：Motion Capture Equipment](images/p078.png)
+
+#### Optical Motion Capture
+
+*PDF p79 · 对应本节：动作捕捉提供的是答案还是观测？*
+
+![PDF p79：Optical Motion Capture](images/p079.png)
+
+#### Facial Motion Capture
+
+*PDF p83 · 对应本节：动作捕捉提供的是答案还是观测？*
+
+![PDF p83：Facial Motion Capture](images/p083.png)
+
+#### Challenges of Facial Animation
+
+*PDF p85 · 对应本节：动作捕捉提供的是答案还是观测？*
+
+![PDF p85：Challenges of Facial Animation](images/p085.png)
+
+#### Markerless Motion Capture
+
+*PDF p86 · 对应本节：动作捕捉提供的是答案还是观测？*
+
+![PDF p86：Markerless Motion Capture](images/p086.png)
+
+#### Motion Capture Pros and Cons
+
+*PDF p89 · 对应本节：动作捕捉提供的是答案还是观测？*
+
+![PDF p89：Motion Capture Pros and Cons](images/p089.png)
+
+</details>
+
+## 6. 动作图怎样把片段拼成行为？
+
+动作图把片段或帧作为节点，把可平滑切换的关系作为边。相似姿态不一定意味着相似速度，所以连接代价应考虑运动连续性与接触条件。
+
+路径搜索决定用哪些片段完成目标，混合负责过渡，脚锁定等约束修正接触。复用数据不意味着可以忽略几何与动力学。
+
+![概念关系：动作图怎样把片段拼成行为？](diagrams/d06-relation.png)
+
+*读图：动作片段 → 可连接边 → 目标行为路径。箭头表示本节的推理或处理顺序，具体条件见正文。*
+
+### 先读符号与条件
+
+| 符号 / 条件 | 含义 |
+| --- | --- |
+| p | 姿态特征 |
+| v | 速度特征 |
+| w | 统一尺度的权重 |
+| 公式 | 教学简化 |
+
+### 核心关系与推导入口
+
+以下关系使用上述条件；标为教学简化或补充的内容是为理解而推导，不是逐字转录课件。
+
+$$
+E_{transition}=w_p\|p_a-p_b\|^2+w_v\|v_a-v_b\|^2
+$$
+
+### 🔧 手算 6：把关系落到数字上
+
+位置差 0、速度差 2，wp=wv=1，则代价 4。若只看位置误差会错误给 0；加入速度后检测到突变。
+
+| 检查步骤 | 操作 |
+| --- | --- |
+| 输入 | 先从例子中抄下给定量及单位，不引入未给定的数值。 |
+| 计算 | 按本节关系求中间量，再得到结果；不要在第一步就做显示裁剪或整数舍入。 |
+| 回查 | 若只看位置误差会错误给 0；加入速度后检测到突变。 |
+| 适用边界 | 关节角、米和秒不能未经尺度处理直接相加；权重决定比较意义。 |
+
+![几何或数值解释 8](diagrams/d20-bars.png)
+
+*动作片段拼接需要同时考虑位置与速度，数值为教学示例。*
+
+### ⚠️ 易错点：先识别症状与假设
+
+关节角、米和秒不能未经尺度处理直接相加；权重决定比较意义。
+
+### 停下来解释一次
+
+**问题：起止姿态完全一样，拼接一定无缝吗？**
+
+<details>
+<summary>展开参考回答</summary>
+
+不。速度、加速度、根位移和接触状态仍可能不一致。
+
+</details>
+
+<details>
+<summary>展开原课件关键页，对照术语与图形</summary>
+
+#### Transition Graphs
+
+*PDF p90 · 对应本节：动作图怎样把片段拼成行为？*
+
+![PDF p90：Transition Graphs](images/p090.png)
+
+#### Motion Graphs
+
+*PDF p91 · 对应本节：动作图怎样把片段拼成行为？*
+
+![PDF p91：Motion Graphs](images/p091.png)
+
+#### Motion Graphs
+
+*PDF p92 · 对应本节：动作图怎样把片段拼成行为？*
+
+![PDF p92：Motion Graphs](images/p092.png)
+
+#### Typical Motion Graph
+
+*PDF p93 · 对应本节：动作图怎样把片段拼成行为？*
+
+![PDF p93：Typical Motion Graph](images/p093.png)
+
+#### Typical Motion Graph
+
+*PDF p96 · 对应本节：动作图怎样把片段拼成行为？*
+
+![PDF p96：Typical Motion Graph](images/p096.png)
+
+</details>
+
+## 7. 蒙皮为何需要绑定姿态的逆变换？
+
+每个顶点受若干骨骼影响。先用绑定姿态的逆变换把顶点放到骨骼局部，再用当前骨骼变换送回世界，最后按权重混合。
+
+如果只乘当前变换而漏掉绑定逆矩阵，静止姿态就可能已经错位。权重通常非负且总和为 1，确保平移等简单操作不会产生错误缩放。
+
+![概念关系：蒙皮为何需要绑定姿态的逆变换？](diagrams/d07-relation.png)
+
+*读图：绑定逆变换 → 当前骨骼变换 → 按权重混合顶点。箭头表示本节的推理或处理顺序，具体条件见正文。*
+
+### 先读符号与条件
+
+| 符号 / 条件 | 含义 |
+| --- | --- |
+| Bj | 绑定时骨骼世界变换 |
+| Tj | 当前变换 |
+| wj | 顶点权重 |
+| v | 绑定姿态顶点 |
+
+### 核心关系与推导入口
+
+以下关系使用上述条件；标为教学简化或补充的内容是为理解而推导，不是逐字转录课件。
+
+$$
+v'=\sum_j w_j T_j B_j^{-1}v,\qquad \sum_j w_j=1
+$$
+
+### 🔧 手算 7：把关系落到数字上
+
+某点两骨骼变换结果为 (2,0)、(0,2)，权重 0.75 与 0.25，结果 (1.5,0.5)。权重和 1，若两结果都为 (2,2)，混合仍为 (2,2)。
+
+| 检查步骤 | 操作 |
+| --- | --- |
+| 输入 | 先从例子中抄下给定量及单位，不引入未给定的数值。 |
+| 计算 | 按本节关系求中间量，再得到结果；不要在第一步就做显示裁剪或整数舍入。 |
+| 回查 | 权重和 1，若两结果都为 (2,2)，混合仍为 (2,2)。 |
+| 适用边界 | LBS 的糖纸扭曲源于混合刚体变换后不再刚性，不一定是权重录入错误。 |
+
+![几何或数值解释 4](diagrams/d16-bars.png)
+
+*蒙皮权重和为 1 是保持共同平移与绑定姿态的重要条件。*
+
+### ⚠️ 易错点：先识别症状与假设
+
+LBS 的糖纸扭曲源于混合刚体变换后不再刚性，不一定是权重录入错误。
+
+### 停下来解释一次
+
+**问题：为什么绑定姿态下应还原原始顶点？**
+
+<details>
+<summary>展开参考回答</summary>
+
+此时 Tj=Bj，每项 Tj Bj⁻¹=I，再利用权重和为 1 即得 v'=v。
+
+</details>
+
+<details>
+<summary>展开原课件关键页，对照术语与图形</summary>
+
+#### Skinning
+
+*PDF p97 · 对应本节：蒙皮为何需要绑定姿态的逆变换？*
+
+![PDF p97：Skinning](images/p097.png)
+
+#### Skinning
+
+*PDF p98 · 对应本节：蒙皮为何需要绑定姿态的逆变换？*
+
+![PDF p98：Skinning](images/p098.png)
+
+#### Basic Idea
+
+*PDF p101 · 对应本节：蒙皮为何需要绑定姿态的逆变换？*
+
+![PDF p101：Basic Idea](images/p101.png)
+
+#### Common Approach: Linear Blend Skinning (LBS)
+
+*PDF p102 · 对应本节：蒙皮为何需要绑定姿态的逆变换？*
+
+![PDF p102：Common Approach: Linear Blend Skinning (LBS)](images/p102.png)
+
+#### Common Approach: Linear Blend Skinning (LBS)
+
+*PDF p103 · 对应本节：蒙皮为何需要绑定姿态的逆变换？*
+
+![PDF p103：Common Approach: Linear Blend Skinning (LBS)](images/p103.png)
+
+#### Illustration of Rig & Skinning Weights
+
+*PDF p106 · 对应本节：蒙皮为何需要绑定姿态的逆变换？*
+
+![PDF p106：Illustration of Rig & Skinning Weights](images/p106.png)
+
+#### Problems with LBS
+
+*PDF p108 · 对应本节：蒙皮为何需要绑定姿态的逆变换？*
+
+![PDF p108：Problems with LBS](images/p108.png)
+
+</details>
+
+## 8. Blend shape 与骨架变形有何不同？
+
+Blend shape 以中性表面为基准，存若干顶点位移模式，再按系数组合。它适合面部表情和局部形变，不要求每种变化都解释为骨骼旋转。
+
+必须保持顶点语义与拓扑对应；不同顶点数或顺序的模型不能直接逐项相加。骨架、blend shape 与模拟可以一起组成角色控制系统。
+
+![概念关系：Blend shape 与骨架变形有何不同？](diagrams/d08-relation.png)
+
+*读图：中性网格 → 带权位移模式 → 表情或局部形变。箭头表示本节的推理或处理顺序，具体条件见正文。*
+
+### 先读符号与条件
+
+| 符号 / 条件 | 含义 |
+| --- | --- |
+| v0 | 中性形状 |
+| Delta vk | 位移而非绝对位置 |
+| ak | 控制系数 |
+
+### 核心关系与推导入口
+
+以下关系使用上述条件；标为教学简化或补充的内容是为理解而推导，不是逐字转录课件。
+
+$$
+v=v_0+\sum_k a_k\Delta v_k
+$$
+
+### 🔧 手算 8：把关系落到数字上
+
+v0=(1,1)，笑脸位移 (0,0.2)，系数 0.5，得到 (1,1.1)。反算差值 (0,0.1) 正好是位移的一半。
+
+| 检查步骤 | 操作 |
+| --- | --- |
+| 输入 | 先从例子中抄下给定量及单位，不引入未给定的数值。 |
+| 计算 | 按本节关系求中间量，再得到结果；不要在第一步就做显示裁剪或整数舍入。 |
+| 回查 | 反算差值 (0,0.1) 正好是位移的一半。 |
+| 适用边界 | 把绝对目标顶点直接当位移相加会重复加入中性形状。 |
+
+![几何或数值解释 5](diagrams/d17-backtrace.png)
+
+*Blend shape 将位移乘权重再加回中性形状，绝对目标位置不能直接当位移。*
+
+### ⚠️ 易错点：先识别症状与假设
+
+把绝对目标顶点直接当位移相加会重复加入中性形状。
+
+### 停下来解释一次
+
+**问题：Blend shape 权重必须总和为 1 吗？**
+
+<details>
+<summary>展开参考回答</summary>
+
+位移基表示通常不要求；若混合的是绝对形状，约定可能不同，必须先看模型定义。
+
+</details>
+
+<details>
+<summary>展开原课件关键页，对照术语与图形</summary>
+
+#### Blend Shapes
+
+*PDF p112 · 对应本节：Blend shape 与骨架变形有何不同？*
+
+![PDF p112：Blend Shapes](images/p112.png)
+
+#### Blend Shapes
+
+*PDF p113 · 对应本节：Blend shape 与骨架变形有何不同？*
+
+![PDF p113：Blend Shapes](images/p113.png)
+
+#### Blend Shapes
+
+*PDF p115 · 对应本节：Blend shape 与骨架变形有何不同？*
+
+![PDF p115：Blend Shapes](images/p115.png)
+
+#### Blend Shapes
+
+*PDF p118 · 对应本节：Blend shape 与骨架变形有何不同？*
+
+![PDF p118：Blend Shapes](images/p118.png)
+
+#### Rigging
+
+*PDF p121 · 对应本节：Blend shape 与骨架变形有何不同？*
+
+![PDF p121：Rigging](images/p121.png)
+
+#### Rigging
+
+*PDF p123 · 对应本节：Blend shape 与骨架变形有何不同？*
+
+![PDF p123：Rigging](images/p123.png)
+
+</details>
+
+## 9. 人体统计模型压缩了什么？
+
+对齐且具有对应拓扑的人体扫描可形成高维向量集合。PCA 提取主要变化方向，以少量系数表达体型差异；姿态相关修正则补偿蒙皮无法解释的形变。
+
+形状系数不是身高、体重等天然语义标签；训练数据与配准方式决定统计空间。SMPL 的课件概览将形状、姿态修正、关节与蒙皮组合起来，不能只用一个 PCA 公式概括全部过程。
+
+![概念关系：人体统计模型压缩了什么？](diagrams/d09-relation.png)
+
+*读图：对应扫描数据 → 低维形状空间 → 姿态修正与蒙皮。箭头表示本节的推理或处理顺序，具体条件见正文。*
+
+### 先读符号与条件
+
+| 符号 / 条件 | 含义 |
+| --- | --- |
+| 平均形状 | Vbar |
+| B | 主方向组成的矩阵 |
+| beta | 坐标系数而非特征值 |
+| 条件或约定 | 课件 p137 标签需区分两者 |
+
+### 核心关系与推导入口
+
+以下关系使用上述条件；标为教学简化或补充的内容是为理解而推导，不是逐字转录课件。
+
+$$
+V=\bar V+B\beta
+$$
+
+### 🔧 手算 9：把关系落到数字上
+
+二维示意平均 (1,2)、方向 (1,0)、系数 0.3，得到 (1.3,2)。减去均值再投影到该单位方向，恢复 0.3。
+
+| 检查步骤 | 操作 |
+| --- | --- |
+| 输入 | 先从例子中抄下给定量及单位，不引入未给定的数值。 |
+| 计算 | 按本节关系求中间量，再得到结果；不要在第一步就做显示裁剪或整数舍入。 |
+| 回查 | 减去均值再投影到该单位方向，恢复 0.3。 |
+| 适用边界 | 数据没有语义对齐时，PCA 会把顶点错位也当成形状变化。 |
+
+### ⚠️ 易错点：先识别症状与假设
+
+数据没有语义对齐时，PCA 会把顶点错位也当成形状变化。
+
+### 停下来解释一次
+
+**问题：PCA 系数越多是否一定更真实？**
+
+<details>
+<summary>展开参考回答</summary>
+
+不一定。可表达范围扩大，也可能拟合噪声或产生训练分布之外的形状。
+
+</details>
+
+<details>
+<summary>展开原课件关键页，对照术语与图形</summary>
+
+#### Data Driven Models
+
+*PDF p134 · 对应本节：人体统计模型压缩了什么？*
+
+![PDF p134：Data Driven Models](images/p134.png)
+
+#### Human Bodies Scans
+
+*PDF p135 · 对应本节：人体统计模型压缩了什么？*
+
+![PDF p135：Human Bodies Scans](images/p135.png)
+
+#### Statistical Analysis of Body Shapes
+
+*PDF p136 · 对应本节：人体统计模型压缩了什么？*
+
+![PDF p136：Statistical Analysis of Body Shapes](images/p136.png)
+
+#### Principal Component Analysis
+
+*PDF p137 · 对应本节：人体统计模型压缩了什么？*
+
+![PDF p137：Principal Component Analysis](images/p137.png)
+
+#### Principal Component Analysis
+
+*PDF p138 · 对应本节：人体统计模型压缩了什么？*
+
+![PDF p138：Principal Component Analysis](images/p138.png)
+
+#### Principal Component Analysis
+
+*PDF p150 · 对应本节：人体统计模型压缩了什么？*
+
+![PDF p150：Principal Component Analysis](images/p150.png)
+
+#### Principal components: Male
+
+*PDF p151 · 对应本节：人体统计模型压缩了什么？*
+
+![PDF p151：Principal components: Male](images/p151.png)
+
+#### Corrective Blend Shapes
+
+*PDF p158 · 对应本节：人体统计模型压缩了什么？*
+
+![PDF p158：Corrective Blend Shapes](images/p158.png)
+
+#### SMPL Summary
+
+*PDF p160 · 对应本节：人体统计模型压缩了什么？*
+
+![PDF p160：SMPL Summary](images/p160.png)
+
+#### SMPL Summary
+
+*PDF p167 · 对应本节：人体统计模型压缩了什么？*
+
+![PDF p167：SMPL Summary](images/p167.png)
+
+</details>
+
+## 10. 逆运动学为什么会有零个或多个解？
+
+正向运动学从角度求末端位置，逆运动学反过来。两段手臂接触同一目标可能肘朝上也可能肘朝下；目标太远则根本不可达。
+
+先做可达性分析，再讨论数值求解。关节限位、自碰撞与接触还会删掉一些数学解，因此“末端误差小”不等于动作可用。
+
+![概念关系：逆运动学为什么会有零个或多个解？](diagrams/d10-relation.png)
+
+*读图：末端目标 → 可达区域与多解 → 选择合适关节姿态。箭头表示本节的推理或处理顺序，具体条件见正文。*
+
+### 先读符号与条件
+
+| 符号 / 条件 | 含义 |
+| --- | --- |
+| l1,l2 | 骨段长度 |
+| 目标 | 相对根关节的 (x,y) |
+| theta2 | 两段相对角 |
+
+### 核心关系与推导入口
+
+以下关系使用上述条件；标为教学简化或补充的内容是为理解而推导，不是逐字转录课件。
+
+$$
+\cos\theta_2=\frac{x^2+y^2-l_1^2-l_2^2}{2l_1l_2}
+$$
+
+### 🔧 手算 10：把关系落到数字上
+
+l1=l2=1，目标 (1,1)，cosθ2=0，肘角可为 ±90°；目标 (3,0) 得 3.5，超出 [-1,1]，不可达。
+
+| 检查步骤 | 操作 |
+| --- | --- |
+| 输入 | 先从例子中抄下给定量及单位，不引入未给定的数值。 |
+| 计算 | 按本节关系求中间量，再得到结果；不要在第一步就做显示裁剪或整数舍入。 |
+| 回查 | l1=l2=1，目标 (1,1)，cosθ2=0，肘角可为 ±90°；目标 (3,0) 得 3.5，超出 [-1,1]，不可达。 |
+| 适用边界 | 对明显不可达目标直接 clamp cos 值只会生成边界近似，不能声称准确求到原目标。 |
+
+![几何或数值解释 1](diagrams/d13-skeleton.png)
+
+*两条骨链的两段长度均为 1.3，相对根节点的末端目标相同，存在肘向上与向下两个解。*
+
+![几何或数值解释 6](diagrams/d18-tree.png)
+
+*IK 首先面对可达性与多解，再选择解析或数值求解。*
+
+### ⚠️ 易错点：先识别症状与假设
+
+对明显不可达目标直接 clamp cos 值只会生成边界近似，不能声称准确求到原目标。
+
+### 停下来解释一次
+
+**问题：为什么同一个目标需要姿态偏好？**
+
+<details>
+<summary>展开参考回答</summary>
+
+因为可能有多解，偏好能选择自然、连续、符合任务的一种。
+
+</details>
+
+<details>
+<summary>展开原课件关键页，对照术语与图形</summary>
+
+#### Inverse Kinematics
+
+*PDF p168 · 对应本节：逆运动学为什么会有零个或多个解？*
+
+![PDF p168：Inverse Kinematics](images/p168.png)
+
+#### Inverse Kinematics
+
+*PDF p169 · 对应本节：逆运动学为什么会有零个或多个解？*
+
+![PDF p169：Inverse Kinematics](images/p169.png)
+
+#### Inverse Kinematics
+
+*PDF p170 · 对应本节：逆运动学为什么会有零个或多个解？*
+
+![PDF p170：Inverse Kinematics](images/p170.png)
+
+#### Inverse Kinematics
+
+*PDF p174 · 对应本节：逆运动学为什么会有零个或多个解？*
+
+![PDF p174：Inverse Kinematics](images/p174.png)
+
+#### Inverse Kinematics
+
+*PDF p175 · 对应本节：逆运动学为什么会有零个或多个解？*
+
+![PDF p175：Inverse Kinematics](images/p175.png)
+
+#### Inverse Kinematics
+
+*PDF p176 · 对应本节：逆运动学为什么会有零个或多个解？*
+
+![PDF p176：Inverse Kinematics](images/p176.png)
+
+#### Inverse Kinematics
+
+*PDF p177 · 对应本节：逆运动学为什么会有零个或多个解？*
+
+![PDF p177：Inverse Kinematics](images/p177.png)
+
+#### Inverse Kinematics
+
+*PDF p178 · 对应本节：逆运动学为什么会有零个或多个解？*
+
+![PDF p178：Inverse Kinematics](images/p178.png)
+
+</details>
+
+## 11. Jacobian 怎样把目标误差变成关节变化？
+
+在当前姿态附近，末端位移可近似为 JΔθ，其中 J 的每列表示一个关节的小变化怎样移动末端。用伪逆或阻尼最小二乘求更新，再重新计算非线性位置。
+
+接近奇异姿态时，某些方向几乎不能通过小角度变化实现，直接求逆会放大误差。阻尼以少量目标误差换取有限且稳定的更新，但不是全局求解保证。
+
+![概念关系：Jacobian 怎样把目标误差变成关节变化？](diagrams/d11-relation.png)
+
+*读图：末端误差 → 局部 Jacobian → 关节小步更新。箭头表示本节的推理或处理顺序，具体条件见正文。*
+
+### 先读符号与条件
+
+| 符号 / 条件 | 含义 |
+| --- | --- |
+| J | 末端对角度的导数 |
+| lambda | 阻尼 |
+| 公式 | 对课件伪逆思想的教学扩展 |
+
+### 核心关系与推导入口
+
+以下关系使用上述条件；标为教学简化或补充的内容是为理解而推导，不是逐字转录课件。
+
+$$
+\Delta\theta=J^T(JJ^T+\lambda^2I)^{-1}\Delta p
+$$
+
+### 🔧 手算 11：把关系落到数字上
+
+标量 J=0.1、目标位移 0.02、λ=0.1，更新为 0.1×0.02/(0.01+0.01)=0.1。预测位移 0.01，小于目标但比无阻尼 0.2 更新保守。
+
+| 检查步骤 | 操作 |
+| --- | --- |
+| 输入 | 先从例子中抄下给定量及单位，不引入未给定的数值。 |
+| 计算 | 按本节关系求中间量，再得到结果；不要在第一步就做显示裁剪或整数舍入。 |
+| 回查 | 预测位移 0.01，小于目标但比无阻尼 0.2 更新保守。 |
+| 适用边界 | 一次线性更新不一定到达目标；步长过大会离开线性近似区域，应迭代并检查误差。 |
+
+### ⚠️ 易错点：先识别症状与假设
+
+一次线性更新不一定到达目标；步长过大会离开线性近似区域，应迭代并检查误差。
+
+### 停下来解释一次
+
+**问题：Jacobian 奇异说明目标一定永远不可达吗？**
+
+<details>
+<summary>展开参考回答</summary>
+
+不一定。它说明当前局部运动映射退化，换姿态或走非局部路径可能恢复可达性。
+
+</details>
+
+<details>
+<summary>展开原课件关键页，对照术语与图形</summary>
+
+#### Inverse Kinematics
+
+*PDF p179 · 对应本节：Jacobian 怎样把目标误差变成关节变化？*
+
+![PDF p179：Inverse Kinematics](images/p179.png)
+
+#### Inverse Kinematics
+
+*PDF p180 · 对应本节：Jacobian 怎样把目标误差变成关节变化？*
+
+![PDF p180：Inverse Kinematics](images/p180.png)
+
+#### Inverse Kinematics
+
+*PDF p181 · 对应本节：Jacobian 怎样把目标误差变成关节变化？*
+
+![PDF p181：Inverse Kinematics](images/p181.png)
+
+#### IK: Multiple Constraints
+
+*PDF p183 · 对应本节：Jacobian 怎样把目标误差变成关节变化？*
+
+![PDF p183：IK: Multiple Constraints](images/p183.png)
+
+#### Inverse Kinematics
+
+*PDF p187 · 对应本节：Jacobian 怎样把目标误差变成关节变化？*
+
+![PDF p187：Inverse Kinematics](images/p187.png)
+
+#### Inverse Kinematics
+
+*PDF p189 · 对应本节：Jacobian 怎样把目标误差变成关节变化？*
+
+![PDF p189：Inverse Kinematics](images/p189.png)
+
+#### Inverse Kinematics
+
+*PDF p191 · 对应本节：Jacobian 怎样把目标误差变成关节变化？*
+
+![PDF p191：Inverse Kinematics](images/p191.png)
+
+#### Inverse Kinematics
+
+*PDF p194 · 对应本节：Jacobian 怎样把目标误差变成关节变化？*
+
+![PDF p194：Inverse Kinematics](images/p194.png)
+
+#### Inverse Kinematics
+
+*PDF p195 · 对应本节：Jacobian 怎样把目标误差变成关节变化？*
+
+![PDF p195：Inverse Kinematics](images/p195.png)
+
+#### Inverse Kinematics
+
+*PDF p196 · 对应本节：Jacobian 怎样把目标误差变成关节变化？*
+
+![PDF p196：Inverse Kinematics](images/p196.png)
+
+</details>
+
+## 12. 动画系统最后应检查哪些连续性？
+
+除了位置误差，要检查关节限位、脚与地面接触、重心与支撑域、速度连续性以及曝光期间的轨迹。每种检查对应不同失败：脚滑、肢体跳变、失去平衡或时间混叠。
+
+运动模糊积分的是曝光时间内的图像，不等于在最终帧后做均匀模糊。相机、物体、遮挡都可能随时间变，必须在采样时使用同一个时间状态。
+
+![概念关系：动画系统最后应检查哪些连续性？](diagrams/d12-relation.png)
+
+*读图：角色与相机轨迹 → 同一时刻的场景 → 曝光时间积分。箭头表示本节的推理或处理顺序，具体条件见正文。*
+
+### 先读符号与条件
+
+| 符号 / 条件 | 含义 |
+| --- | --- |
+| C(t) | 时刻图像贡献 |
+| Delta t | 曝光时长 |
+| 条件 | 此处使用均匀快门权重 |
+
+### 核心关系与推导入口
+
+以下关系使用上述条件；标为教学简化或补充的内容是为理解而推导，不是逐字转录课件。
+
+$$
+\bar C=\frac1{\Delta t}\int_{t_0}^{t_0+\Delta t}C(t)dt
+$$
+
+### 🔧 手算 12：把关系落到数字上
+
+物体以 100 像素/秒运动，曝光 0.01 秒，轨迹长度 1 像素；曝光 0.04 秒则为 4 像素。长度除以时间都恢复 100。
+
+| 检查步骤 | 操作 |
+| --- | --- |
+| 输入 | 先从例子中抄下给定量及单位，不引入未给定的数值。 |
+| 计算 | 按本节关系求中间量，再得到结果；不要在第一步就做显示裁剪或整数舍入。 |
+| 回查 | 长度除以时间都恢复 100。 |
+| 适用边界 | 轨迹长度只是匀速无遮挡示例，不能替代复杂场景的时间积分。 |
+
+![几何或数值解释 7](diagrams/d19-motion.png)
+
+*运动模糊与单帧姿态插值不同，曝光覆盖一段时间。*
+
+### ⚠️ 易错点：先识别症状与假设
+
+轨迹长度只是匀速无遮挡示例，不能替代复杂场景的时间积分。
+
+### 停下来解释一次
+
+**问题：帧间插值与运动模糊是不是同一种结果？**
+
+<details>
+<summary>展开参考回答</summary>
+
+不是。前者估计某时刻状态，后者累计一段时间内的图像贡献。
+
+</details>
+
+<details>
+<summary>展开原课件关键页，对照术语与图形</summary>
+
+#### Motion Blur
+
+*PDF p52 · 对应本节：动画系统最后应检查哪些连续性？*
+
+![PDF p52：Motion Blur](images/p052.png)
+
+#### Motion Blur
+
+*PDF p56 · 对应本节：动画系统最后应检查哪些连续性？*
+
+![PDF p56：Motion Blur](images/p056.png)
+
+#### Inverse Kinematics
+
+*PDF p182 · 对应本节：动画系统最后应检查哪些连续性？*
+
+![PDF p182：Inverse Kinematics](images/p182.png)
+
+#### IK: Point/Look At
+
+*PDF p184 · 对应本节：动画系统最后应检查哪些连续性？*
+
+![PDF p184：IK: Point/Look At](images/p184.png)
+
+#### IK: Balance
+
+*PDF p185 · 对应本节：动画系统最后应检查哪些连续性？*
+
+![PDF p185：IK: Balance](images/p185.png)
+
+#### IK: Keyframing
+
+*PDF p186 · 对应本节：动画系统最后应检查哪些连续性？*
+
+![PDF p186：IK: Keyframing](images/p186.png)
+
+#### Inverse Kinematics
+
+*PDF p198 · 对应本节：动画系统最后应检查哪些连续性？*
+
+![PDF p198：Inverse Kinematics](images/p198.png)
+
+#### Kinematic Animation Pros and Cons
+
+*PDF p201 · 对应本节：动画系统最后应检查哪些连续性？*
+
+![PDF p201：Kinematic Animation Pros and Cons](images/p201.png)
+
+</details>
+
+## 13. 把十二个数值例子连成检查顺序
+
+先手算再运行。随仓库提供的 `scripts/cs184-numerical-checks.py` 是小模型验证，不依赖 GPU，也不修改服务器配置。它不能替代完整渲染场景或模拟系统的验证。
+
+| 顺序 | 本节关系 | 最容易漏掉的约定 |
+| --- | --- | --- |
+| 1 | 动画为什么不只是每帧换位置？ | 速度：节奏的基础而非完整动画质量指标 |
+| 2 | 关键帧之间为何需要插值？ | s：归一化时间 |
+| 3 | 旋转为何不能随便平均？ | 条件：不含缩放与反射 |
+| 4 | 正向运动学怎样传递父子关系？ | 约定：列向量，右侧先作用 |
+| 5 | 动作捕捉提供的是答案还是观测？ | 预测点：骨架模型生成 |
+| 6 | 动作图怎样把片段拼成行为？ | 公式：教学简化 |
+| 7 | 蒙皮为何需要绑定姿态的逆变换？ | v：绑定姿态顶点 |
+| 8 | Blend shape 与骨架变形有何不同？ | ak：控制系数 |
+| 9 | 人体统计模型压缩了什么？ | 课件 p137 标签需区分两者 |
+| 10 | 逆运动学为什么会有零个或多个解？ | theta2：两段相对角 |
+| 11 | Jacobian 怎样把目标误差变成关节变化？ | 公式：对课件伪逆思想的教学扩展 |
+| 12 | 动画系统最后应检查哪些连续性？ | 条件：此处使用均匀快门权重 |
+
+### 复现实验的最小记录
+
+| 记录项 | 用途 |
+| --- | --- |
+| 固定输入 | 相同几何、材质、网格或信号，避免一次改变多个因素。 |
+| 参数与单位 | 包括采样数、步长、分辨率、角度单位、颜色空间。 |
+| 输出量 | 保留线性值、误差或状态，再生成展示图。 |
+| 参考 | 解析解、手算或高精度结果必须说明来源。 |
+| 失败样例 | 边界和极端条件是检查假设的入口。 |
+
+## 14. 实现排查：把公式错误与系统错误分开
+
+本节列出由模型和手算能够判断的排查方向；没有把尚未写出的完整应用测试说成已完成。最小数值检查的真实执行结果见本次发布核对报告。
+
+### 阶段 1：第 1–4 节
+
+| 涉及关系 | 错误机制 / 修正方向 |
+| --- | --- |
+| 动画为什么不只是每帧换位置？ | 只检查关键帧位置会忽略速度突变；先画位置和速度随时间的关系。 |
+| 关键帧之间为何需要插值？ | 把每段时间都当成 1，会让不等时间间隔的关键帧产生错误速度。 |
+| 旋转为何不能随便平均？ | 平均矩阵会压缩或扭曲形状，不能靠“再调权重”普遍修复。 |
+| 正向运动学怎样传递父子关系？ | 把所有局部变换都当世界变换，会让子肢体脱离父关节。 |
+
+### 阶段 2：第 5–8 节
+
+| 涉及关系 | 错误机制 / 修正方向 |
+| --- | --- |
+| 动作捕捉提供的是答案还是观测？ | 误差小不代表姿态唯一；遮挡与模型自由度可能留下多解。 |
+| 动作图怎样把片段拼成行为？ | 关节角、米和秒不能未经尺度处理直接相加；权重决定比较意义。 |
+| 蒙皮为何需要绑定姿态的逆变换？ | LBS 的糖纸扭曲源于混合刚体变换后不再刚性，不一定是权重录入错误。 |
+| Blend shape 与骨架变形有何不同？ | 把绝对目标顶点直接当位移相加会重复加入中性形状。 |
+
+### 阶段 3：第 9–12 节
+
+| 涉及关系 | 错误机制 / 修正方向 |
+| --- | --- |
+| 人体统计模型压缩了什么？ | 数据没有语义对齐时，PCA 会把顶点错位也当成形状变化。 |
+| 逆运动学为什么会有零个或多个解？ | 对明显不可达目标直接 clamp cos 值只会生成边界近似，不能声称准确求到原目标。 |
+| Jacobian 怎样把目标误差变成关节变化？ | 一次线性更新不一定到达目标；步长过大会离开线性近似区域，应迭代并检查误差。 |
+| 动画系统最后应检查哪些连续性？ | 轨迹长度只是匀速无遮挡示例，不能替代复杂场景的时间积分。 |
+
+## 15. 跨讲连接：同一工具在哪些尺度重复出现？
+
+| 前置工具 | 在整门课里的用途 | 回查 |
+| --- | --- | --- |
+| 采样与积分 | 像素、光源、孔径、时间、方向都需要有限样本估计连续量。 | [L03](/notes/cs184-03-sampling-aliasing/) / [L15](/notes/cs184-15-monte-carlo-integration/) |
+| 坐标与线性代数 | 相机、法线、骨架与局部速度都需要一致的参考系。 | [L04–05](/notes/cs184-04-05-transforms/) |
+| 几何表示 | 可见性、接触、遮挡与网格邻域依赖可靠的几何关系。 | [L11–12](/notes/cs184-11-12-meshes-geometry/) |
+| 物理量与单位 | 把颜色值、概率密度、力和能量区别开，防止错误补偿。 | [L14](/notes/cs184-14-radiometry/) |
+| 颜色与显示 | 展示图不等于线性数据；显示变换会改变视觉比较。 | [L19–20](/notes/cs184-19-20-color-science/) |
+
+回头看，许多错误并非来自复杂公式，而是来自“同一个词指了不同的量”：方向密度与概率、位置与方向、线性颜色与编码颜色、稳定与准确。先说清对象，再选择算法。
+
+## 16. 自测：能否不看公式说清楚？
+
+### 自测 1. 为什么预备动作可能向目标相反方向运动？
+
+<details>
+<summary>参考答案</summary>
+
+它让观众预期接下来的动作，也可表现蓄力，并不违反动画表达目标。
+
+</details>
+
+### 自测 2. 位置连续是否保证运动看起来平滑？
+
+<details>
+<summary>参考答案</summary>
+
+不保证。速度或加速度不连续也会造成明显顿挫。
+
+</details>
+
+### 自测 3. 两个单位四元数直接平均后能立即使用吗？
+
+<details>
+<summary>参考答案</summary>
+
+通常至少要处理符号一致性并归一化；若要求恒定角速度，还需合适的球面插值。
+
+</details>
+
+### 自测 4. 肘关节角不变，手掌位置还能变化吗？
+
+<details>
+<summary>参考答案</summary>
+
+能。肩膀、躯干等祖先节点变化都会影响手掌世界位置。
+
+</details>
+
+### 自测 5. 无标记动作捕捉是否不需要模型假设？
+
+<details>
+<summary>参考答案</summary>
+
+仍需要。相机投影、人体先验和遮挡处理都影响可恢复的动作。
+
+</details>
+
+### 自测 6. 起止姿态完全一样，拼接一定无缝吗？
+
+<details>
+<summary>参考答案</summary>
+
+不。速度、加速度、根位移和接触状态仍可能不一致。
+
+</details>
+
+### 自测 7. 为什么绑定姿态下应还原原始顶点？
+
+<details>
+<summary>参考答案</summary>
+
+此时 Tj=Bj，每项 Tj Bj⁻¹=I，再利用权重和为 1 即得 v'=v。
+
+</details>
+
+### 自测 8. Blend shape 权重必须总和为 1 吗？
+
+<details>
+<summary>参考答案</summary>
+
+位移基表示通常不要求；若混合的是绝对形状，约定可能不同，必须先看模型定义。
+
+</details>
+
+### 自测 9. PCA 系数越多是否一定更真实？
+
+<details>
+<summary>参考答案</summary>
+
+不一定。可表达范围扩大，也可能拟合噪声或产生训练分布之外的形状。
+
+</details>
+
+### 自测 10. 为什么同一个目标需要姿态偏好？
+
+<details>
+<summary>参考答案</summary>
+
+因为可能有多解，偏好能选择自然、连续、符合任务的一种。
+
+</details>
+
+### 自测 11. Jacobian 奇异说明目标一定永远不可达吗？
+
+<details>
+<summary>参考答案</summary>
+
+不一定。它说明当前局部运动映射退化，换姿态或走非局部路径可能恢复可达性。
+
+</details>
+
+### 自测 12. 帧间插值与运动模糊是不是同一种结果？
+
+<details>
+<summary>参考答案</summary>
+
+不是。前者估计某时刻状态，后者累计一段时间内的图像贡献。
+
+</details>
+
+### 自测 13. 第 1 节的数值例子，哪一项假设不能悄悄删掉？
+
+<details>
+<summary>参考答案与反例入口</summary>
+
+只检查关键帧位置会忽略速度突变；先画位置和速度随时间的关系。
+
+再复算本节的例子：相同位移 2 米，1 秒完成平均速度 2 m/s，0.5 秒完成为 4 m/s。两者终点相同但节奏不同；位移分别为速度乘时间。
+
+</details>
+
+### 自测 14. 第 2 节的数值例子，哪一项假设不能悄悄删掉？
+
+<details>
+<summary>参考答案与反例入口</summary>
+
+把每段时间都当成 1，会让不等时间间隔的关键帧产生错误速度。
+
+再复算本节的例子：t0=0、t1=2，位置从 1 到 5，t=0.5 时 s=0.25，位置 2。回算 (2-1)/(5-1)=0.25。
+
+</details>
+
+### 自测 15. 第 3 节的数值例子，哪一项假设不能悄悄删掉？
+
+<details>
+<summary>参考答案与反例入口</summary>
+
+平均矩阵会压缩或扭曲形状，不能靠“再调权重”普遍修复。
+
+再复算本节的例子：二维 I 与旋转 180° 的 -I 平均得到零矩阵。作用于 (1,0) 得 (0,0)，长度从 1 变成 0；显然不是旋转。
+
+</details>
+
+### 自测 16. 第 4 节的数值例子，哪一项假设不能悄悄删掉？
+
+<details>
+<summary>参考答案与反例入口</summary>
+
+把所有局部变换都当世界变换，会让子肢体脱离父关节。
+
+再复算本节的例子：二维两段长度均为 1，肩角 0°、肘角 90°，末端为 (1,1)。肘的世界角是 90°；若肩也转 90°，末端为 (-1,1)。
+
+</details>
+
+### 自测 17. 第 5 节的数值例子，哪一项假设不能悄悄删掉？
+
+<details>
+<summary>参考答案与反例入口</summary>
+
+误差小不代表姿态唯一；遮挡与模型自由度可能留下多解。
+
+再复算本节的例子：两个一维观测为 1、3，预测为 1.2、2.7，平方误差和为 0.04+0.09=0.13。把第二预测改为 3，误差降为 0.04。
+
+</details>
+
+### 自测 18. 第 6 节的数值例子，哪一项假设不能悄悄删掉？
+
+<details>
+<summary>参考答案与反例入口</summary>
+
+关节角、米和秒不能未经尺度处理直接相加；权重决定比较意义。
+
+再复算本节的例子：位置差 0、速度差 2，wp=wv=1，则代价 4。若只看位置误差会错误给 0；加入速度后检测到突变。
+
+</details>
+
+### 自测 19. 第 7 节的数值例子，哪一项假设不能悄悄删掉？
+
+<details>
+<summary>参考答案与反例入口</summary>
+
+LBS 的糖纸扭曲源于混合刚体变换后不再刚性，不一定是权重录入错误。
+
+再复算本节的例子：某点两骨骼变换结果为 (2,0)、(0,2)，权重 0.75 与 0.25，结果 (1.5,0.5)。权重和 1，若两结果都为 (2,2)，混合仍为 (2,2)。
+
+</details>
+
+### 自测 20. 第 8 节的数值例子，哪一项假设不能悄悄删掉？
+
+<details>
+<summary>参考答案与反例入口</summary>
+
+把绝对目标顶点直接当位移相加会重复加入中性形状。
+
+再复算本节的例子：v0=(1,1)，笑脸位移 (0,0.2)，系数 0.5，得到 (1,1.1)。反算差值 (0,0.1) 正好是位移的一半。
+
+</details>
+
+### 自测 21. 第 9 节的数值例子，哪一项假设不能悄悄删掉？
+
+<details>
+<summary>参考答案与反例入口</summary>
+
+数据没有语义对齐时，PCA 会把顶点错位也当成形状变化。
+
+再复算本节的例子：二维示意平均 (1,2)、方向 (1,0)、系数 0.3，得到 (1.3,2)。减去均值再投影到该单位方向，恢复 0.3。
+
+</details>
+
+### 自测 22. 第 10 节的数值例子，哪一项假设不能悄悄删掉？
+
+<details>
+<summary>参考答案与反例入口</summary>
+
+对明显不可达目标直接 clamp cos 值只会生成边界近似，不能声称准确求到原目标。
+
+再复算本节的例子：l1=l2=1，目标 (1,1)，cosθ2=0，肘角可为 ±90°；目标 (3,0) 得 3.5，超出 [-1,1]，不可达。
+
+</details>
+
+### 自测 23. 第 11 节的数值例子，哪一项假设不能悄悄删掉？
+
+<details>
+<summary>参考答案与反例入口</summary>
+
+一次线性更新不一定到达目标；步长过大会离开线性近似区域，应迭代并检查误差。
+
+再复算本节的例子：标量 J=0.1、目标位移 0.02、λ=0.1，更新为 0.1×0.02/(0.01+0.01)=0.1。预测位移 0.01，小于目标但比无阻尼 0.2 更新保守。
+
+</details>
+
+### 自测 24. 第 12 节的数值例子，哪一项假设不能悄悄删掉？
+
+<details>
+<summary>参考答案与反例入口</summary>
+
+轨迹长度只是匀速无遮挡示例，不能替代复杂场景的时间积分。
+
+再复算本节的例子：物体以 100 像素/秒运动，曝光 0.01 秒，轨迹长度 1 像素；曝光 0.04 秒则为 4 像素。长度除以时间都恢复 100。
+
+</details>
+
+### 自测 25. 本讲的输入、输出和中间表示各是什么？
+
+<details>
+<summary>参考答案</summary>
+
+表达运动意图 → 随时间变化的参数 → 骨架层级 → 表面变形 → 数据驱动控制 → 从末端目标反求关节。请沿箭头逐项解释，尤其说清中间表示的单位、坐标或概率测度；只复述名词不算掌握。
+
+</details>
+
+### 自测 26. 能否只用一张“看起来正确”的图片证明实现正确？
+
+<details>
+<summary>参考答案</summary>
+
+不能。需要将关键关系拆成可预测的小输入，检查数值、边界与对照；随机方法还要区分一次结果与统计期望，显示图还需区分编码与原始数据。
+
+</details>
+
+## 17. 带走的结论与仍需练习的内容
+
+- 它让观众预期接下来的动作，也可表现蓄力，并不违反动画表达目标。
+- 不保证。速度或加速度不连续也会造成明显顿挫。
+- 通常至少要处理符号一致性并归一化；若要求恒定角速度，还需合适的球面插值。
+- 能。肩膀、躯干等祖先节点变化都会影响手掌世界位置。
+- 仍需要。相机投影、人体先验和遮挡处理都影响可恢复的动作。
+- 不。速度、加速度、根位移和接触状态仍可能不一致。
+- 此时 Tj=Bj，每项 Tj Bj⁻¹=I，再利用权重和为 1 即得 v'=v。
+- 位移基表示通常不要求；若混合的是绝对形状，约定可能不同，必须先看模型定义。
+- 不一定。可表达范围扩大，也可能拟合噪声或产生训练分布之外的形状。
+- 因为可能有多解，偏好能选择自然、连续、符合任务的一种。
+- 不一定。它说明当前局部运动映射退化，换姿态或走非局部路径可能恢复可达性。
+- 不是。前者估计某时刻状态，后者累计一段时间内的图像贡献。
+
+| 层次 | 已经说明 | 还需动手验证 |
+| --- | --- | --- |
+| 概念 | 本篇十二个问题、公式与原页对应。 | 用自己的话重新解释，并给出一个反例。 |
+| 数值 | 正文手算与解析小模型。 | 改变一个输入，预测再运行。 |
+| 系统 | 指出实现条件和典型错误。 | 完整应用需另外检查场景、性能和边界。 |
+
+## 18. 整门课闭环与继续阅读
+
+| 讲义 | 起点问题 | 得到的工具或终点 |
+| --- | --- | --- |
+| [L01 · 导论](/notes/cs184-01-introduction/) | 这门课在求什么？ | 从场景到像素与感知 |
+| [L02 · 三角形与覆盖](/notes/cs184-02-drawing-triangles/) | 像素由哪些图元覆盖？ | 半平面判定与插值 |
+| [L03 · 采样与抗锯齿](/notes/cs184-03-sampling-aliasing/) | 离散图像为何锯齿？ | 区域积分、过滤与采样 |
+| [L04–05 · 变换](/notes/cs184-04-05-transforms/) | 怎样放置物体和相机？ | 坐标系、矩阵与投影 |
+| [L06–07 · 纹理](/notes/cs184-06-07-texture-mapping/) | 表面参数如何随位置变化？ | UV、过滤与像素足迹 |
+| [L08–09 · 着色](/notes/cs184-08-09-rasterization-shading/) | 看见哪个表面、怎样着色？ | 深度、管线与局部照明 |
+| [L10 · 曲线曲面](/notes/cs184-10-bezier-curves-surfaces/) | 怎样控制连续形状？ | 插值、逼近与连续性 |
+| [L11–12 · 几何](/notes/cs184-11-12-meshes-geometry/) | 复杂表面如何表示和操作？ | 网格、拓扑与几何处理 |
+| [L13 · 光线追踪](/notes/cs184-13-ray-tracing-acceleration/) | 光线怎样快速找到最近表面？ | 求交与 BVH |
+| [第 14 讲](/notes/cs184-14-radiometry/) | 能量 | 半球积分 |
+| [第 15 讲](/notes/cs184-15-monte-carlo-integration/) | 像素是积分 | 降低方差 |
+| [第 16–17 讲](/notes/cs184-16-17-global-illumination/) | 命中表面 | 加权累积与终止 |
+| [春季 L18](/notes/cs184-18-material-modeling/) | 材质是散射规律 | 更细结构与体积传播 |
+| [春季 L19–20](/notes/cs184-19-20-color-science/) | 光谱进入眼睛 | 线性运算与显示 |
+| [春季 L21–23](/notes/cs184-21-23-animation/) | 表达运动意图 | 从末端目标反求关节 |
+| [春季 L24](/notes/cs184-24-physical-simulation/) | 选择状态 | 施加碰撞和约束 |
+| [春季 L25](/notes/cs184-25-fluid-simulation/) | 粒子或网格表示 | 边界与数值误差 |
+| [春季 L26–27](/notes/cs184-26-27-virtual-reality/) | 人眼需要哪些线索 | 全景与光场 |
+| [补充 A](/notes/cs184-supplement-cameras-lenses/) | 视场与透视 | 真实镜头与传感器 |
+| [补充 B](/notes/cs184-supplement-image-processing/) | 图像是离散信号 | 频率量化与压缩 |
+
+春季 L18–27 与夏季补充专题保留本地文件标识，**不冒充不存在的秋季同编号讲次**。可以按上表顺序学习，也可在相机、颜色、采样之间按依赖往返。
+
+## 19. 原课件全页索引与来源
+
+[原课件文件与版本记录](https://github.com/Teddy-Yangjiale/CS184/blob/main/CS184_2026/sp26/lectures/SP26-L21-23-animation.pdf) · [课程官网](https://cs184.eecs.berkeley.edu/sp26/)
+
+文件：`SP26-L21-23-animation.pdf`；PDF 页数：202；SHA-256：`3e5a931d4b3e7a8da84f4f40794a39edab5a1edf08f3642dc1a33435fd6a3ec8`。
+
+“正文核对”表示本篇实际引用该页截图；“索引保留”包括演示、行政信息、补充、致谢与重复构建页，不表示逐页都有独立讲解。原视频的运动过程不能由静态 PDF 截图完整复现。
+
+| PDF 页 | 原页可提取标题 | 本篇使用 |
+| --- | --- | --- |
+| 1 | Computer Graphics and Imaging | 索引保留 |
+| 2 | Principles of Animation | 索引保留 |
+| 3 | Principles of Animation | 索引保留 |
+| 4 | Rigging & Skinning | 索引保留 |
+| 5 | Rigging & Skinning | 索引保留 |
+| 6 | Motion Capture | 索引保留 |
+| 7 | Motion Capture | 索引保留 |
+| 8 | Physical Simulation: Cloth | 索引保留 |
+| 9 | Physical Simulation: Cloth | 索引保留 |
+| 10 | Physical Simulation: Surgery | 索引保留 |
+| 11 | Physical Simulation: Surgery | 索引保留 |
+| 12 | Animation | 正文核对 |
+| 13 | Historical Points in Animation | 索引保留 |
+| 14 | History of Animation | 索引保留 |
+| 15 | History of Animation | 索引保留 |
+| 16 | History of Animation | 索引保留 |
+| 17 | First Film | 索引保留 |
+| 18 | First Film | 索引保留 |
+| 19 | First Hand-Drawn Feature-Length Animation | 索引保留 |
+| 20 | Hand-Drawn Animation - Present Day | 索引保留 |
+| 21 | Hand-Drawn Animation - Present Day | 索引保留 |
+| 22 | First Digital-Computer-Generated Animation | 索引保留 |
+| 23 | First Digital-Computer-Generated Animation | 索引保留 |
+| 24 | Early Computer Animation | 索引保留 |
+| 25 | Early Computer Animation | 索引保留 |
+| 26 | Early Computer Animation | 索引保留 |
+| 27 | Early Computer Animation | 索引保留 |
+| 28 | First CG Feature Film | 索引保留 |
+| 29 | First CG Feature Film | 索引保留 |
+| 30 | Computer Animation - Present Day | 索引保留 |
+| 31 | Computer Animation - Present Day | 索引保留 |
+| 32 | Animation Principles | 索引保留 |
+| 33 | Depiction of Motion | 索引保留 |
+| 34 | Animation Principles | 正文核对 |
+| 35 | 12 Animation Principles | 正文核对 |
+| 36 | 12 Animation Principles | 索引保留 |
+| 37 | 12 Animation Principles | 索引保留 |
+| 38 | Squash and Stretch | 正文核对 |
+| 39 | Anticipation | 正文核对 |
+| 40 | Staging | 正文核对 |
+| 41 | Follow Through | 正文核对 |
+| 42 | Ease-In and Ease-Out | 正文核对 |
+| 43 | Arcs | 索引保留 |
+| 44 | Secondary Action | 索引保留 |
+| 45 | Timing | 正文核对 |
+| 46 | Exaggeration | 索引保留 |
+| 47 | Appeal | 索引保留 |
+| 48 | Appeal: Personality | 索引保留 |
+| 49 | Appeal: Personality | 索引保留 |
+| 50 | Appeal: Personality | 索引保留 |
+| 51 | Further Reading | 索引保留 |
+| 52 | Motion Blur | 正文核对 |
+| 53 | Motion Blur | 索引保留 |
+| 54 | Motion Blur | 索引保留 |
+| 55 | Motion Blur | 索引保留 |
+| 56 | Motion Blur | 正文核对 |
+| 57 | Motion Blur | 索引保留 |
+| 58 | Keyframes | 正文核对 |
+| 59 | Keyframe Interpolation | 正文核对 |
+| 60 | Keyframe Interpolation of Each Parameter | 正文核对 |
+| 61 | Keyframe Interpolation | 正文核对 |
+| 62 | Example: Walk Cycle | 正文核对 |
+| 63 | Example: Walk Cycle | 索引保留 |
+| 64 | Example: Walk Cycle | 正文核对 |
+| 65 | Example Walk Cycle | 索引保留 |
+| 66 | Example Walk Cycle | 索引保留 |
+| 67 | Interpolation | 正文核对 |
+| 68 | Interpolation | 正文核对 |
+| 69 | Interpolation | 正文核对 |
+| 70 | Interpolation | 正文核对 |
+| 71 | Forward Kinematics | 正文核对 |
+| 72 | Skeleton - Hierarchical Representation | 正文核对 |
+| 73 | Skeleton - Hierarchical Representation | 正文核对 |
+| 74 | Skeleton - Hierarchical Representation | 正文核对 |
+| 75 | Skeleton - Hierarchical Representation | 正文核对 |
+| 76 | Motion Capture | 正文核对 |
+| 77 | Motion Capture | 正文核对 |
+| 78 | Motion Capture Equipment | 正文核对 |
+| 79 | Optical Motion Capture | 正文核对 |
+| 80 | Optical Motion Capture | 索引保留 |
+| 81 | Motion Capture | 索引保留 |
+| 82 | Motion Capture | 索引保留 |
+| 83 | Facial Motion Capture | 正文核对 |
+| 84 | Facial Motion Capture | 索引保留 |
+| 85 | Challenges of Facial Animation | 正文核对 |
+| 86 | Markerless Motion Capture | 正文核对 |
+| 87 | Markerless Motion Capture | 索引保留 |
+| 88 | Markerless Motion Capture | 索引保留 |
+| 89 | Motion Capture Pros and Cons | 正文核对 |
+| 90 | Transition Graphs | 正文核对 |
+| 91 | Motion Graphs | 正文核对 |
+| 92 | Motion Graphs | 正文核对 |
+| 93 | Typical Motion Graph | 正文核对 |
+| 94 | Typical Motion Graph | 索引保留 |
+| 95 | Typical Motion Graph | 索引保留 |
+| 96 | Typical Motion Graph | 正文核对 |
+| 97 | Skinning | 正文核对 |
+| 98 | Skinning | 正文核对 |
+| 99 | Skinning | 索引保留 |
+| 100 | Skinning | 索引保留 |
+| 101 | Basic Idea | 正文核对 |
+| 102 | Common Approach: Linear Blend Skinning (LBS) | 正文核对 |
+| 103 | Common Approach: Linear Blend Skinning (LBS) | 正文核对 |
+| 104 | Common Approach: Linear Blend Skinning (LBS) | 索引保留 |
+| 105 | Common Approach: Linear Blend Skinning (LBS) | 索引保留 |
+| 106 | Illustration of Rig & Skinning Weights | 正文核对 |
+| 107 | Illustration of Rig & Skinning Weights | 索引保留 |
+| 108 | Problems with LBS | 正文核对 |
+| 109 | Why? | 正文核对 |
+| 110 | Anatomical Models | 索引保留 |
+| 111 | Anatomical Models | 索引保留 |
+| 112 | Blend Shapes | 正文核对 |
+| 113 | Blend Shapes | 正文核对 |
+| 114 | Blend Shapes | 索引保留 |
+| 115 | Blend Shapes | 正文核对 |
+| 116 | Blend Shapes | 索引保留 |
+| 117 | Blend Shapes | 索引保留 |
+| 118 | Blend Shapes | 正文核对 |
+| 119 | Blend Shapes | 索引保留 |
+| 120 | Blend Shapes | 索引保留 |
+| 121 | Rigging | 正文核对 |
+| 122 | Rigging | 索引保留 |
+| 123 | Rigging | 正文核对 |
+| 124 | Rigging | 索引保留 |
+| 125 | Rigging | 索引保留 |
+| 126 | Rigging | 索引保留 |
+| 127 | Rigging | 索引保留 |
+| 128 | Rigging | 索引保留 |
+| 129 | Example of A Diverse Set of Sophisticated Rigs | 索引保留 |
+| 130 | Example of A Diverse Set of Sophisticated Rigs | 索引保留 |
+| 131 | Rig-Based Facial Animation | 索引保留 |
+| 132 | Rib-Based Facial Animation | 索引保留 |
+| 133 | Rib-Based Facial Animation | 索引保留 |
+| 134 | Data Driven Models | 正文核对 |
+| 135 | Human Bodies Scans | 正文核对 |
+| 136 | Statistical Analysis of Body Shapes | 正文核对 |
+| 137 | Principal Component Analysis | 正文核对 |
+| 138 | Principal Component Analysis | 正文核对 |
+| 139 | Principal Component Analysis | 索引保留 |
+| 140 | Principal Component Analysis | 索引保留 |
+| 141 | Principal Component Analysis | 索引保留 |
+| 142 | Principal Component Analysis | 索引保留 |
+| 143 | Principal Component Analysis | 索引保留 |
+| 144 | Principal Component Analysis | 索引保留 |
+| 145 | Principal Component Analysis | 索引保留 |
+| 146 | Principal Component Analysis | 索引保留 |
+| 147 | Principal Component Analysis | 索引保留 |
+| 148 | Principal Component Analysis | 索引保留 |
+| 149 | Principal Component Analysis | 索引保留 |
+| 150 | Principal Component Analysis | 正文核对 |
+| 151 | Principal components: Male | 正文核对 |
+| 152 | Principal components: Male | 索引保留 |
+| 153 | Principal components: Male | 索引保留 |
+| 154 | Pose with kinematics + Linear Blend Skinning | 索引保留 |
+| 155 | Pose with kinematics + Linear Blend Skinning | 索引保留 |
+| 156 | Pose with kinematics + Linear Blend Skinning | 索引保留 |
+| 157 | Corrective Blend Shapes | 索引保留 |
+| 158 | Corrective Blend Shapes | 正文核对 |
+| 159 | Corrective Blend Shapes | 索引保留 |
+| 160 | SMPL Summary | 正文核对 |
+| 161 | SMPL Summary | 索引保留 |
+| 162 | SMPL Summary | 索引保留 |
+| 163 | SMPL Summary | 索引保留 |
+| 164 | SMPL Summary | 索引保留 |
+| 165 | SMPL Summary | 索引保留 |
+| 166 | SMPL Summary | 索引保留 |
+| 167 | SMPL Summary | 正文核对 |
+| 168 | Inverse Kinematics | 正文核对 |
+| 169 | Inverse Kinematics | 正文核对 |
+| 170 | Inverse Kinematics | 正文核对 |
+| 171 | Inverse Kinematics | 索引保留 |
+| 172 | Inverse Kinematics | 索引保留 |
+| 173 | Inverse Kinematics | 索引保留 |
+| 174 | Inverse Kinematics | 正文核对 |
+| 175 | Inverse Kinematics | 正文核对 |
+| 176 | Inverse Kinematics | 正文核对 |
+| 177 | Inverse Kinematics | 正文核对 |
+| 178 | Inverse Kinematics | 正文核对 |
+| 179 | Inverse Kinematics | 正文核对 |
+| 180 | Inverse Kinematics | 正文核对 |
+| 181 | Inverse Kinematics | 正文核对 |
+| 182 | Inverse Kinematics | 正文核对 |
+| 183 | IK: Multiple Constraints | 正文核对 |
+| 184 | IK: Point/Look At | 正文核对 |
+| 185 | IK: Balance | 正文核对 |
+| 186 | IK: Keyframing | 正文核对 |
+| 187 | Inverse Kinematics | 正文核对 |
+| 188 | Inverse Kinematics | 索引保留 |
+| 189 | Inverse Kinematics | 正文核对 |
+| 190 | Inverse Kinematics | 索引保留 |
+| 191 | Inverse Kinematics | 正文核对 |
+| 192 | Inverse Kinematics | 索引保留 |
+| 193 | Inverse Kinematics | 索引保留 |
+| 194 | Inverse Kinematics | 正文核对 |
+| 195 | Inverse Kinematics | 正文核对 |
+| 196 | Inverse Kinematics | 正文核对 |
+| 197 | Inverse Kinematics | 索引保留 |
+| 198 | Inverse Kinematics | 正文核对 |
+| 199 | Style-Based IK | 索引保留 |
+| 200 | Style-Based IK | 索引保留 |
+| 201 | Kinematic Animation Pros and Cons | 正文核对 |
+| 202 | Acknowledgments | 索引保留 |

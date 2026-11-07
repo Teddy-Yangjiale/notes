@@ -1,0 +1,86 @@
+[
+  {
+    "key": "01",
+    "term": "fa26",
+    "filename": "L01-introduction.pdf",
+    "pages": 157,
+    "sha256": "3ac20951c742749d4a1f665e23fb5adfe31681717fb7b1ebdc8dc1fab07edaa0"
+  },
+  {
+    "key": "14",
+    "term": "fa26",
+    "filename": "L14-radiometry.pdf",
+    "pages": 56,
+    "sha256": "cf8e289c8a063a856425f5f9888a88f6347801c29132f01e19e2225f5e4c79f9"
+  },
+  {
+    "key": "15",
+    "term": "fa26",
+    "filename": "L15-monte-carlo-integration.pdf",
+    "pages": 113,
+    "sha256": "95c7b95c551b45e59dd4b26e013e5fd49184b2edcc30f430fdba0c8607186786"
+  },
+  {
+    "key": "16",
+    "term": "fa26",
+    "filename": "L16-17-global-illumination-path-tracing.pdf",
+    "pages": 173,
+    "sha256": "34cc6f266c19ea3be4d18f60efa5e10ee6197f83e1281e61b3d29a54a9e93fe7"
+  },
+  {
+    "key": "18",
+    "term": "sp26",
+    "filename": "SP26-L18-material-modeling.pdf",
+    "pages": 118,
+    "sha256": "81494c46050496eb826b488d8e4ce86be53046635cd997f7669ad2c4b72d9981"
+  },
+  {
+    "key": "19",
+    "term": "sp26",
+    "filename": "SP26-L19-20-color-science.pdf",
+    "pages": 112,
+    "sha256": "446026f8a93ce4d8a1d154467d2ad3f1560aaa7de11c5bb53e401b0b8a6ffc83"
+  },
+  {
+    "key": "21",
+    "term": "sp26",
+    "filename": "SP26-L21-23-animation.pdf",
+    "pages": 202,
+    "sha256": "3e5a931d4b3e7a8da84f4f40794a39edab5a1edf08f3642dc1a33435fd6a3ec8"
+  },
+  {
+    "key": "24",
+    "term": "sp26",
+    "filename": "SP26-L24-physical-simulation.pdf",
+    "pages": 116,
+    "sha256": "2c230f50f39789dc28cf54d26d74f8d4b509fc97b88728e625730107f7fc3721"
+  },
+  {
+    "key": "25",
+    "term": "sp26",
+    "filename": "SP26-L25-fluid-simulation.pdf",
+    "pages": 56,
+    "sha256": "b53b92ca0e611099dc2c98dbee24dcca6fd42de4a4e265b191ceceb81c29061d"
+  },
+  {
+    "key": "26",
+    "term": "sp26",
+    "filename": "SP26-L26-27-virtual-reality.pdf",
+    "pages": 178,
+    "sha256": "ea679995b81243b9a34751a773645f706e92eaa97dcda5d2af2ab9c3e56fca78"
+  },
+  {
+    "key": "90",
+    "term": "su26",
+    "filename": "SU26-L16-17-cameras-lenses.pdf",
+    "pages": 132,
+    "sha256": "dfe1948ec660c4fb297f0ff38ab76d6372e16f5ff49e01b310e0ee4fbb959cf6"
+  },
+  {
+    "key": "91",
+    "term": "su26",
+    "filename": "SU26-L22-image-processing.pdf",
+    "pages": 61,
+    "sha256": "640e33cc57fca533d077bfd3cee244885e46d1b36027b7ec0b4acf20d701f60c"
+  }
+]

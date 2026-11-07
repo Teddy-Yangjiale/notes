@@ -37,7 +37,7 @@ export const SERIES: Series[] = [
     title: 'CS184 · 计算机图形学',
     badge: 'CS184',
     description:
-      'UC Berkeley CS184/284A Foundations of Computer Graphics（Fall 2026）逐讲中文笔记。' +
+      'UC Berkeley CS184/284A 中文课程笔记：以 Fall 2026 为主线，接入 Spring 2026 的材质、颜色、动画、物理与 VR，并补充 Summer 2026 的相机和图像处理。' +
       '不按幻灯片顺序翻译，而是先把一整讲压成一条推理链，每个关键原理配一张手绘示意图讲清「关系」，' +
       '再补手算、易错点与自测；正文只留关键页截图，全部页面另附索引表。',
     color: 'sky',
