@@ -53,7 +53,7 @@ def notes(c,allcourses,pages,figs,meta):
     used=sorted({p for s in c['sections'] for p in s['pages']})
     source=f'https://github.com/Teddy-Yangjiale/CS184/blob/main/CS184_2026/{c["term"]}/lectures/{c["filename"]}'
     short=c['title'].split('：')[0]
-    summary=c['chain']+'。以原课件为依据，配 20 张可编辑图解、12 个数值例子、26 道带答案自测与 PDF 全页索引。'
+    summary=c['chain']+'。配 24 张可编辑图解、16 个手算、30 道自测；新增四组逐步推导、可运行故障对照与 PDF 全页索引。'
     text=f'''---
 title: "CS184 {c['title']}"
 date: 2026-11-07
@@ -80,12 +80,12 @@ shortTitle: "{short}"
 | 内容 | 本文提供什么 |
 |---|---|
 | 来源 | {term}，PDF 共 {count} 页；正文选择 {len(used)} 张关键页 |
-| 图解 | 12 张概念关系图 + 8 张几何或数值图，均有原生可编辑 PPTX |
-| 手算 | 12 个带输入、结果和回代检查的教学例子 |
-| 复习 | 26 道自测及答案，末尾保留全页索引 |
+| 图解 | 12 张概念关系图 + 12 张几何或数值图，均有原生可编辑 PPTX |
+| 手算 | 16 个教学例子；深入部分展开输入、中间量、回代、反例与代码 |
+| 复习 | 30 道自测及答案，末尾保留全页索引 |
 | 运行证据 | 数值核对脚本覆盖解析小模型，不代表完整渲染器或模拟器已经实现 |
 
-[下载本篇 20 张可编辑图解（PPTX 与操作 JSON）](/notes/cs184/figures/{key}-editable.zip)
+[下载本篇 24 张可编辑图解（PPTX 与操作 JSON）](/notes/cs184/figures/{key}-editable.zip)
 
 ### 课件与推导的使用边界
 
@@ -128,7 +128,9 @@ shortTitle: "{short}"
             title=page_title(pages[p-1]['text'])
             text+=f'#### {title}\n\n*PDF p{p} · 对应本节：{s["h"]}*\n\n![PDF p{p}：{title}](images/p{p:0{pad}d}.png)\n\n'
         text+='</details>\n\n'
-    text+='## 13. 把十二个数值例子连成检查顺序\n\n'
+    v2=runpy.run_path(str(SCRIPTS/'cs184-v2-content.py'))
+    text+=v2['render'](key,c)
+    text+='## 13. 把基础数值例子连成检查顺序\n\n'
     text+='先手算再运行。随仓库提供的 `scripts/cs184-numerical-checks.py` 是小模型验证，不依赖 GPU，也不修改服务器配置。它不能替代完整渲染场景或模拟系统的验证。\n\n'
     text+=table(['顺序','本节关系','最容易漏掉的约定'],[(i,s['h'],s['symbols'].split(';')[-1]) for i,s in enumerate(c['sections'],1)])+'\n'
     text+='### 复现实验的最小记录\n\n'
@@ -172,7 +174,7 @@ shortTitle: "{short}"
     if key=='16':text+='外部核对：[PBRT 4e：Path Tracing](https://pbr-book.org/4ed/Light_Transport_I_Surface_Reflection/Path_Tracing)。用于核对随机终止与路径采样的解释；本文标量例子为自行推导。\n\n'
     text=text.rstrip()+'\n'
     (out/'index.md').write_text(text,encoding='utf8')
-    return dict(key=key,slug=c['slug'],pages=count,screenshots=len(used),diagrams=20,worked_examples=12,self_tests=26,
+    return dict(key=key,slug=c['slug'],pages=count,screenshots=len(used),diagrams=24,worked_examples=16,self_tests=30,
                 lines=len(text.splitlines()),tables=text.count('| ---'),h2=text.count('\n## '))
 
 def main():

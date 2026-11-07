@@ -14,7 +14,7 @@ def main():
         key = course['key']
         folder = ROOT / '.work/cs184/editable' / key
         slides = sorted(folder.glob('*.pptx'))
-        assert len(slides) == 20, (key, len(slides))
+        assert len(slides) == 24, (key, len(slides))
         with zipfile.ZipFile(out / f'{key}-editable.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
             for slide in slides:
                 spec = slide.with_suffix('.json')
@@ -27,7 +27,7 @@ def main():
                 'The corresponding JSON is the pptdraw operation source.\n'
                 'Figure explanations appear in the course notes and slide speaker notes.\n'
                 'These are original teaching diagrams, not the Berkeley lecture slides.\n')
-        print(key, '20 editable figures packaged')
+        print(key, '24 editable figures packaged')
 
 
 if __name__ == '__main__':
