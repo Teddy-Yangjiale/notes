@@ -13,6 +13,11 @@ for md in sorted((ROOT / 'src/content/notes').glob('internship-*/index.md')):
         continue
     soup = BeautifulSoup(target.read_text(encoding='utf-8'), 'html.parser')
     text = md.read_text(encoding='utf-8')
+    expected_title = re.search(r'^title:\s*"(.*)"\s*$', text, re.M)
+    if expected_title and soup.select_one('h1').get_text() != expected_title.group(1):
+        errors.append(f'{md.parent.name}: rendered title differs from source; stale content cache')
+    if len(soup.select('article h2')) != len(re.findall(r'^## ', text, re.M)):
+        errors.append(f'{md.parent.name}: rendered section count differs from source')
     bad = soup.select('.katex-error')
     errors.extend(f'{md.parent.name}: formula error {x.get_text()}' for x in bad)
     for el in soup.select('[href], img[src]'):
