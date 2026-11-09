@@ -1,0 +1,20 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>e00_frames.py</title><style>body{margin:24px;font:15px system-ui;background:#faf8f3;color:#243342}pre{overflow:auto;line-height:1.6;background:white;padding:16px}.line{display:block}.line:target{background:#fff1a8}a{color:#58728a}header{overflow-wrap:anywhere}</style><header><a href="/notes/series/internship/">返回实习专栏</a><h1>e00_frames.py</h1><p>只读快照：2026-11-09 · /home/yjl/crack/city8827/build/e00_frames.py</p><p>SHA-256: 8447fe380ea1bed7caf05efafbeb592e4e18ed19d06eff5d509e4a5d3d1cc403</p></header><pre><span class="line" id="L1"><a href="#L1">   1</a> # -*- coding: utf-8 -*-</span>
+<span class="line" id="L2"><a href="#L2">   2</a> &quot;&quot;&quot;e00: 取出一段路的 1080p 原片帧, 按标定去畸变成针孔图 (去畸变后内参不变, 与 r04_hd.py 同一口径)。</span>
+<span class="line" id="L3"><a href="#L3">   3</a> 只读 ~/gd 的原片和 ~/crack/viewer3d/work 的帧号对照表; 写到 work/frames/&lt;帧号&gt;.jpg (质量 97) 和 work/cam.json。</span>
+<span class="line" id="L4"><a href="#L4">   4</a> 用法: e00_frames.py &lt;起帧&gt; &lt;止帧&gt;&quot;&quot;&quot;</span>
+<span class="line" id="L5"><a href="#L5">   5</a> import sys, os, json, time</span>
+<span class="line" id="L6"><a href="#L6">   6</a> import numpy as np, cv2</span>
+<span class="line" id="L7"><a href="#L7">   7</a> HERE = os.path.dirname(os.path.abspath(__file__)); ROOT = os.path.dirname(HERE); WORK = ROOT + &quot;/work&quot;</span>
+<span class="line" id="L8"><a href="#L8">   8</a> sys.path.insert(0, os.path.expanduser(&quot;~/crack/show8821/build&quot;)); sys.path.insert(0, os.path.expanduser(&quot;~/crack/viewer3d/build&quot;))</span>
+<span class="line" id="L9"><a href="#L9">   9</a> from sc_common import Cam, Track, C</span>
+<span class="line" id="L10"><a href="#L10">  10</a> import video0903</span>
+<span class="line" id="L11"><a href="#L11">  11</a> </span>
+<span class="line" id="L12"><a href="#L12">  12</a> F0, F1 = int(sys.argv[1]), int(sys.argv[2]); os.makedirs(WORK + &quot;/frames&quot;, exist_ok=True)</span>
+<span class="line" id="L13"><a href="#L13">  13</a> cam = Cam(1.0); tr = Track(); want = [f for f in range(F0, F1 + 1) if f in tr.row]</span>
+<span class="line" id="L14"><a href="#L14">  14</a> cfg = C.frontcam_cfg()</span>
+<span class="line" id="L15"><a href="#L15">  15</a> json.dump(dict(w=1920, h=1080, fx=cam.fx, fy=cam.fy, cx=cam.cx, cy=cam.cy, height=cam.h, roll=cfg[&quot;roll&quot;], pitch=cfg[&quot;pitch&quot;], yaw=cfg[&quot;yaw&quot;], R_cam2car=cam.R.tolist(),</span>
+<span class="line" id="L16"><a href="#L16">  16</a>                note=&quot;去畸变后的针孔内参 (像素), 与原片内参相同; R_cam2car: 相机系 (x 右 y 下 z 前) -&gt; 车身系 (x 右 y 前 z 上)&quot;), open(WORK + &quot;/cam.json&quot;, &quot;w&quot;), indent=1)</span>
+<span class="line" id="L17"><a href="#L17">  17</a> t0 = time.time(); n = 0</span>
+<span class="line" id="L18"><a href="#L18">  18</a> for f, r, img in video0903.iter_frames(want=want):</span>
+<span class="line" id="L19"><a href="#L19">  19</a>     cv2.imwrite(&quot;%s/frames/%06d.jpg&quot; % (WORK, f), cam.undistort(img), [cv2.IMWRITE_JPEG_QUALITY, 95]); n += 1</span>
+<span class="line" id="L20"><a href="#L20">  20</a> print(&quot;帧 %d~%d: 取出 %d / %d 张 1080p 去畸变帧 [%.0fs]&quot; % (F0, F1, n, len(want), time.time() - t0))</span></pre></html>

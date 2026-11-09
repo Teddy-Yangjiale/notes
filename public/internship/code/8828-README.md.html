@@ -1,0 +1,92 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>README.md</title><style>body{margin:24px;font:15px system-ui;background:#faf8f3;color:#243342}pre{overflow:auto;line-height:1.6;background:white;padding:16px}.line{display:block}.line:target{background:#fff1a8}a{color:#58728a}header{overflow-wrap:anywhere}</style><header><a href="/notes/series/internship/">返回实习专栏</a><h1>README.md</h1><p>只读快照：2026-11-09 · /home/yjl/crack/viewer1012/README.md</p><p>SHA-256: 1d1a8e68e451e644a32d8adb4612e7e7f5940e2757ee382445cb4fe64d321954</p></header><pre><span class="line" id="L1"><a href="#L1">   1</a> # viewer1012：2026-10-12 行车录像的独立底图（端口 8828）</span>
+<span class="line" id="L2"><a href="#L2">   2</a> </span>
+<span class="line" id="L3"><a href="#L3">   3</a> 2026-10-13 建。用户要求“用 1012 的数据作为底图，然后跟 0903 的做比较，告诉我还要训练什么，然后实施”。</span>
+<span class="line" id="L4"><a href="#L4">   4</a> 做法：把 8826（0903 底图）的构建链整套拷贝过来改成读 10-12 的数据，与 0903 共用同一个 ENU 原点，所以两张底图直接可比；</span>
+<span class="line" id="L5"><a href="#L5">   5</a> 页面默认是 1012 底图 + 1012 病害层，“对比”模式左边是 0903 底图（叠 0924 病害）、右边是 1012 底图（叠 1012 病害），卷帘拉动。</span>
+<span class="line" id="L6"><a href="#L6">   6</a> 8826 / 8821 / 0903 的脚本与数据一个字节没动（`work/seg1012f|r*` 和前摄条带 `work/f12_*` 是指向 8826 的软链接，两边共用）。</span>
+<span class="line" id="L7"><a href="#L7">   7</a> </span>
+<span class="line" id="L8"><a href="#L8">   8</a> “还要训练什么”的回答：**真正要训练的只有三维高斯（可选，`gs/run_all.sh`，约 2.3 小时一张 5090）**；其余全是推理或解算——</span>
+<span class="line" id="L9"><a href="#L9">   9</a> SAM 3 全帧分割（21 分钟）、ABot-Recon 重建（16 分钟）、前摄外参核准、条带/里程计/两视转角/轨迹、正射图、点云融合、站点、病害层两轮配准。高斯还没训。</span>
+<span class="line" id="L10"><a href="#L10">  10</a> </span>
+<span class="line" id="L11"><a href="#L11">  11</a> 访问：`http://192.168.203.143:8828/`（Tailscale `http://100.105.132.36:8828/`）。启动（重启后不会自启）：</span>
+<span class="line" id="L12"><a href="#L12">  12</a> </span>
+<span class="line" id="L13"><a href="#L13">  13</a>     setsid nohup ~/3dgs/.venvs/geometry/bin/python ~/crack/viewer1012/site2/serve2.py --port 8828 &gt;&gt; ~/crack/viewer1012/work/serve_8828.log 2&gt;&amp;1 &lt; /dev/null &amp;</span>
+<span class="line" id="L14"><a href="#L14">  14</a> </span>
+<span class="line" id="L15"><a href="#L15">  15</a> ## 数据</span>
+<span class="line" id="L16"><a href="#L16">  16</a> </span>
+<span class="line" id="L17"><a href="#L17">  17</a> - 原始：`~/gd/2026-10-12/record/*.264`（DVR 私有容器，ch1 后摄、ch2 前摄，1080p，可解码帧 6.25 fps，容器解法见 8826 README 的 10-12 一节）、`1012.csv`（平台抓拍清单，定位每 ~4 m / 0.25 s 一条）、`log/blackbox`。</span>
+<span class="line" id="L18"><a href="#L18">  18</a> - 前摄全部帧：`~/data/1012/front_all/%06d.jpg`（7385 张 1080p）+ `frames.json`（每帧时刻来自容器计时记录）。抽帧脚本 `build/s12_extract_all.py`（原在 /tmp/p1012）。</span>
+<span class="line" id="L19"><a href="#L19">  19</a> - 后摄病害层的数据（每 2 m 一张）与 8826 共用：`~/data/1012/ch1_rear|ch2_front`、`stitich/out/ipm_1012_wide`。</span>
+<span class="line" id="L20"><a href="#L20">  20</a> - ABot-Recon 重建：`~/gd/ABot-Recon/outputs/rec1012_h756`（`build/abot_hires.py` = demo.py 加 `height=420, width=756`，与 `rec0903_hires` 同分辨率，1080p 原图输入，每 5 帧一张点图共 1477 张，9.4 GB，一张 5090 跑 16 分钟）。</span>
+<span class="line" id="L21"><a href="#L21">  21</a>   首版用 demo 默认 504×280（960×540 输入）只有 14 分钟，但点云比 0903 稀一倍，已删。</span>
+<span class="line" id="L22"><a href="#L22">  22</a> </span>
+<span class="line" id="L23"><a href="#L23">  23</a> ## 与 0903 底图流程的差别（build/，其余与 8826 同名脚本一致，只是文件名 0903 → 1012）</span>
+<span class="line" id="L24"><a href="#L24">  24</a> </span>
+<span class="line" id="L25"><a href="#L25">  25</a> | 步骤 | 0903（8826） | 1012（这里） |</span>
+<span class="line" id="L26"><a href="#L26">  26</a> |---|---|---|</span>
+<span class="line" id="L27"><a href="#L27">  27</a> | 帧的读取 | `video0903.py` 从 mp4 逐帧解码、与 JPEG 帧号对照 | `video1012.py` 直接读 JPEG，帧号 = 解码顺序 |</span>
+<span class="line" id="L28"><a href="#L28">  28</a> | 每帧时刻 | `t01e_time.py`：“帧号/5.827 + 时延模型”，T0 靠里程计定 | `t01e_1012.py`：时刻直接来自容器计时记录（ms 级，帧间隔 0.16 s、每隔几帧 0.20 s） |</span>
+<span class="line" id="L29"><a href="#L29">  29</a> | 定位源 | 黑匣子每秒一条 | **黑匣子**（`log/blackbox/*.json`，用户 10-13 要求；`t01e_1012.py --gps=bb`，默认）：1 Hz，33% 的记录位置不更新只取更新的 918 个点；备选 `--gps=csv` 平台清单（每 0.25 s 一条）。两者同一时刻位置差中位 0.52 m，**时刻关系一致**，都要把定位时刻加 0.56 s（定位相对录像帧的超前量：没扣时底图比病害层先验整体超前 5.65 m，扣后剩 1.2 m） |</span>
+<span class="line" id="L30"><a href="#L30">  30</a> | 前摄外参 | 两把尺子核准 5.25 / −1.06 / −1.93 / 1.475 | 横滚 −0.08、偏航 3.20、高 1.497 来自 `t03c_calmatch12`（8826 里，对 0903 正射图坐标下降；0924 同一台车是 0.68 / 4.56 / 4.2 / 1.498）；**俯仰 4.93** 由 0903 那两把尺子重定（`probe_pitch.py`，见“查明的问题” 2；正射图匹配给的 4.61 对俯仰不敏感） |</span>
+<span class="line" id="L31"><a href="#L31">  31</a> | 条带里程计 `t01a_vo` | 角点 700 个、质量 0.012、LK 窗 31 | DVR 画质差：同一套参数 0903 每张条带中位 408 个角点、1012 只有 71 个 → 改 4000 / 0.001 / 最小间距 8 / 窗 41（抽样 60 对成功率 50% → 67%） |</span>
+<span class="line" id="L32"><a href="#L32">  32</a> | 位姿图 `t01f_track` | 里程计边 + 两视几何转角 + 定位先验 | 另加 **粗配备用边**（细配失败但互相关峰 ≥ 0.6 且位移在定位预测 0.8~1.25 倍内的相邻对，σ 横 6 / 纵 8 cm）和 **里程计尺度系数**（细配位移 / 定位弧长 的中位数的倒数，按定位位置算、不用设备车速字段；俯仰改 4.93 后是 1.007，4.61 时是 1.044）；两视转角按帧号对上（换定位源后选帧会变） |</span>
+<span class="line" id="L33"><a href="#L33">  33</a> | 隧道段 | 画面顶部亮度 &lt; 70 | 按 0903 隧道进出口位置在 1012 轨迹上找到的帧 1745–2364、4000–4725（第一程洞内亮度 83，阈值法会漏） |</span>
+<span class="line" id="L34"><a href="#L34">  34</a> | 两视几何转角 | `audit8821/out/rot0903.npz` | `t01i_rot1012.py`（同一做法同一列，`cv2.setNumThreads(1)`）→ `rot1012.npz` |</span>
+<span class="line" id="L35"><a href="#L35">  35</a> | 环境点云 `t04_cloud` | `rec0903_hires`，点图 420×756 | `rec1012_h756`，同 420×756；点图像素 → 1080p 像素的换算按 `H_M/W_M/ABOT_SRC` 参数化（宽锁定缩放 + 居中裁，见 `abot_recon/preprocessing.py`） |</span>
+<span class="line" id="L36"><a href="#L36">  36</a> | 病害层 | 0924 平台抓拍跨天配准到 0903 底图 | 1012 自己的后摄配到 1012 自己的底图（`run_layer1012.sh`：前摄条带/转角/里程计直接软链 8826 算好的，从“对正射图匹配”起跑两轮） |</span>
+<span class="line" id="L37"><a href="#L37">  37</a> </span>
+<span class="line" id="L38"><a href="#L38">  38</a> 驱动脚本：`run_map1012.sh [strips|vo|rot|track|flat|ortho|cloud|site]`（从指定步骤起跑，`SKIP_ROT=1` 跳过两视转角；日志 `work/log/map.log`，每步 `work/log/&lt;步&gt;.log`）、</span>
+<span class="line" id="L39"><a href="#L39">  39</a> `run_after_map.sh`（等 map.log 出“底图完成”→ `run_layer1012.sh` → 起 8828）、`q_compare1012.py`（下面所有对比数字的来源）、`probe_vo.py`（里程计逐步诊断，0903 vs 1012）。</span>
+<span class="line" id="L40"><a href="#L40">  40</a> 前两轮的日志留着：`map_v1.log`（原版里程计参数，连通 34%）、`map_v2.log`（改参后，定位没扣超前量）、`track_v1|v2.log`、`work/track1012_v1|v2.npz`。</span>
+<span class="line" id="L41"><a href="#L41">  41</a> </span>
+<span class="line" id="L42"><a href="#L42">  42</a> ## 结果：1012 底图 vs 0903 底图（`q_compare1012.py`，2026-10-13，最终版 = 黑匣子定位 + 俯仰 4.93）</span>
+<span class="line" id="L43"><a href="#L43">  43</a> </span>
+<span class="line" id="L44"><a href="#L44">  44</a> | | 0903 底图 | 1012 底图 |</span>
+<span class="line" id="L45"><a href="#L45">  45</a> |---|---|---|</span>
+<span class="line" id="L46"><a href="#L46">  46</a> | 位姿图节点 / 里程 | 6640 / 11.58 km | 5696 / 11.57 km |</span>
+<span class="line" id="L47"><a href="#L47">  47</a> | 有里程计相连的相邻对 | 91.4% | 59%（原版参数 34%；细配 52% + 粗配备用边 7%） |</span>
+<span class="line" id="L48"><a href="#L48">  48</a> | 可用段（连续、≥ 60 m、不在隧道） | 5 段 7.99 km（79% 节点） | 19 段 6.90 km（57% 节点） |</span>
+<span class="line" id="L49"><a href="#L49">  49</a> | 相邻边残差 横 / 纵 / 转角 | 6 mm / 5 mm / 0.011° | 0 mm / 5 mm / 0.001° |</span>
+<span class="line" id="L50"><a href="#L50">  50</a> | 位姿相对定位 横 / 沿路 (p50) | 0.12 / 0.29 m | 0.10 / 0.48 m |</span>
+<span class="line" id="L51"><a href="#L51">  51</a> | 正射图（2 cm/px） | 536 块 81 528 m² | 476 块 67 306 m²（共有 464 块；0903 独有 72，1012 独有 12） |</span>
+<span class="line" id="L52"><a href="#L52">  52</a> | 环境点云（6 cm 体素，同分辨率重建） | 287 细瓦片 45.7 M 点 | 253 细瓦片 26.5 M 点 |</span>
+<span class="line" id="L53"><a href="#L53">  53</a> | 站点 | — | 1527 个视点 19 段 |</span>
+<span class="line" id="L54"><a href="#L54">  54</a> </span>
+<span class="line" id="L55"><a href="#L55">  55</a> 三个版本的对照（同一套链，只换定位源 / 俯仰；日志 `map_v3|v4|map.log`、`track_v3|v4|track.log`、`layer_v3|v4|layer.log`，位姿 `track1012_v3|v4.npz`）：</span>
+<span class="line" id="L56"><a href="#L56">  56</a> </span>
+<span class="line" id="L57"><a href="#L57">  57</a> | | v3 平台清单 csv，俯仰 4.61 | v4 黑匣子，俯仰 4.61 | **v5 黑匣子，俯仰 4.93（上线）** |</span>
+<span class="line" id="L58"><a href="#L58">  58</a> |---|---|---|---|</span>
+<span class="line" id="L59"><a href="#L59">  59</a> | 里程计尺度系数（按定位弧长） | 1.044 | 1.061 | **1.007** |</span>
+<span class="line" id="L60"><a href="#L60">  60</a> | 里程计连通 / 可用段 | 61% / 16 段 7.12 km | 58% / 20 段 6.99 km | 59% / 19 段 6.90 km |</span>
+<span class="line" id="L61"><a href="#L61">  61</a> | 位姿相对定位 横 / 沿路 p50（p95） | 0.16 / 0.44（0.87 / 2.23） | 0.11 / 0.44（1.45 / 3.30） | 0.10 / 0.48（1.39 / 3.56） |</span>
+<span class="line" id="L62"><a href="#L62">  62</a> | 正射图路面 | 68 751 m² | 66 973 m² | 67 306 m² |</span>
+<span class="line" id="L63"><a href="#L63">  63</a> | 点云 | 28.8 M | 27.3 M | 26.5 M |</span>
+<span class="line" id="L64"><a href="#L64">  64</a> | 病害层 3 级 / 0 级 | 523 / 531 | 428 / 697 | 473 / 651 |</span>
+<span class="line" id="L65"><a href="#L65">  65</a> </span>
+<span class="line" id="L66"><a href="#L66">  66</a> 黑匣子比平台清单稀（1 Hz、三分之一记录不更新，有效点 918 对 3754），所以可用段略碎、定位残差的 p95 大一截；横向中位反而小一点。按用户要求上线的是黑匣子版。</span>
+<span class="line" id="L67"><a href="#L67">  67</a> </span>
+<span class="line" id="L68"><a href="#L68">  68</a> - 两天的车道：去程 0903 的轨迹在 1012 轨迹右侧中位 +2.5 m（35% 在同一车道内；csv 版是 +1.8 m）——**去程两天开的不是同一条车道**；回程 +0.5 m（83% 同车道）。</span>
+<span class="line" id="L69"><a href="#L69">  69</a> - 两张底图的相互错位（共有块上 4 cm/px 高通相位相关；只有 11% 的块给出可信峰，所以只能看个量级）：0903 相对 1012 横向中位 +0.43 m（IQR +0.14~+0.79）、沿路 +0.05 m（IQR −0.30~+0.68）；csv 版是 +0.29 / −0.02。</span>
+<span class="line" id="L70"><a href="#L70">  70</a>   做法上的坑：先把两图没覆盖的地方置 0 再高通，共同的覆盖边界会在零位移处造出假峰（第一次算出“中位 0.00 m、IQR ±1 cm”，全是假的）；改成先填本图均值再高通、共同覆盖区向内收 40 cm 做窗，并加了“与另一块相关”的对照（对照只 11% 被判可信、0 个落在 0.1 m 内）。</span>
+<span class="line" id="L71"><a href="#L71">  71</a> - 病害层（同一批 1012 后摄俯视图 3451 张）：配在 0903 底图上：3 级 269 张（10%）、2 级 798、1 级 454、0 级 1104、不在地图上 826；配在 1012 自己的底图上：**3 级 523 张（20%）**、2 级 517、1 级 1030、**0 级 531（20%）**、不在地图上 850。前摄条带对正射图成峰 6% → 33%，HMM 路径匹配分数中位 0.13 → 0.53（同一天的纹理对得上）。同一张俯视图在两张底图上的位置差（两边都 3 级的 134 张）：横向 |.| 中位 0.74 m、沿路 1.85 m（p90 3.2 / 5.2 m）——这是两张底图之间的定位差（天与天之间的 GNSS 偏差加上各自的沿路不确定），不是哪一边配错。同一瞬间前后摄的核对对：两张都 ≥ 2 级 217 对，横向不一致中位 2 cm（p90 8）、沿路 14 cm（p90 36），与 0903 底图上的 215 对（2 / 10 cm）相当。</span>
+<span class="line" id="L72"><a href="#L72">  72</a> </span>
+<span class="line" id="L73"><a href="#L73">  73</a> ## 查明的问题与处理</span>
+<span class="line" id="L74"><a href="#L74">  74</a> </span>
+<span class="line" id="L75"><a href="#L75">  75</a> 1. **DVR 录像的路面纹理弱，条带里程计跟不住**。`probe_vo.py` 同一套 `vo_images` 分步对比：路面占比 0.57 vs 0.53、带通纹理强度 7.8 vs 5.9 差两成，但角点数 408 vs 71 差 5.7 倍，LK 跟住数和 RANSAC 内点随之不够。</span>
+<span class="line" id="L76"><a href="#L76">  76</a>    放宽角点阈值（抽样成功率 50% → 67%）+ 粗配备用边后，相邻对连通 34% → 61%；剩下的差距是数据本身（压缩画质），没有再往下抠。</span>
+<span class="line" id="L77"><a href="#L77">  77</a> 2. **里程计位移比定位短 4.4%，原因是前摄俯仰标定偏小 0.3°（已查明、已改）。** 线索：比值随加速度变（加速 1.01、匀速 0.95、减速 0.90），改定位超前量 0~1.1 s 都不变，排除时间偏移；</span>
+<span class="line" id="L78"><a href="#L78">  78</a>    定位折线与 0903 位姿图长度只差 ±1.5%、`1012.csv` 位移/车速自洽 1.004，排除定位；卷帘快门最多解释 1.3%。俯仰错会让条带沿路尺度随距离线性变，正是 0903 当年 t01c 的两把尺子量的东西：</span>
+<span class="line" id="L79"><a href="#L79">  79</a>    `probe_pitch.py` 在 200 对匀速相邻帧上按候选俯仰重渲染条带跑同一套里程计——4.61 时 位移/弧长 0.937、远近残差斜率 −0.0034/m；4.93 时 1.00 / 0；5.25 时 1.042 / +0.0030。两把尺子都指向 **4.93**，高度 1.497 不用动（该处比值已是 1）。</span>
+<span class="line" id="L80"><a href="#L80">  80</a>    加速/减速两组的差是车身俯仰（加速抬头、刹车点头），静态标定消不掉。`t03c_calmatch12` 对 0903 正射图的匹配分数对俯仰只差 1~3%，定不住俯仰，所以当时的 4.61 是错的；8826 里那份 1012 病害层仍用 4.61（没动）。</span>
+<span class="line" id="L81"><a href="#L81">  81</a>    另：黑匣子的 speed 字段不可靠（同一时刻与 csv 车速之比中位 0.995 但 p10 只有 0.54），尺度系数改按定位弧长算。</span>
+<span class="line" id="L82"><a href="#L82">  82</a> 3. **平台定位的 0.56 s 超前也作用于底图**。第一次配病害层时先验相对底图“向后 −5.65 m”（IQR −6.6~−3.2，搜索窗 ±7 m 快撑满），说明底图整体超前；`t01e_1012` 把 csv 时刻加 0.56 s 后，HMM 相对先验只剩 −1.24 m（IQR −1.56~−0.76）。</span>
+<span class="line" id="L83"><a href="#L83">  83</a> 4. **ABot demo 默认 504×280**（`InferenceConfig` 默认；0903 那次是 420×756）：`from_pretrained(..., height=420, width=756)` 即可，t04 里点图像素到原图像素的换算随之参数化。</span>
+<span class="line" id="L84"><a href="#L84">  84</a> </span>
+<span class="line" id="L85"><a href="#L85">  85</a> ## 坑（这次又踩的）</span>
+<span class="line" id="L86"><a href="#L86">  86</a> </span>
+<span class="line" id="L87"><a href="#L87">  87</a> - `pgrep -f &quot;abot_hires.py --image-dir&quot;` 匹配到了自己这条 ssh 的 `bash -c` 命令行，`kill $P` 把自己杀了，后面的 rm/sed/启动全没执行（本会话第三次）。**同一条 ssh 里的 pgrep/pkill 模式一律用 `[x]` 技巧**（`--image-di[r]`）。</span>
+<span class="line" id="L88"><a href="#L88">  88</a> - 监控脚本用 `grep &quot;失败&quot;` 判失败，被 vo 的正常输出“相邻对失败 3284 对”触发，两个监控同时误判链已死。判失败只认 run() 写的 `&quot;  失败: &quot;`。</span>
+<span class="line" id="L89"><a href="#L89">  89</a> - 桌面端内置浏览器直连 Tailscale 地址报 502，改 `ssh -f -N -L 18828:127.0.0.1:8828` 后开 `http://127.0.0.1:18828/`。</span>
+<span class="line" id="L90"><a href="#L90">  90</a> - 换定位源后 t01d 的选帧变了（车速窗不同），`rot1012.npz` 的帧列表对不上，t01f 改成按帧号对两视转角。</span>
+<span class="line" id="L91"><a href="#L91">  91</a> - 黑匣子 json 里 `gps=[lat, lon]`、`speed` km/h、`direction` 航向；`x/y/z` 全是 0，别拿它当坐标。</span>
+<span class="line" id="L92"><a href="#L92">  92</a> - 从第一轮 `rec1012_hires`（504×280）切到 `rec1012_h756` 时磁盘只剩 6 GB，先删旧的再跑 t04；`/tmp/p1012` 里拆出来的 h264 流（0.9 GB）已删，可由 `dvr_demux2.py` 重建。</span></pre></html>

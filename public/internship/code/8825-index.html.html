@@ -1,0 +1,334 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>index.html</title><style>body{margin:24px;font:15px system-ui;background:#faf8f3;color:#243342}pre{overflow:auto;line-height:1.6;background:white;padding:16px}.line{display:block}.line:target{background:#fff1a8}a{color:#58728a}header{overflow-wrap:anywhere}</style><header><a href="/notes/series/internship/">返回实习专栏</a><h1>index.html</h1><p>只读快照：2026-11-09 · /home/yjl/crack/show8821/site/index.html</p><p>SHA-256: 205456a3fa2c238ba1354e530ab986a99cf4ea82990c0ab25c1c0deb9335d80e</p></header><pre><span class="line" id="L1"><a href="#L1">   1</a> &lt;!doctype html&gt;</span>
+<span class="line" id="L2"><a href="#L2">   2</a> &lt;html lang=&quot;zh-CN&quot;&gt;</span>
+<span class="line" id="L3"><a href="#L3">   3</a> &lt;head&gt;</span>
+<span class="line" id="L4"><a href="#L4">   4</a> &lt;meta charset=&quot;utf-8&quot;&gt;</span>
+<span class="line" id="L5"><a href="#L5">   5</a> &lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1&quot;&gt;</span>
+<span class="line" id="L6"><a href="#L6">   6</a> &lt;title&gt;行车录像重建路面病害三维地图 · 8821 项目展示&lt;/title&gt;</span>
+<span class="line" id="L7"><a href="#L7">   7</a> &lt;meta name=&quot;description&quot; content=&quot;从一段行车记录仪录像和每秒一次的定位，重建 2 cm/px 的路面正射图和街景点云，并把另一天巡检的病害俯视图逐张定位到这张图上。&quot;&gt;</span>
+<span class="line" id="L8"><a href="#L8">   8</a> &lt;link rel=&quot;stylesheet&quot; href=&quot;style.css&quot;&gt;</span>
+<span class="line" id="L9"><a href="#L9">   9</a> &lt;link rel=&quot;stylesheet&quot; href=&quot;section-fold.css?v=20261028&quot;&gt;</span>
+<span class="line" id="L10"><a href="#L10">  10</a> &lt;/head&gt;</span>
+<span class="line" id="L11"><a href="#L11">  11</a> &lt;body&gt;</span>
+<span class="line" id="L12"><a href="#L12">  12</a> </span>
+<span class="line" id="L13"><a href="#L13">  13</a> &lt;header class=&quot;hero&quot;&gt;</span>
+<span class="line" id="L14"><a href="#L14">  14</a>   &lt;div class=&quot;wrap&quot;&gt;</span>
+<span class="line" id="L15"><a href="#L15">  15</a>     &lt;p class=&quot;kicker&quot;&gt;路面病害三维 / 正射地图 · 第二版（8821）&lt;/p&gt;</span>
+<span class="line" id="L16"><a href="#L16">  16</a>     &lt;h1&gt;一段行车录像，重建成&lt;br&gt;能给路面病害定位的三维地图&lt;/h1&gt;</span>
+<span class="line" id="L17"><a href="#L17">  17</a>     &lt;p class=&quot;lede&quot;&gt;输入只有一台行车记录仪的录像和每秒一次的定位。我们从录像里拼出 8 km、2 cm/px 的路面正射图，融合出 4553 万点的街景点云，再把另一天巡检拍下的 2241 张病害俯视图逐张对到这张图上，并给每一张标明“位置有多可靠”。&lt;/p&gt;</span>
+<span class="line" id="L18"><a href="#L18">  18</a>     &lt;p class=&quot;meta&quot;&gt;数据：2026-09-03 行车记录仪录像（1080p，25 分钟，全程 11.6 km）＋ 2026-09-24 巡检抓拍　·　地图构建：2026-10-01&lt;/p&gt;</span>
+<span class="line" id="L19"><a href="#L19">  19</a>     &lt;nav class=&quot;btns&quot;&gt;</span>
+<span class="line" id="L20"><a href="#L20">  20</a>       &lt;a class=&quot;btn primary&quot; data-viewer=&quot;&quot; href=&quot;#&quot; target=&quot;_blank&quot; rel=&quot;noopener&quot;&gt;打开交互查看器&lt;/a&gt;</span>
+<span class="line" id="L21"><a href="#L21">  21</a>       &lt;a class=&quot;btn&quot; href=&quot;#compare&quot;&gt;视频对比&lt;/a&gt;</span>
+<span class="line" id="L22"><a href="#L22">  22</a>       &lt;a class=&quot;btn&quot; href=&quot;#stitch&quot;&gt;拼接动画&lt;/a&gt;</span>
+<span class="line" id="L23"><a href="#L23">  23</a>       &lt;a class=&quot;btn&quot; href=&quot;#method&quot;&gt;核心方法&lt;/a&gt;</span>
+<span class="line" id="L24"><a href="#L24">  24</a>       &lt;a class=&quot;btn&quot; href=&quot;#results&quot;&gt;结果与验证&lt;/a&gt;</span>
+<span class="line" id="L25"><a href="#L25">  25</a>       &lt;a class=&quot;btn&quot; href=&quot;https://claude.ai/code/artifact/05e43d27-b4ac-480e-aa38-e0a0bdd91617&quot; target=&quot;_blank&quot; rel=&quot;noopener&quot;&gt;做法报告&lt;/a&gt;</span>
+<span class="line" id="L26"><a href="#L26">  26</a>     &lt;/nav&gt;</span>
+<span class="line" id="L27"><a href="#L27">  27</a>   &lt;/div&gt;</span>
+<span class="line" id="L28"><a href="#L28">  28</a> &lt;/header&gt;</span>
+<span class="line" id="L29"><a href="#L29">  29</a> </span>
+<span class="line" id="L30"><a href="#L30">  30</a> &lt;main&gt;</span>
+<span class="line" id="L31"><a href="#L31">  31</a> </span>
+<span class="line" id="L32"><a href="#L32">  32</a> &lt;!-- ============================================================ 1 对比 --&gt;</span>
+<span class="line" id="L33"><a href="#L33">  33</a> &lt;section id=&quot;compare&quot;&gt;</span>
+<span class="line" id="L34"><a href="#L34">  34</a>   &lt;div class=&quot;wrap&quot;&gt;</span>
+<span class="line" id="L35"><a href="#L35">  35</a>     &lt;h2&gt;&lt;span class=&quot;no&quot;&gt;1&lt;/span&gt;原视频 对 重建&lt;/h2&gt;</span>
+<span class="line" id="L36"><a href="#L36">  36</a>     &lt;p class=&quot;sec-lede&quot;&gt;左边是去畸变后的原视频，右边可切换为重建、只有路面图或高斯。三种画面采用同一套相机标定和 8826 逐帧轨迹。&lt;b&gt;拖动中间的分界线&lt;/b&gt;对比两边。画面上的框，是另一天巡检拍的病害俯视图落在这条路上的位置。&lt;/p&gt;</span>
+<span class="line" id="L37"><a href="#L37">  37</a> </span>
+<span class="line" id="L38"><a href="#L38">  38</a>     &lt;div class=&quot;cmp-bar&quot;&gt;</span>
+<span class="line" id="L39"><a href="#L39">  39</a>       &lt;div class=&quot;seg&quot; id=&quot;cmp-clip&quot; role=&quot;tablist&quot; aria-label=&quot;演示路段&quot;&gt;</span>
+<span class="line" id="L40"><a href="#L40">  40</a>       &lt;/div&gt;</span>
+<span class="line" id="L41"><a href="#L41">  41</a>       &lt;div class=&quot;seg&quot; id=&quot;cmp-mode&quot; role=&quot;tablist&quot; aria-label=&quot;对比内容&quot;&gt;</span>
+<span class="line" id="L42"><a href="#L42">  42</a>         &lt;button data-l=&quot;A&quot; data-r=&quot;B&quot; class=&quot;on&quot;&gt;原视频 ｜ 重建&lt;/button&gt;</span>
+<span class="line" id="L43"><a href="#L43">  43</a>         &lt;button data-l=&quot;A&quot; data-r=&quot;C&quot;&gt;原视频 ｜ 只有路面图&lt;/button&gt;</span>
+<span class="line" id="L44"><a href="#L44">  44</a>         &lt;button data-l=&quot;A&quot; data-r=&quot;G&quot;&gt;原视频 ｜ 高斯&lt;/button&gt;</span>
+<span class="line" id="L45"><a href="#L45">  45</a>       &lt;/div&gt;</span>
+<span class="line" id="L46"><a href="#L46">  46</a>       &lt;span class=&quot;sp&quot;&gt;&lt;/span&gt;</span>
+<span class="line" id="L47"><a href="#L47">  47</a>       &lt;label class=&quot;chk&quot;&gt;&lt;input type=&quot;checkbox&quot; id=&quot;cmp-ov&quot; checked&gt;叠加病害图层&lt;/label&gt;</span>
+<span class="line" id="L48"><a href="#L48">  48</a>     &lt;/div&gt;</span>
+<span class="line" id="L49"><a href="#L49">  49</a> </span>
+<span class="line" id="L50"><a href="#L50">  50</a>     &lt;div class=&quot;cmp-grid&quot;&gt;</span>
+<span class="line" id="L51"><a href="#L51">  51</a>       &lt;div class=&quot;cmp-stage&quot; id=&quot;cmp-stage&quot;&gt;</span>
+<span class="line" id="L52"><a href="#L52">  52</a>         &lt;video id=&quot;cmp-video&quot; muted loop playsinline preload=&quot;auto&quot;&gt;&lt;/video&gt;</span>
+<span class="line" id="L53"><a href="#L53">  53</a>         &lt;canvas id=&quot;cmp-canvas&quot; width=&quot;1920&quot; height=&quot;1080&quot; aria-label=&quot;原视频与重建的滑动对比&quot;&gt;&lt;/canvas&gt;</span>
+<span class="line" id="L54"><a href="#L54">  54</a>         &lt;span class=&quot;tag l&quot; id=&quot;cmp-tag-l&quot;&gt;原视频&lt;/span&gt;</span>
+<span class="line" id="L55"><a href="#L55">  55</a>         &lt;span class=&quot;tag r&quot; id=&quot;cmp-tag-r&quot;&gt;重建&lt;/span&gt;</span>
+<span class="line" id="L56"><a href="#L56">  56</a>         &lt;div class=&quot;handle&quot; id=&quot;cmp-handle&quot; role=&quot;slider&quot; tabindex=&quot;0&quot; aria-label=&quot;对比分界线&quot; aria-valuemin=&quot;0&quot; aria-valuemax=&quot;100&quot; aria-valuenow=&quot;50&quot;&gt;&lt;i&gt;&lt;/i&gt;&lt;/div&gt;</span>
+<span class="line" id="L57"><a href="#L57">  57</a>         &lt;div class=&quot;loading&quot; id=&quot;cmp-loading&quot;&gt;视频加载中…&lt;/div&gt;</span>
+<span class="line" id="L58"><a href="#L58">  58</a>       &lt;/div&gt;</span>
+<span class="line" id="L59"><a href="#L59">  59</a>       &lt;div class=&quot;cmp-top&quot;&gt;</span>
+<span class="line" id="L60"><a href="#L60">  60</a>         &lt;canvas id=&quot;cmp-top&quot; width=&quot;540&quot; height=&quot;960&quot; aria-label=&quot;与视频同步的俯视图&quot;&gt;&lt;/canvas&gt;</span>
+<span class="line" id="L61"><a href="#L61">  61</a>         &lt;span class=&quot;tag l&quot;&gt;同步俯视 · 车头朝上&lt;/span&gt;</span>
+<span class="line" id="L62"><a href="#L62">  62</a>       &lt;/div&gt;</span>
+<span class="line" id="L63"><a href="#L63">  63</a>     &lt;/div&gt;</span>
+<span class="line" id="L64"><a href="#L64">  64</a>     &lt;div class=&quot;cmp-ctl&quot;&gt;</span>
+<span class="line" id="L65"><a href="#L65">  65</a>       &lt;button id=&quot;cmp-play&quot; class=&quot;icon&quot; data-state=&quot;playing&quot; aria-label=&quot;播放或暂停&quot;&gt;&lt;/button&gt;</span>
+<span class="line" id="L66"><a href="#L66">  66</a>       &lt;div class=&quot;ribbon&quot; id=&quot;cmp-prog&quot; role=&quot;slider&quot; tabindex=&quot;0&quot; aria-label=&quot;播放位置（沿路里程）&quot;&gt;&lt;canvas id=&quot;cmp-ribbon&quot;&gt;&lt;/canvas&gt;&lt;i id=&quot;cmp-cursor&quot;&gt;&lt;/i&gt;&lt;/div&gt;</span>
+<span class="line" id="L67"><a href="#L67">  67</a>       &lt;span class=&quot;mono&quot; id=&quot;cmp-time&quot;&gt;&lt;/span&gt;</span>
+<span class="line" id="L68"><a href="#L68">  68</a>     &lt;/div&gt;</span>
+<span class="line" id="L69"><a href="#L69">  69</a>     &lt;div class=&quot;cmp-info&quot;&gt;</span>
+<span class="line" id="L70"><a href="#L70">  70</a>       &lt;ul class=&quot;legend&quot; aria-label=&quot;图例&quot;&gt;</span>
+<span class="line" id="L71"><a href="#L71">  71</a>         &lt;li&gt;&lt;i style=&quot;border-color:#2e7d32&quot;&gt;&lt;/i&gt;3 级：横向、沿路都对上地图&lt;/li&gt;</span>
+<span class="line" id="L72"><a href="#L72">  72</a>         &lt;li&gt;&lt;i style=&quot;border-color:#9ccc65&quot;&gt;&lt;/i&gt;2 级：横向对上车道线&lt;/li&gt;</span>
+<span class="line" id="L73"><a href="#L73">  73</a>         &lt;li&gt;&lt;i class=&quot;dash&quot; style=&quot;border-color:#e0a800&quot;&gt;&lt;/i&gt;1 级：车道由前摄照片确定&lt;/li&gt;</span>
+<span class="line" id="L74"><a href="#L74">  74</a>         &lt;li&gt;&lt;i class=&quot;dash&quot; style=&quot;border-color:#f4511e&quot;&gt;&lt;/i&gt;0 级：只按定位推算&lt;/li&gt;</span>
+<span class="line" id="L75"><a href="#L75">  75</a>         &lt;li&gt;&lt;i class=&quot;det&quot; style=&quot;background:#ff5a4f&quot;&gt;&lt;/i&gt;检出：横向裂缝&lt;/li&gt;</span>
+<span class="line" id="L76"><a href="#L76">  76</a>         &lt;li&gt;&lt;i class=&quot;det&quot; style=&quot;background:#ff9f1c&quot;&gt;&lt;/i&gt;检出：纵向裂缝&lt;/li&gt;</span>
+<span class="line" id="L77"><a href="#L77">  77</a>       &lt;/ul&gt;</span>
+<span class="line" id="L78"><a href="#L78">  78</a>       &lt;dl class=&quot;facts&quot; id=&quot;cmp-facts&quot;&gt;&lt;/dl&gt;</span>
+<span class="line" id="L79"><a href="#L79">  79</a>     &lt;/div&gt;</span>
+<span class="line" id="L80"><a href="#L80">  80</a> </span>
+<span class="line" id="L81"><a href="#L81">  81</a>     &lt;div class=&quot;notes&quot;&gt;</span>
+<span class="line" id="L82"><a href="#L82">  82</a>       &lt;div&gt;&lt;h4&gt;路面&lt;/h4&gt;&lt;p&gt;一张平面上的正射图，2 cm/px。车道线、井盖、标线都来自录像本身。拼图时只贴路面像素，所以前车不会留在图上，右边的路是空的。&lt;/p&gt;&lt;/div&gt;</span>
+<span class="line" id="L83"><a href="#L83">  83</a>       &lt;div&gt;&lt;h4&gt;重建与高斯&lt;/h4&gt;&lt;p&gt;重建使用 8826 的点云和路面图：点云为原色、固定 2.5 像素方点，不做模糊补洞。高斯使用 8826 已训练的三维高斯，包含路面高斯。未重建的区域显示为深色背景。&lt;/p&gt;&lt;/div&gt;</span>
+<span class="line" id="L84"><a href="#L84">  84</a>       &lt;div&gt;&lt;h4&gt;病害图层&lt;/h4&gt;&lt;p&gt;框的颜色是定位依据等级，实心的小块是检出的病害。它们是按同一套相机参数和逐帧位姿画上去的，所以 9 月 24 日检出的病害也能直接叠在 9 月 3 日的原视频上。进度条的色带是沿路每张图的等级。&lt;/p&gt;&lt;/div&gt;</span>
+<span class="line" id="L85"><a href="#L85">  85</a>     &lt;/div&gt;</span>
+<span class="line" id="L86"><a href="#L86">  86</a>     &lt;p class=&quot;fine&quot; id=&quot;cmp-pick&quot;&gt;&lt;/p&gt;</span>
+<span class="line" id="L87"><a href="#L87">  87</a>   &lt;/div&gt;</span>
+<span class="line" id="L88"><a href="#L88">  88</a> &lt;/section&gt;</span>
+<span class="line" id="L89"><a href="#L89">  89</a> </span>
+<span class="line" id="L90"><a href="#L90">  90</a> &lt;!-- ============================================================ 数字 --&gt;</span>
+<span class="line" id="L91"><a href="#L91">  91</a> &lt;section id=&quot;numbers&quot; class=&quot;tint&quot;&gt;</span>
+<span class="line" id="L92"><a href="#L92">  92</a>   &lt;div class=&quot;wrap&quot;&gt;</span>
+<span class="line" id="L93"><a href="#L93">  93</a>     &lt;div class=&quot;stats&quot;&gt;</span>
+<span class="line" id="L94"><a href="#L94">  94</a>       &lt;div&gt;&lt;b&gt;8.01&lt;small&gt;km&lt;/small&gt;&lt;/b&gt;&lt;span&gt;进入地图的里程&lt;br&gt;全程 11.60 km，隧道不纳入&lt;/span&gt;&lt;/div&gt;</span>
+<span class="line" id="L95"><a href="#L95">  95</a>       &lt;div&gt;&lt;b&gt;2&lt;small&gt;cm/px&lt;/small&gt;&lt;/b&gt;&lt;span&gt;路面正射图分辨率&lt;br&gt;75,606 m²，五级瓦片&lt;/span&gt;&lt;/div&gt;</span>
+<span class="line" id="L96"><a href="#L96">  96</a>       &lt;div&gt;&lt;b&gt;4553&lt;small&gt;万点&lt;/small&gt;&lt;/b&gt;&lt;span&gt;环境点云&lt;br&gt;6 cm 体素，去掉车辆与重影&lt;/span&gt;&lt;/div&gt;</span>
+<span class="line" id="L97"><a href="#L97">  97</a>       &lt;div&gt;&lt;b&gt;2241&lt;small&gt;张&lt;/small&gt;&lt;/b&gt;&lt;span&gt;病害俯视图进入地图&lt;br&gt;带 1233 个检出&lt;/span&gt;&lt;/div&gt;</span>
+<span class="line" id="L98"><a href="#L98">  98</a>       &lt;div&gt;&lt;b&gt;47&lt;small&gt;%&lt;/small&gt;&lt;/b&gt;&lt;span&gt;横向对上了地图车道线&lt;br&gt;1052 张，2–3 级&lt;/span&gt;&lt;/div&gt;</span>
+<span class="line" id="L99"><a href="#L99">  99</a>       &lt;div&gt;&lt;b&gt;2&lt;small&gt;cm&lt;/small&gt;&lt;/b&gt;&lt;span&gt;这些图之间的横向自洽性&lt;br&gt;中位数，不经过地图的独立检验&lt;/span&gt;&lt;/div&gt;</span>
+<span class="line" id="L100"><a href="#L100"> 100</a>     &lt;/div&gt;</span>
+<span class="line" id="L101"><a href="#L101"> 101</a>     &lt;div class=&quot;route&quot;&gt;</span>
+<span class="line" id="L102"><a href="#L102"> 102</a>       &lt;canvas id=&quot;route&quot; width=&quot;2080&quot; height=&quot;600&quot; aria-label=&quot;全程路线与病害图分布&quot;&gt;&lt;/canvas&gt;</span>
+<span class="line" id="L103"><a href="#L103"> 103</a>       &lt;p class=&quot;fine&quot;&gt;全程路线：去程，掉头，再原路返回；中间两次穿过隧道，隧道段不纳入地图。小点是 2241 张病害俯视图，颜色是定位依据等级。粗线标出本页几段演示的位置（“开”是 8821 打开时落脚的那一段）。&lt;/p&gt;</span>
+<span class="line" id="L104"><a href="#L104"> 104</a>     &lt;/div&gt;</span>
+<span class="line" id="L105"><a href="#L105"> 105</a>   &lt;/div&gt;</span>
+<span class="line" id="L106"><a href="#L106"> 106</a> &lt;/section&gt;</span>
+<span class="line" id="L107"><a href="#L107"> 107</a> </span>
+<span class="line" id="L108"><a href="#L108"> 108</a> &lt;!-- ============================================================ 2 拼接 --&gt;</span>
+<span class="line" id="L109"><a href="#L109"> 109</a> &lt;section id=&quot;stitch&quot;&gt;</span>
+<span class="line" id="L110"><a href="#L110"> 110</a>   &lt;div class=&quot;wrap&quot;&gt;</span>
+<span class="line" id="L111"><a href="#L111"> 111</a>     &lt;h2&gt;&lt;span class=&quot;no&quot;&gt;2&lt;/span&gt;路面是怎么拼出来的&lt;/h2&gt;</span>
+<span class="line" id="L112"><a href="#L112"> 112</a>     &lt;p class=&quot;sec-lede&quot;&gt;下面的动画用和 8821 完全相同的规则，把一段路的 &lt;span id=&quot;st-n&quot;&gt;175&lt;/span&gt; 张条带一张张贴上去，再把病害俯视图放回去。画面是俯视，车头朝上。&lt;/p&gt;</span>
+<span class="line" id="L113"><a href="#L113"> 113</a>     &lt;div class=&quot;st-grid&quot;&gt;</span>
+<span class="line" id="L114"><a href="#L114"> 114</a>       &lt;div class=&quot;st-video&quot;&gt;</span>
+<span class="line" id="L115"><a href="#L115"> 115</a>         &lt;video id=&quot;st-video&quot; src=&quot;media/stitch.mp4&quot; poster=&quot;img/stitch_poster.jpg&quot; muted loop playsinline controls preload=&quot;metadata&quot;&gt;&lt;/video&gt;</span>
+<span class="line" id="L116"><a href="#L116"> 116</a>       &lt;/div&gt;</span>
+<span class="line" id="L117"><a href="#L117"> 117</a>       &lt;ol class=&quot;acts&quot; id=&quot;st-acts&quot;&gt;</span>
+<span class="line" id="L118"><a href="#L118"> 118</a>         &lt;li data-t=&quot;0&quot; class=&quot;on&quot; role=&quot;button&quot; tabindex=&quot;0&quot;&gt;&lt;h4&gt;第一幕 · 一帧贴一张&lt;/h4&gt;&lt;p&gt;每帧只取车前 4.8–13.4 m、左右各 9 m 的路面（左上小图的蓝色范围），逆透视成 2 cm/px 的条带（左下小图），除掉平场、只留路面像素，再贴进地图。离相机越近的观测权重越大，所以远处先出现的路面会随着车开近而变清楚。&lt;/p&gt;&lt;/li&gt;</span>
+<span class="line" id="L119"><a href="#L119"> 119</a>         &lt;li data-t=&quot;1&quot; role=&quot;button&quot; tabindex=&quot;0&quot;&gt;&lt;h4&gt;第二幕 · 回看整段&lt;/h4&gt;&lt;p id=&quot;st-a2&quot;&gt;镜头拉远，沿拼好的路面退回起点。&lt;/p&gt;&lt;/li&gt;</span>
+<span class="line" id="L120"><a href="#L120"> 120</a>         &lt;li data-t=&quot;2&quot; role=&quot;button&quot; tabindex=&quot;0&quot;&gt;&lt;h4&gt;第三幕 · 放回病害图&lt;/h4&gt;&lt;p id=&quot;st-a3&quot;&gt;沿路再走一遍，把另一天拍的病害俯视图放到各自的位置。描边颜色是定位依据等级，红色和橙色的框是检出的裂缝。&lt;/p&gt;&lt;/li&gt;</span>
+<span class="line" id="L121"><a href="#L121"> 121</a>       &lt;/ol&gt;</span>
+<span class="line" id="L122"><a href="#L122"> 122</a>     &lt;/div&gt;</span>
+<span class="line" id="L123"><a href="#L123"> 123</a>     &lt;div class=&quot;rule-row&quot;&gt;</span>
+<span class="line" id="L124"><a href="#L124"> 124</a>       &lt;div class=&quot;rule&quot;&gt;&lt;b&gt;只画路面&lt;/b&gt;&lt;span&gt;SAM 3 逐帧分出路面、车辆、标线，只贴路面像素。排队的前车不会在图上留下拖影。&lt;/span&gt;&lt;/div&gt;</span>
+<span class="line" id="L125"><a href="#L125"> 125</a>       &lt;div class=&quot;rule&quot;&gt;&lt;b&gt;近的说了算&lt;/b&gt;&lt;span&gt;同一块地面被多帧拍到时，权重取“到相机距离的 −6 次方”，接近只取最近的一帧，但没有硬接缝。&lt;/span&gt;&lt;/div&gt;</span>
+<span class="line" id="L126"><a href="#L126"> 126</a>       &lt;div class=&quot;rule&quot;&gt;&lt;b&gt;去程回程各自成图&lt;/b&gt;&lt;span&gt;两程的定位互差米级，混在一起只会出重影。每块地面归离它更近的那一程。&lt;/span&gt;&lt;/div&gt;</span>
+<span class="line" id="L127"><a href="#L127"> 127</a>       &lt;div class=&quot;rule&quot;&gt;&lt;b&gt;先除平场&lt;/b&gt;&lt;span&gt;同样的沥青在条带里越远越亮、两侧偏暗。拼图前除掉这层与内容无关的明暗，否则每 2 m 一道条纹。&lt;/span&gt;&lt;/div&gt;</span>
+<span class="line" id="L128"><a href="#L128"> 128</a>     &lt;/div&gt;</span>
+<span class="line" id="L129"><a href="#L129"> 129</a>   &lt;/div&gt;</span>
+<span class="line" id="L130"><a href="#L130"> 130</a> &lt;/section&gt;</span>
+<span class="line" id="L131"><a href="#L131"> 131</a> </span>
+<span class="line" id="L132"><a href="#L132"> 132</a> &lt;!-- ============================================================ 3 方法 --&gt;</span>
+<span class="line" id="L133"><a href="#L133"> 133</a> &lt;section id=&quot;method&quot; class=&quot;section-collapsible tint&quot;&gt;</span>
+<span class="line" id="L134"><a href="#L134"> 134</a>   &lt;div class=&quot;wrap&quot;&gt;</span>
+<span class="line" id="L135"><a href="#L135"> 135</a>     &lt;details class=&quot;section-disclosure&quot;&gt;</span>
+<span class="line" id="L136"><a href="#L136"> 136</a>       &lt;summary class=&quot;section-toggle&quot;&gt;&lt;h2&gt;&lt;span class=&quot;no&quot;&gt;3&lt;/span&gt;核心方法：每份数据用在哪&lt;/h2&gt;&lt;span class=&quot;section-arrow&quot; aria-hidden=&quot;true&quot;&gt;&lt;/span&gt;&lt;/summary&gt;</span>
+<span class="line" id="L137"><a href="#L137"> 137</a>       &lt;div class=&quot;section-content&quot;&gt;</span>
+<span class="line" id="L138"><a href="#L138"> 138</a>     &lt;p class=&quot;sec-lede&quot;&gt;两条线，一个共用基准。上面一行用 9 月 3 日的录像和定位做出路面正射图；下面一行把 9 月 24 日的每张病害图对着这张正射图定位。&lt;b&gt;点任何一份数据或任何一步&lt;/b&gt;，看它连到哪里、具体怎么用。&lt;/p&gt;</span>
+<span class="line" id="L139"><a href="#L139"> 139</a> </span>
+<span class="line" id="L140"><a href="#L140"> 140</a>     &lt;div class=&quot;flow&quot; id=&quot;flow&quot;&gt;</span>
+<span class="line" id="L141"><a href="#L141"> 141</a>       &lt;svg id=&quot;flow-svg&quot; aria-hidden=&quot;true&quot;&gt;&lt;/svg&gt;</span>
+<span class="line" id="L142"><a href="#L142"> 142</a>       &lt;div class=&quot;col src&quot; id=&quot;flow-src&quot;&gt;&lt;h5&gt;输入的数据&lt;/h5&gt;&lt;/div&gt;</span>
+<span class="line" id="L143"><a href="#L143"> 143</a>       &lt;div class=&quot;col stp&quot; id=&quot;flow-stp&quot;&gt;</span>
+<span class="line" id="L144"><a href="#L144"> 144</a>         &lt;h5&gt;地图一侧 · 9 月 3 日&lt;/h5&gt;&lt;div class=&quot;lane&quot; id=&quot;lane-a&quot;&gt;&lt;/div&gt;</span>
+<span class="line" id="L145"><a href="#L145"> 145</a>         &lt;h5 class=&quot;gap&quot;&gt;病害一侧 · 9 月 24 日&lt;/h5&gt;&lt;div class=&quot;lane&quot; id=&quot;lane-b&quot;&gt;&lt;/div&gt;</span>
+<span class="line" id="L146"><a href="#L146"> 146</a>       &lt;/div&gt;</span>
+<span class="line" id="L147"><a href="#L147"> 147</a>       &lt;div class=&quot;col out&quot; id=&quot;flow-out&quot;&gt;&lt;h5&gt;查看器里的图层&lt;/h5&gt;&lt;/div&gt;</span>
+<span class="line" id="L148"><a href="#L148"> 148</a>       &lt;noscript&gt;&lt;img src=&quot;img/8821-01-flow.png&quot; alt=&quot;构建流程图&quot;&gt;&lt;/noscript&gt;</span>
+<span class="line" id="L149"><a href="#L149"> 149</a>     &lt;/div&gt;</span>
+<span class="line" id="L150"><a href="#L150"> 150</a>     &lt;p class=&quot;flow-hint&quot;&gt;&lt;span&gt;&lt;i style=&quot;color:#1c64c8&quot;&gt;&lt;/i&gt;它用到的&lt;/span&gt;&lt;span&gt;&lt;i style=&quot;color:#d9730d&quot;&gt;&lt;/i&gt;它交给下一步的&lt;/span&gt;&lt;span&gt;橙色边框的“路面正射图”是两条线唯一的交点：下面一行的标定、匹配、精配都以它为准。&lt;/span&gt;&lt;span id=&quot;flow-tour&quot;&gt;正在逐一演示每份数据，鼠标移上来就停。&lt;/span&gt;&lt;/p&gt;</span>
+<span class="line" id="L151"><a href="#L151"> 151</a>     &lt;div class=&quot;flow-detail&quot; id=&quot;flow-detail&quot;&gt;&lt;/div&gt;</span>
+<span class="line" id="L152"><a href="#L152"> 152</a> </span>
+<span class="line" id="L153"><a href="#L153"> 153</a>     &lt;h3&gt;分步看&lt;/h3&gt;</span>
+<span class="line" id="L154"><a href="#L154"> 154</a> </span>
+<span class="line" id="L155"><a href="#L155"> 155</a>     &lt;div class=&quot;step&quot;&gt;</span>
+<span class="line" id="L156"><a href="#L156"> 156</a>       &lt;div class=&quot;step-txt&quot;&gt;</span>
+<span class="line" id="L157"><a href="#L157"> 157</a>         &lt;h4&gt;&lt;span class=&quot;dot&quot;&gt;A&lt;/span&gt;一帧画面怎么变成一条路面&lt;/h4&gt;</span>
+<span class="line" id="L158"><a href="#L158"> 158</a>         &lt;p&gt;画面里只有贴着地面的那部分能当“地图”用。每一帧先分出路面像素，再按标定好的相机姿态把它“压平”成俯视的条带。&lt;/p&gt;</span>
+<span class="line" id="L159"><a href="#L159"> 159</a>         &lt;div class=&quot;seg small&quot; id=&quot;sw-a&quot;&gt;&lt;/div&gt;</span>
+<span class="line" id="L160"><a href="#L160"> 160</a>         &lt;p class=&quot;cap&quot; id=&quot;sw-a-cap&quot;&gt;&lt;/p&gt;</span>
+<span class="line" id="L161"><a href="#L161"> 161</a>         &lt;p class=&quot;fine&quot;&gt;前摄的四个姿态量各用一把尺子重新标定：横滚 −1.06°（直路上相邻条带不该有转角）、偏航 −1.93°（不该有横移）、上仰 5.25°（远处和近处的位移应当相等）、高 1.475 m（7 帧的位移之和等于定位走过的路程）。&lt;/p&gt;</span>
+<span class="line" id="L162"><a href="#L162"> 162</a>       &lt;/div&gt;</span>
+<span class="line" id="L163"><a href="#L163"> 163</a>       &lt;div class=&quot;step-fig&quot;&gt;&lt;div class=&quot;frame&quot;&gt;&lt;img id=&quot;sw-a-img&quot; src=&quot;img/a_frame.jpg&quot; alt=&quot;一帧画面到路面条带的四个阶段&quot;&gt;&lt;/div&gt;&lt;/div&gt;</span>
+<span class="line" id="L164"><a href="#L164"> 164</a>     &lt;/div&gt;</span>
+<span class="line" id="L165"><a href="#L165"> 165</a> </span>
+<span class="line" id="L166"><a href="#L166"> 166</a>     &lt;div class=&quot;step rev&quot;&gt;</span>
+<span class="line" id="L167"><a href="#L167"> 167</a>       &lt;div class=&quot;step-txt&quot;&gt;</span>
+<span class="line" id="L168"><a href="#L168"> 168</a>         &lt;h4&gt;&lt;span class=&quot;dot&quot;&gt;B&lt;/span&gt;条带之间量位移，得到不靠定位的尺子&lt;/h4&gt;</span>
+<span class="line" id="L169"><a href="#L169"> 169</a>         &lt;p&gt;同一块路面在后一帧里离车更近，所以相邻两张条带之间只差一个平面刚体变换：前进、横移、转角。把它量出来，就是一把不依赖定位的尺子。&lt;/p&gt;</span>
+<span class="line" id="L170"><a href="#L170"> 170</a>         &lt;div class=&quot;seg small&quot; id=&quot;sw-b&quot;&gt;&lt;button data-i=&quot;0&quot; class=&quot;on&quot;&gt;直接叠在一起&lt;/button&gt;&lt;button data-i=&quot;1&quot;&gt;按量出的位移对齐&lt;/button&gt;&lt;/div&gt;</span>
+<span class="line" id="L171"><a href="#L171"> 171</a>         &lt;p class=&quot;cap&quot; id=&quot;sw-b-cap&quot;&gt;&lt;/p&gt;</span>
+<span class="line" id="L172"><a href="#L172"> 172</a>         &lt;ul class=&quot;tight&quot;&gt;</span>
+<span class="line" id="L173"><a href="#L173"> 173</a>           &lt;li&gt;相邻帧和隔一帧都配：11,345 对里成功 9,699 对（85.5%），残差中位 17.7 mm。&lt;/li&gt;</span>
+<span class="line" id="L174"><a href="#L174"> 174</a>           &lt;li&gt;前进量必须落在定位预测的 0.72–1.5 倍之内：排队时跟着前车走的错解直接出局。&lt;/li&gt;</span>
+<span class="line" id="L175"><a href="#L175"> 175</a>           &lt;li&gt;录像的帧间隔并不均匀（每 7 帧里 5 个 0.16 s、2 个 0.20 s），所以另建了逐帧拍摄时刻的模型。&lt;/li&gt;</span>
+<span class="line" id="L176"><a href="#L176"> 176</a>         &lt;/ul&gt;</span>
+<span class="line" id="L177"><a href="#L177"> 177</a>       &lt;/div&gt;</span>
+<span class="line" id="L178"><a href="#L178"> 178</a>       &lt;div class=&quot;step-fig&quot;&gt;&lt;div class=&quot;frame wide&quot;&gt;&lt;img id=&quot;sw-b-img&quot; src=&quot;img/b_before.jpg&quot; alt=&quot;相邻两张条带对齐前后&quot; loading=&quot;lazy&quot;&gt;&lt;/div&gt;</span>
+<span class="line" id="L179"><a href="#L179"> 179</a>         &lt;div class=&quot;tl&quot; aria-label=&quot;帧间隔示意&quot;&gt;&lt;span class=&quot;a&quot;&gt;0.16&lt;/span&gt;&lt;span class=&quot;a&quot;&gt;0.16&lt;/span&gt;&lt;span class=&quot;a&quot;&gt;0.16&lt;/span&gt;&lt;span class=&quot;b&quot;&gt;0.20&lt;/span&gt;&lt;span class=&quot;a&quot;&gt;0.16&lt;/span&gt;&lt;span class=&quot;a&quot;&gt;0.16&lt;/span&gt;&lt;span class=&quot;b&quot;&gt;0.20&lt;/span&gt;&lt;em&gt;每 7 帧 = 1.2 s&lt;/em&gt;&lt;/div&gt;</span>
+<span class="line" id="L180"><a href="#L180"> 180</a>       &lt;/div&gt;</span>
+<span class="line" id="L181"><a href="#L181"> 181</a>     &lt;/div&gt;</span>
+<span class="line" id="L182"><a href="#L182"> 182</a> </span>
+<span class="line" id="L183"><a href="#L183"> 183</a>     &lt;div class=&quot;step&quot;&gt;</span>
+<span class="line" id="L184"><a href="#L184"> 184</a>       &lt;div class=&quot;step-txt&quot;&gt;</span>
+<span class="line" id="L185"><a href="#L185"> 185</a>         &lt;h4&gt;&lt;span class=&quot;dot&quot;&gt;C&lt;/span&gt;轨迹：近处听图像的，远处听定位的&lt;/h4&gt;</span>
+<span class="line" id="L186"><a href="#L186"> 186</a>         &lt;p&gt;轨迹用一个平面位姿图来解：相邻帧之间的相对位置和朝向由图像里程计定，百米以上的走向由黑匣子每秒一次的定位定（标准差 2 m）。&lt;/p&gt;</span>
+<span class="line" id="L187"><a href="#L187"> 187</a>         &lt;p&gt;第一版直接用了重建模型给的融合位姿。它依赖的那份定位记录有大段缺口（最长 58 s、876 m），缺口里靠模型里程计，漂出去几十米，地图上就是一个个“鼓包”。第二版的位置只信黑匣子定位和路面图像本身。&lt;/p&gt;</span>
+<span class="line" id="L188"><a href="#L188"> 188</a>         &lt;ul class=&quot;tight&quot;&gt;</span>
+<span class="line" id="L189"><a href="#L189"> 189</a>           &lt;li&gt;全程 11.60 km，85% 的相邻帧有图像里程计相连。&lt;/li&gt;</span>
+<span class="line" id="L190"><a href="#L190"> 190</a>           &lt;li&gt;去掉隧道和断点后，进入地图的是 5 段共 8.01 km。&lt;/li&gt;</span>
+<span class="line" id="L191"><a href="#L191"> 191</a>         &lt;/ul&gt;</span>
+<span class="line" id="L192"><a href="#L192"> 192</a>       &lt;/div&gt;</span>
+<span class="line" id="L193"><a href="#L193"> 193</a>       &lt;div class=&quot;step-fig&quot;&gt;&lt;img src=&quot;img/8821-02-track.png&quot; alt=&quot;掉头点附近新旧轨迹对比&quot; loading=&quot;lazy&quot;&gt;&lt;p class=&quot;cap&quot;&gt;掉头点附近约 1 km。黑线是第一版用的融合位姿：红圈（定位点）断档的地方向外鼓出，最多三十多米。蓝线是重解后的轨迹。&lt;/p&gt;&lt;/div&gt;</span>
+<span class="line" id="L194"><a href="#L194"> 194</a>     &lt;/div&gt;</span>
+<span class="line" id="L195"><a href="#L195"> 195</a> </span>
+<span class="line" id="L196"><a href="#L196"> 196</a>     &lt;div class=&quot;step rev&quot;&gt;</span>
+<span class="line" id="L197"><a href="#L197"> 197</a>       &lt;div class=&quot;step-txt&quot;&gt;</span>
+<span class="line" id="L198"><a href="#L198"> 198</a>         &lt;h4&gt;&lt;span class=&quot;dot&quot;&gt;D&lt;/span&gt;拼成正射图，再融合点云&lt;/h4&gt;</span>
+<span class="line" id="L199"><a href="#L199"> 199</a>         &lt;p&gt;5,039 张条带贴成 542 块 20 m 的瓦片，路面 81,635 m²。这张图是整个系统的基准：网页里的路面是它，病害图的定位和标定也都以它为准。&lt;/p&gt;</span>
+<span class="line" id="L200"><a href="#L200"> 200</a>         &lt;p&gt;点云不用现成的，从重建模型的逐帧稠密点图重新融合，而且只取模型的相对深度：每个像素的方向用标定好的相机光线，每帧的比例由路面像素来定（它们的真实距离等于相机高除以光线下倾）。这样路沿、绿化带与路面图自动对齐。&lt;/p&gt;</span>
+<span class="line" id="L201"><a href="#L201"> 201</a>         &lt;ul class=&quot;tight&quot;&gt;&lt;li&gt;6 cm 体素去重，留离相机最近的一次观测；去掉车辆、另一程管辖的点、已被路面图覆盖的路面和孤立噪点，剩 4553 万点。&lt;/li&gt;&lt;/ul&gt;</span>
+<span class="line" id="L202"><a href="#L202"> 202</a>       &lt;/div&gt;</span>
+<span class="line" id="L203"><a href="#L203"> 203</a>       &lt;div class=&quot;step-fig&quot;&gt;&lt;img src=&quot;img/8821-03-ortho.jpg&quot; alt=&quot;路面正射图的一处&quot; loading=&quot;lazy&quot;&gt;&lt;p class=&quot;cap&quot;&gt;正射图的一处：左边 80 m 见方，右边是黄框内 30 m 的原分辨率。&lt;/p&gt;&lt;/div&gt;</span>
+<span class="line" id="L204"><a href="#L204"> 204</a>     &lt;/div&gt;</span>
+<span class="line" id="L205"><a href="#L205"> 205</a> </span>
+<span class="line" id="L206"><a href="#L206"> 206</a>     &lt;div class=&quot;step&quot;&gt;</span>
+<span class="line" id="L207"><a href="#L207"> 207</a>       &lt;div class=&quot;step-txt&quot;&gt;</span>
+<span class="line" id="L208"><a href="#L208"> 208</a>         &lt;h4&gt;&lt;span class=&quot;dot&quot;&gt;E&lt;/span&gt;另一天的病害图，怎么对到这张图上&lt;/h4&gt;</span>
+<span class="line" id="L209"><a href="#L209"> 209</a>         &lt;p&gt;先定车，再定图。巡检车的前摄照片能看到 18 m 宽的路面，用它对正射图定车道；后摄的病害俯视图只有约 4.4 m 宽，按车身几何跟过去，再自己微调。&lt;/p&gt;</span>
+<span class="line" id="L210"><a href="#L210"> 210</a>         &lt;p&gt;难点是&lt;b&gt;单张照片的匹配有很多个峰&lt;/b&gt;。右边是一张照片对正射图的匹配分数：横轴是横向挪多少，纵轴是沿路挪多少，越亮越像。&lt;/p&gt;</span>
+<span class="line" id="L211"><a href="#L211"> 211</a>         &lt;div class=&quot;seg small&quot; id=&quot;sw-e&quot;&gt;&lt;button data-k=&quot;uniq&quot; class=&quot;on&quot;&gt;只有一个峰&lt;/button&gt;&lt;button data-k=&quot;lane&quot;&gt;相邻车道也是峰&lt;/button&gt;&lt;button data-k=&quot;ridge&quot;&gt;沿路是一条脊&lt;/button&gt;&lt;/div&gt;</span>
+<span class="line" id="L212"><a href="#L212"> 212</a>         &lt;p class=&quot;cap&quot; id=&quot;sw-e-cap&quot;&gt;&lt;/p&gt;</span>
+<span class="line" id="L213"><a href="#L213"> 213</a>         &lt;p&gt;所以不逐张取最高峰，而是把整趟 2,568 张照片用隐马尔可夫模型串起来一起解，再逐张小范围精配，最后用位姿图把全部证据合起来。横向和沿路始终分开判断：只有实线的地方，沿路不采用。&lt;/p&gt;</span>
+<span class="line" id="L214"><a href="#L214"> 214</a>       &lt;/div&gt;</span>
+<span class="line" id="L215"><a href="#L215"> 215</a>       &lt;div class=&quot;step-fig&quot;&gt;</span>
+<span class="line" id="L216"><a href="#L216"> 216</a>         &lt;div class=&quot;e-row&quot;&gt;&lt;img id=&quot;sw-e-photo&quot; src=&quot;img/e_uniq_photo.jpg&quot; alt=&quot;巡检车前摄照片&quot; loading=&quot;lazy&quot;&gt;&lt;img id=&quot;sw-e-surf&quot; src=&quot;img/e_uniq_surf.png&quot; alt=&quot;匹配分数曲面&quot; loading=&quot;lazy&quot;&gt;&lt;/div&gt;</span>
+<span class="line" id="L217"><a href="#L217"> 217</a>         &lt;p class=&quot;cap&quot;&gt;左：巡检车的前摄照片。右：它在正射图上的匹配分数（横向 ±6 m，沿路 ±7 m；圆圈是峰）。&lt;/p&gt;</span>
+<span class="line" id="L218"><a href="#L218"> 218</a>       &lt;/div&gt;</span>
+<span class="line" id="L219"><a href="#L219"> 219</a>     &lt;/div&gt;</span>
+<span class="line" id="L220"><a href="#L220"> 220</a> </span>
+<span class="line" id="L221"><a href="#L221"> 221</a>     &lt;div class=&quot;step rev&quot;&gt;</span>
+<span class="line" id="L222"><a href="#L222"> 222</a>       &lt;div class=&quot;step-txt&quot;&gt;</span>
+<span class="line" id="L223"><a href="#L223"> 223</a>         &lt;h4&gt;&lt;span class=&quot;dot&quot;&gt;F&lt;/span&gt;每张病害图都说清楚“有多准”&lt;/h4&gt;</span>
+<span class="line" id="L224"><a href="#L224"> 224</a>         &lt;p&gt;位置不是都一样可靠。每张俯视图带一个依据等级，写进网页、按颜色描边，可以只看对准了的。&lt;/p&gt;</span>
+<span class="line" id="L225"><a href="#L225"> 225</a>         &lt;div class=&quot;lvbar&quot; id=&quot;lvbar&quot;&gt;&lt;/div&gt;</span>
+<span class="line" id="L226"><a href="#L226"> 226</a>         &lt;ul class=&quot;lvlist&quot;&gt;</span>
+<span class="line" id="L227"><a href="#L227"> 227</a>           &lt;li&gt;&lt;i style=&quot;background:#2e7d32&quot;&gt;&lt;/i&gt;&lt;b&gt;3 级&lt;/b&gt;&lt;span&gt;横向对上地图车道线，沿路也有依据（虚线端头、箭头、井盖）&lt;/span&gt;&lt;/li&gt;</span>
+<span class="line" id="L228"><a href="#L228"> 228</a>           &lt;li&gt;&lt;i style=&quot;background:#9ccc65&quot;&gt;&lt;/i&gt;&lt;b&gt;2 级&lt;/b&gt;&lt;span&gt;横向对上车道线；沿路按前后帧推算，约 ±0.5 m&lt;/span&gt;&lt;/li&gt;</span>
+<span class="line" id="L229"><a href="#L229"> 229</a>           &lt;li&gt;&lt;i style=&quot;background:#ffc107&quot;&gt;&lt;/i&gt;&lt;b&gt;1 级&lt;/b&gt;&lt;span&gt;车道由同一时刻的前摄照片确定，横向约 ±0.3 m&lt;/span&gt;&lt;/li&gt;</span>
+<span class="line" id="L230"><a href="#L230"> 230</a>           &lt;li&gt;&lt;i style=&quot;background:#f4511e&quot;&gt;&lt;/i&gt;&lt;b&gt;0 级&lt;/b&gt;&lt;span&gt;只按定位推算，未经图像验证，可能偏 1 m 以上&lt;/span&gt;&lt;/li&gt;</span>
+<span class="line" id="L231"><a href="#L231"> 231</a>         &lt;/ul&gt;</span>
+<span class="line" id="L232"><a href="#L232"> 232</a>       &lt;/div&gt;</span>
+<span class="line" id="L233"><a href="#L233"> 233</a>       &lt;div class=&quot;step-fig&quot;&gt;&lt;img src=&quot;img/8821-04-level3.jpg&quot; alt=&quot;3 级俯视图与正射图的对照&quot; loading=&quot;lazy&quot;&gt;&lt;p class=&quot;cap&quot;&gt;6 张 3 级俯视图：上面是正射图的同一块，中间是俯视图，下面是两者按竖条交错。标线跨过竖条仍然连续，说明位置对上了。&lt;/p&gt;&lt;/div&gt;</span>
+<span class="line" id="L234"><a href="#L234"> 234</a>     &lt;/div&gt;</span>
+<span class="line" id="L235"><a href="#L235"> 235</a> </span>
+<span class="line" id="L236"><a href="#L236"> 236</a>     &lt;details class=&quot;more&quot;&gt;</span>
+<span class="line" id="L237"><a href="#L237"> 237</a>       &lt;summary&gt;从第一版到第二版，查明并改掉的 16 个问题&lt;/summary&gt;</span>
+<span class="line" id="L238"><a href="#L238"> 238</a>       &lt;div class=&quot;tbl&quot;&gt;&lt;table id=&quot;tbl-fix&quot;&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;一侧&lt;/th&gt;&lt;th&gt;现象&lt;/th&gt;&lt;th&gt;查明的原因&lt;/th&gt;&lt;th&gt;改法&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;&lt;tbody&gt;&lt;/tbody&gt;&lt;/table&gt;&lt;/div&gt;</span>
+<span class="line" id="L239"><a href="#L239"> 239</a>     &lt;/details&gt;</span>
+<span class="line" id="L240"><a href="#L240"> 240</a>       &lt;/div&gt;</span>
+<span class="line" id="L241"><a href="#L241"> 241</a>     &lt;/details&gt;</span>
+<span class="line" id="L242"><a href="#L242"> 242</a>   &lt;/div&gt;</span>
+<span class="line" id="L243"><a href="#L243"> 243</a> &lt;/section&gt;</span>
+<span class="line" id="L244"><a href="#L244"> 244</a> </span>
+<span class="line" id="L245"><a href="#L245"> 245</a> &lt;!-- ============================================================ 4 结果 --&gt;</span>
+<span class="line" id="L246"><a href="#L246"> 246</a> &lt;section id=&quot;results&quot; class=&quot;section-collapsible&quot;&gt;</span>
+<span class="line" id="L247"><a href="#L247"> 247</a>   &lt;div class=&quot;wrap&quot;&gt;</span>
+<span class="line" id="L248"><a href="#L248"> 248</a>     &lt;details class=&quot;section-disclosure&quot;&gt;</span>
+<span class="line" id="L249"><a href="#L249"> 249</a>       &lt;summary class=&quot;section-toggle&quot;&gt;&lt;h2&gt;&lt;span class=&quot;no&quot;&gt;4&lt;/span&gt;结果与验证&lt;/h2&gt;&lt;span class=&quot;section-arrow&quot; aria-hidden=&quot;true&quot;&gt;&lt;/span&gt;&lt;/summary&gt;</span>
+<span class="line" id="L250"><a href="#L250"> 250</a>       &lt;div class=&quot;section-content&quot;&gt;</span>
+<span class="line" id="L251"><a href="#L251"> 251</a>     &lt;h3 style=&quot;margin-top:6px&quot;&gt;病害俯视图贴在路面图上&lt;/h3&gt;</span>
+<span class="line" id="L252"><a href="#L252"> 252</a>     &lt;p&gt;另一天拍的病害俯视图放到这张地图上之后，标线应当与地图上的接得上。下面是按独立核对挑出来的一段，三个按钮切换的是同一个视野。&lt;/p&gt;</span>
+<span class="line" id="L253"><a href="#L253"> 253</a>     &lt;div class=&quot;seg small&quot; id=&quot;sw-g&quot;&gt;&lt;button data-i=&quot;0&quot; class=&quot;on&quot;&gt;只有路面图&lt;/button&gt;&lt;button data-i=&quot;1&quot;&gt;贴上病害俯视图&lt;/button&gt;&lt;button data-i=&quot;2&quot;&gt;加上依据描边和检出&lt;/button&gt;&lt;/div&gt;</span>
+<span class="line" id="L254"><a href="#L254"> 254</a>     &lt;figure class=&quot;strip&quot;&gt;</span>
+<span class="line" id="L255"><a href="#L255"> 255</a>       &lt;a id=&quot;sw-g-a&quot; href=&quot;img/g_top_map.jpg&quot; target=&quot;_blank&quot; rel=&quot;noopener&quot;&gt;&lt;img id=&quot;sw-g-img&quot; src=&quot;img/g_top_map.jpg&quot; alt=&quot;一段路上连续的病害俯视图贴在路面正射图上&quot; loading=&quot;lazy&quot;&gt;&lt;/a&gt;</span>
+<span class="line" id="L256"><a href="#L256"> 256</a>       &lt;figcaption id=&quot;g-cap&quot;&gt;&lt;/figcaption&gt;</span>
+<span class="line" id="L257"><a href="#L257"> 257</a>     &lt;/figure&gt;</span>
+<span class="line" id="L258"><a href="#L258"> 258</a>     &lt;p class=&quot;fine&quot; id=&quot;g-stats&quot;&gt;&lt;/p&gt;</span>
+<span class="line" id="L259"><a href="#L259"> 259</a> </span>
+<span class="line" id="L260"><a href="#L260"> 260</a>     &lt;div class=&quot;step&quot; style=&quot;border-top:0;padding:30px 0 0&quot;&gt;</span>
+<span class="line" id="L261"><a href="#L261"> 261</a>       &lt;div class=&quot;step-txt&quot;&gt;</span>
+<span class="line" id="L262"><a href="#L262"> 262</a>         &lt;h4&gt;交互查看器里的样子&lt;/h4&gt;</span>
+<span class="line" id="L263"><a href="#L263"> 263</a>         &lt;p&gt;右图是 8821 打开时的画面，也就是第 1 节“开场路段”那一处：病害图铺在路面上，红色是裂缝分割，橙框是检出。可以沿路走、切到纯俯视、点开任意一张看原图和定位说明。&lt;/p&gt;</span>
+<span class="line" id="L264"><a href="#L264"> 264</a>         &lt;ul class=&quot;tight&quot;&gt;</span>
+<span class="line" id="L265"><a href="#L265"> 265</a>           &lt;li&gt;路面正射图 75,606 m²，五级瓦片 869 块&lt;/li&gt;</span>
+<span class="line" id="L266"><a href="#L266"> 266</a>           &lt;li&gt;环境点云 4553 万点，细瓦片 287 块、粗瓦片 50 块&lt;/li&gt;</span>
+<span class="line" id="L267"><a href="#L267"> 267</a>           &lt;li&gt;行车视点 1957 个，分属 5 段，共 8.01 km&lt;/li&gt;</span>
+<span class="line" id="L268"><a href="#L268"> 268</a>           &lt;li&gt;病害俯视图 2241 张，检出 1233 个；另有 202 张不在地图范围&lt;/li&gt;</span>
+<span class="line" id="L269"><a href="#L269"> 269</a>         &lt;/ul&gt;</span>
+<span class="line" id="L270"><a href="#L270"> 270</a>         &lt;p&gt;&lt;a data-viewer=&quot;&quot; href=&quot;#&quot; target=&quot;_blank&quot; rel=&quot;noopener&quot;&gt;打开交互查看器 →&lt;/a&gt;&lt;/p&gt;</span>
+<span class="line" id="L271"><a href="#L271"> 271</a>       &lt;/div&gt;</span>
+<span class="line" id="L272"><a href="#L272"> 272</a>       &lt;div class=&quot;step-fig&quot;&gt;&lt;img src=&quot;img/8821-05-street.jpg&quot; alt=&quot;查看器街景视角&quot; loading=&quot;lazy&quot;&gt;&lt;/div&gt;</span>
+<span class="line" id="L273"><a href="#L273"> 273</a>     &lt;/div&gt;</span>
+<span class="line" id="L274"><a href="#L274"> 274</a> </span>
+<span class="line" id="L275"><a href="#L275"> 275</a>     &lt;h3&gt;独立检验：相邻两张病害图自己对自己&lt;/h3&gt;</span>
+<span class="line" id="L276"><a href="#L276"> 276</a>     &lt;p&gt;这项检验不经过正射图。相邻两张俯视图拍到同一块路面时，直接拿两张图互相配，得到它们之间真实的相对位移；再看按地图位置算出的相对位移差多少。差得小，说明每张各自贴到地图上的位置是自洽的。&lt;/p&gt;</span>
+<span class="line" id="L277"><a href="#L277"> 277</a>     &lt;div class=&quot;tbl&quot;&gt;&lt;table&gt;</span>
+<span class="line" id="L278"><a href="#L278"> 278</a>       &lt;thead&gt;&lt;tr&gt;&lt;th&gt;这一对的等级&lt;/th&gt;&lt;th&gt;对数&lt;/th&gt;&lt;th&gt;横向不一致（中位 / 90 分位）&lt;/th&gt;&lt;th&gt;沿路不一致（中位 / 90 分位）&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;</span>
+<span class="line" id="L279"><a href="#L279"> 279</a>       &lt;tbody&gt;</span>
+<span class="line" id="L280"><a href="#L280"> 280</a>         &lt;tr&gt;&lt;td&gt;两张都是 3 级&lt;/td&gt;&lt;td&gt;26&lt;/td&gt;&lt;td&gt;2 cm / 7 cm&lt;/td&gt;&lt;td&gt;6 cm / 24 cm&lt;/td&gt;&lt;/tr&gt;</span>
+<span class="line" id="L281"><a href="#L281"> 281</a>         &lt;tr&gt;&lt;td&gt;两张都不低于 2 级&lt;/td&gt;&lt;td&gt;157&lt;/td&gt;&lt;td&gt;2 cm / 6 cm&lt;/td&gt;&lt;td&gt;13 cm / 37 cm&lt;/td&gt;&lt;/tr&gt;</span>
+<span class="line" id="L282"><a href="#L282"> 282</a>         &lt;tr&gt;&lt;td&gt;至少一张是 1 级&lt;/td&gt;&lt;td&gt;41&lt;/td&gt;&lt;td&gt;18 cm / 38 cm&lt;/td&gt;&lt;td&gt;22 cm / 41 cm&lt;/td&gt;&lt;/tr&gt;</span>
+<span class="line" id="L283"><a href="#L283"> 283</a>         &lt;tr&gt;&lt;td&gt;至少一张是 0 级&lt;/td&gt;&lt;td&gt;95&lt;/td&gt;&lt;td&gt;14 cm / 39 cm&lt;/td&gt;&lt;td&gt;19 cm / 44 cm&lt;/td&gt;&lt;/tr&gt;</span>
+<span class="line" id="L284"><a href="#L284"> 284</a>       &lt;/tbody&gt;&lt;/table&gt;&lt;/div&gt;</span>
+<span class="line" id="L285"><a href="#L285"> 285</a>     &lt;p class=&quot;fine&quot; style=&quot;margin-top:10px&quot;&gt;相邻且重叠的 483 对里，两张图能直接配上的 293 对。这项检验只覆盖车速较慢、相邻两张有重叠的路段；它证明的是相邻图之间自洽，不是绝对位置正确。&lt;/p&gt;</span>
+<span class="line" id="L286"><a href="#L286"> 286</a> </span>
+<span class="line" id="L287"><a href="#L287"> 287</a>     &lt;h3&gt;病害俯视图长什么样&lt;/h3&gt;</span>
+<span class="line" id="L288"><a href="#L288"> 288</a>     &lt;div class=&quot;step&quot;&gt;</span>
+<span class="line" id="L289"><a href="#L289"> 289</a>       &lt;div class=&quot;step-txt&quot;&gt;</span>
+<span class="line" id="L290"><a href="#L290"> 290</a>         &lt;p&gt;病害俯视图来自上游的裂缝管线：巡检车后摄的画面逆透视成约 4.3 × 3.45 m、2 mm/px 的俯视图，模型在上面分割裂缝、框出病害。本项目做的，是把它们放到地图上的正确位置。&lt;/p&gt;</span>
+<span class="line" id="L291"><a href="#L291"> 291</a>         &lt;div class=&quot;seg small&quot; id=&quot;sw-h&quot;&gt;&lt;button data-i=&quot;0&quot; class=&quot;on&quot;&gt;俯视图&lt;/button&gt;&lt;button data-i=&quot;1&quot;&gt;加上分割和检出&lt;/button&gt;&lt;/div&gt;</span>
+<span class="line" id="L292"><a href="#L292"> 292</a>         &lt;ul class=&quot;tight&quot; id=&quot;h-dets&quot; style=&quot;margin-top:12px&quot;&gt;&lt;/ul&gt;</span>
+<span class="line" id="L293"><a href="#L293"> 293</a>         &lt;p&gt;&lt;a data-viewer=&quot;?t=01832&amp;mode=top&quot; href=&quot;#&quot; target=&quot;_blank&quot; rel=&quot;noopener&quot;&gt;在交互查看器里打开这一张 →&lt;/a&gt;&lt;/p&gt;</span>
+<span class="line" id="L294"><a href="#L294"> 294</a>       &lt;/div&gt;</span>
+<span class="line" id="L295"><a href="#L295"> 295</a>       &lt;div class=&quot;step-fig&quot;&gt;&lt;img id=&quot;sw-h-img&quot; src=&quot;img/h_tile.jpg&quot; alt=&quot;一张病害俯视图&quot; loading=&quot;lazy&quot;&gt;&lt;/div&gt;</span>
+<span class="line" id="L296"><a href="#L296"> 296</a>     &lt;/div&gt;</span>
+<span class="line" id="L297"><a href="#L297"> 297</a>       &lt;/div&gt;</span>
+<span class="line" id="L298"><a href="#L298"> 298</a>     &lt;/details&gt;</span>
+<span class="line" id="L299"><a href="#L299"> 299</a>   &lt;/div&gt;</span>
+<span class="line" id="L300"><a href="#L300"> 300</a> &lt;/section&gt;</span>
+<span class="line" id="L301"><a href="#L301"> 301</a> </span>
+<span class="line" id="L302"><a href="#L302"> 302</a> &lt;!-- ============================================================ 5 局限 --&gt;</span>
+<span class="line" id="L303"><a href="#L303"> 303</a> &lt;section id=&quot;limits&quot; class=&quot;section-collapsible tint&quot;&gt;</span>
+<span class="line" id="L304"><a href="#L304"> 304</a>   &lt;div class=&quot;wrap&quot;&gt;</span>
+<span class="line" id="L305"><a href="#L305"> 305</a>     &lt;details class=&quot;section-disclosure&quot;&gt;</span>
+<span class="line" id="L306"><a href="#L306"> 306</a>       &lt;summary class=&quot;section-toggle&quot;&gt;&lt;h2&gt;&lt;span class=&quot;no&quot;&gt;5&lt;/span&gt;还做不到的&lt;/h2&gt;&lt;span class=&quot;section-arrow&quot; aria-hidden=&quot;true&quot;&gt;&lt;/span&gt;&lt;/summary&gt;</span>
+<span class="line" id="L307"><a href="#L307"> 307</a>       &lt;div class=&quot;section-content&quot;&gt;</span>
+<span class="line" id="L308"><a href="#L308"> 308</a>     &lt;div class=&quot;lim&quot;&gt;</span>
+<span class="line" id="L309"><a href="#L309"> 309</a>       &lt;div&gt;&lt;b&gt;一半的图没有自身的图像依据&lt;/b&gt;&lt;span&gt;0 级和 1 级合计 1,189 张（53%）。含这两级的相邻对，横向不一致中位 14–18 cm。&lt;/span&gt;&lt;/div&gt;</span>
+<span class="line" id="L310"><a href="#L310"> 310</a>       &lt;div&gt;&lt;b&gt;沿路方向天生弱&lt;/b&gt;&lt;span id=&quot;lim-along&quot;&gt;只有 397 张（18%）沿路有依据，车道实线不提供沿路信息。用路面图独立核对，这些 3 级里仍有一部分沿路放错了位置，常见的是差一个标线周期。&lt;/span&gt;&lt;/div&gt;</span>
+<span class="line" id="L311"><a href="#L311"> 311</a>       &lt;div&gt;&lt;b&gt;隧道不在地图里&lt;/b&gt;&lt;span&gt;两次穿越共 3.58 km。洞内定位是推算的，路面又只有实线。&lt;/span&gt;&lt;/div&gt;</span>
+<span class="line" id="L312"><a href="#L312"> 312</a>       &lt;div&gt;&lt;b&gt;地图只有一条窄带&lt;/b&gt;&lt;span&gt;路面只覆盖行车轨迹两侧约 6.5 m。巡检车走在更外侧车道时，病害图下面没有清晰路面可对。&lt;/span&gt;&lt;/div&gt;</span>
+<span class="line" id="L313"><a href="#L313"> 313</a>       &lt;div&gt;&lt;b&gt;世界是平的，绝对位置是米级&lt;/b&gt;&lt;span&gt;没有用高程；绝对位置受定位限制，去程回程两条路面带之间可能有 1–2 m 的相对错位。&lt;/span&gt;&lt;/div&gt;</span>
+<span class="line" id="L314"><a href="#L314"> 314</a>       &lt;div&gt;&lt;b&gt;点云只作环境参考&lt;/b&gt;&lt;span&gt;模型深度在远处仍有约 4% 的非线性，不能拿来量尺寸。&lt;/span&gt;&lt;/div&gt;</span>
+<span class="line" id="L315"><a href="#L315"> 315</a>     &lt;/div&gt;</span>
+<span class="line" id="L316"><a href="#L316"> 316</a>     &lt;p class=&quot;fine&quot;&gt;这些局限促成了后来的站点式查看器（8822）：不再把病害图搬进跨天的地图，而是直接画进同一趟、一两秒前拍的前摄照片里。&lt;/p&gt;</span>
+<span class="line" id="L317"><a href="#L317"> 317</a>       &lt;/div&gt;</span>
+<span class="line" id="L318"><a href="#L318"> 318</a>     &lt;/details&gt;</span>
+<span class="line" id="L319"><a href="#L319"> 319</a>   &lt;/div&gt;</span>
+<span class="line" id="L320"><a href="#L320"> 320</a> &lt;/section&gt;</span>
+<span class="line" id="L321"><a href="#L321"> 321</a> </span>
+<span class="line" id="L322"><a href="#L322"> 322</a> &lt;/main&gt;</span>
+<span class="line" id="L323"><a href="#L323"> 323</a> </span>
+<span class="line" id="L324"><a href="#L324"> 324</a> &lt;footer&gt;</span>
+<span class="line" id="L325"><a href="#L325"> 325</a>   &lt;div class=&quot;wrap&quot;&gt;</span>
+<span class="line" id="L326"><a href="#L326"> 326</a>     &lt;p&gt;第 1 节对比使用 8826 的点云、路面、轨迹及已训练的高斯，由 &lt;code&gt;~/crack/show8821/build/&lt;/code&gt; 下的脚本离线生成。其余章节保留 8821 项目的数据与说明。&lt;/p&gt;</span>
+<span class="line" id="L327"><a href="#L327"> 327</a>     &lt;p&gt;&lt;a data-viewer=&quot;&quot; href=&quot;#&quot; target=&quot;_blank&quot; rel=&quot;noopener&quot;&gt;交互查看器（8821）&lt;/a&gt;　·　&lt;a href=&quot;https://claude.ai/code/artifact/05e43d27-b4ac-480e-aa38-e0a0bdd91617&quot; target=&quot;_blank&quot; rel=&quot;noopener&quot;&gt;第二版做法报告&lt;/a&gt;　·　&lt;a href=&quot;https://claude.ai/code/artifact/420b0d19-fd58-4ba0-a846-f702f34301d2&quot; target=&quot;_blank&quot; rel=&quot;noopener&quot;&gt;三版算法介绍&lt;/a&gt;&lt;/p&gt;</span>
+<span class="line" id="L328"><a href="#L328"> 328</a>   &lt;/div&gt;</span>
+<span class="line" id="L329"><a href="#L329"> 329</a> &lt;/footer&gt;</span>
+<span class="line" id="L330"><a href="#L330"> 330</a> </span>
+<span class="line" id="L331"><a href="#L331"> 331</a> &lt;script src=&quot;app.compare8826.js?v=20261028&quot;&gt;&lt;/script&gt;</span>
+<span class="line" id="L332"><a href="#L332"> 332</a> &lt;script src=&quot;section-fold.js?v=20261028&quot;&gt;&lt;/script&gt;</span>
+<span class="line" id="L333"><a href="#L333"> 333</a> &lt;/body&gt;</span>
+<span class="line" id="L334"><a href="#L334"> 334</a> &lt;/html&gt;</span></pre></html>

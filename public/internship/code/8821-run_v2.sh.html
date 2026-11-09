@@ -1,0 +1,24 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>run_v2.sh</title><style>body{margin:24px;font:15px system-ui;background:#faf8f3;color:#243342}pre{overflow:auto;line-height:1.6;background:white;padding:16px}.line{display:block}.line:target{background:#fff1a8}a{color:#58728a}header{overflow-wrap:anywhere}</style><header><a href="/notes/series/internship/">返回实习专栏</a><h1>run_v2.sh</h1><p>只读快照：2026-11-09 · /home/yjl/crack/viewer3d/build/run_v2.sh</p><p>SHA-256: 1fabb59650523607fe5b083b26224083bc98079d8c7125a990e5ee99479bf4a2</p></header><pre><span class="line" id="L1"><a href="#L1">   1</a> #!/bin/bash</span>
+<span class="line" id="L2"><a href="#L2">   2</a> # v2 全流程 (分割已做完的前提下)。约 20 分钟。</span>
+<span class="line" id="L3"><a href="#L3">   3</a> set -e</span>
+<span class="line" id="L4"><a href="#L4">   4</a> cd &quot;$(dirname &quot;$0&quot;)&quot;</span>
+<span class="line" id="L5"><a href="#L5">   5</a> PY=~/3dgs/.venvs/geometry/bin/python</span>
+<span class="line" id="L6"><a href="#L6">   6</a> F=&quot;h264\|pps\|WARN\|Warning\|warn&quot;</span>
+<span class="line" id="L7"><a href="#L7">   7</a> run() { echo &quot;== $* ==&quot;; $PY &quot;$@&quot; 2&gt;&amp;1 | grep -v &quot;$F&quot; | tail -${TAILN:-4}; }</span>
+<span class="line" id="L8"><a href="#L8">   8</a> run t01d_strips.py</span>
+<span class="line" id="L9"><a href="#L9">   9</a> run t01a_vo.py</span>
+<span class="line" id="L10"><a href="#L10">  10</a> run t01e_time.py</span>
+<span class="line" id="L11"><a href="#L11">  11</a> run t01f_track.py</span>
+<span class="line" id="L12"><a href="#L12">  12</a> run t02a_flat.py</span>
+<span class="line" id="L13"><a href="#L13">  13</a> run t02_ortho.py</span>
+<span class="line" id="L14"><a href="#L14">  14</a> run t03b_loc24.py render</span>
+<span class="line" id="L15"><a href="#L15">  15</a> run t03b_loc24.py match</span>
+<span class="line" id="L16"><a href="#L16">  16</a> run t03e_vo24.py</span>
+<span class="line" id="L17"><a href="#L17">  17</a> run t03g_rear24.py surf</span>
+<span class="line" id="L18"><a href="#L18">  18</a> run t03d_hmm24.py</span>
+<span class="line" id="L19"><a href="#L19">  19</a> TAILN=12 run t03f_pose24.py</span>
+<span class="line" id="L20"><a href="#L20">  20</a> run t04_cloud.py</span>
+<span class="line" id="L21"><a href="#L21">  21</a> run t05_site.py</span>
+<span class="line" id="L22"><a href="#L22">  22</a> run t06_cracks.py</span>
+<span class="line" id="L23"><a href="#L23">  23</a> TAILN=8 run qa_pairs.py</span>
+<span class="line" id="L24"><a href="#L24">  24</a> echo ALL_DONE</span></pre></html>

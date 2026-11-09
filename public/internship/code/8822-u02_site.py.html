@@ -1,0 +1,177 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>u02_site.py</title><style>body{margin:24px;font:15px system-ui;background:#faf8f3;color:#243342}pre{overflow:auto;line-height:1.6;background:white;padding:16px}.line{display:block}.line:target{background:#fff1a8}a{color:#58728a}header{overflow-wrap:anywhere}</style><header><a href="/notes/series/internship/">返回实习专栏</a><h1>u02_site.py</h1><p>只读快照：2026-11-09 · /home/yjl/crack/viewer3d/build/u02_site.py</p><p>SHA-256: 532c429e50bb3351f64ee781f713cf96ca48e2937555c8a92006498103ca21cc</p></header><pre><span class="line" id="L1"><a href="#L1">   1</a> # -*- coding: utf-8 -*-</span>
+<span class="line" id="L2"><a href="#L2">   2</a> &quot;&quot;&quot;u02: 站点式查看器的数据 (site3/) —— 全部来自 0924 这一趟: u01 的当趟轨迹 + 裂缝管线的俯视图与检出。不经过 0903 地图。</span>
+<span class="line" id="L3"><a href="#L3">   3</a> </span>
+<span class="line" id="L4"><a href="#L4">   4</a>   data.json   站点 (内容不重复的前摄照片) 的位姿/里程/时间, 俯视图的位置/依据/检出, 前摄相机参数 (网页里自己做投影),</span>
+<span class="line" id="L5"><a href="#L5">   5</a>               每个站点前方能看到哪些俯视图, 每张俯视图最适合在哪个站点看</span>
+<span class="line" id="L6"><a href="#L6">   6</a>   tile/t1 t2  俯视图贴图 (1/4、1/2, 带透明通道的 WebP: 视野外、车辆、路缘石外侧透明), tile/o1 分割叠加层</span>
+<span class="line" id="L7"><a href="#L7">   7</a>   fmask       前摄照片里的车辆掩膜 (SAM 3 的&quot;车辆&quot;类, 半分辨率 PNG, 车辆处不透明): 网页里画在路面上的框和贴图遇到前车要被挡住,</span>
+<span class="line" id="L8"><a href="#L8">   8</a>               否则低速跟车时框会画到前车身上</span>
+<span class="line" id="L9"><a href="#L9">   9</a>   front tile/full tile/src   指向原始照片 / 原分辨率俯视图 / 后摄原图 的符号链接 (只读使用)</span>
+<span class="line" id="L10"><a href="#L10">  10</a> 依据: 3 = 图像定了横向和沿路, 2 = 图像定了横向, 1 = 由车身轨迹推得, 0 = 只有照片自带定位。另带 c = 跨天配准等级 (-1 不在 0903 地图上), 供跳转三维地图用。</span>
+<span class="line" id="L11"><a href="#L11">  11</a> 用法: u02_site.py [--notex]</span>
+<span class="line" id="L12"><a href="#L12">  12</a> &quot;&quot;&quot;</span>
+<span class="line" id="L13"><a href="#L13">  13</a> import csv, sys, time, datetime</span>
+<span class="line" id="L14"><a href="#L14">  14</a> import numpy as np, cv2</span>
+<span class="line" id="L15"><a href="#L15">  15</a> from multiprocessing import Pool</span>
+<span class="line" id="L16"><a href="#L16">  16</a> from common import *</span>
+<span class="line" id="L17"><a href="#L17">  17</a> sys.path.insert(0, STITCH)</span>
+<span class="line" id="L18"><a href="#L18">  18</a> from bev_core import BEVRenderer</span>
+<span class="line" id="L19"><a href="#L19">  19</a> import s24, t03g_rear24 as T</span>
+<span class="line" id="L20"><a href="#L20">  20</a> import t06_cracks as C6</span>
+<span class="line" id="L21"><a href="#L21">  21</a> import u01_run24 as U</span>
+<span class="line" id="L22"><a href="#L22">  22</a> from t03b_loc24 import FC, CAL24F</span>
+<span class="line" id="L23"><a href="#L23">  23</a> </span>
+<span class="line" id="L24"><a href="#L24">  24</a> SITE3 = ROOT + &quot;/site3&quot;</span>
+<span class="line" id="L25"><a href="#L25">  25</a> TZ = datetime.timezone(datetime.timedelta(hours=8))</span>
+<span class="line" id="L26"><a href="#L26">  26</a> </span>
+<span class="line" id="L27"><a href="#L27">  27</a> def make_tex(name):</span>
+<span class="line" id="L28"><a href="#L28">  28</a>     stem = os.path.splitext(name)[0]</span>
+<span class="line" id="L29"><a href="#L29">  29</a>     im = cv2.imread(&quot;%s/bev/%s&quot; % (s24.RUN24, name))</span>
+<span class="line" id="L30"><a href="#L30">  30</a>     if im is None: return stem, False</span>
+<span class="line" id="L31"><a href="#L31">  31</a>     h, w = im.shape[:2]</span>
+<span class="line" id="L32"><a href="#L32">  32</a>     a2 = C6.tile_alpha(stem)</span>
+<span class="line" id="L33"><a href="#L33">  33</a>     for lv, f, q in ((&quot;t2&quot;, 2, 84), (&quot;t1&quot;, 4, 84)):</span>
+<span class="line" id="L34"><a href="#L34">  34</a>         sm = cv2.resize(im, (w // f, h // f), interpolation=cv2.INTER_AREA)</span>
+<span class="line" id="L35"><a href="#L35">  35</a>         al = cv2.resize(a2.astype(np.float32), (w // f, h // f), interpolation=cv2.INTER_LINEAR)</span>
+<span class="line" id="L36"><a href="#L36">  36</a>         al = np.clip((cv2.GaussianBlur(al, (0, 0), max(1.0, 6.0 / f)) - 0.5) * 3.0 + 0.5, 0, 1)</span>
+<span class="line" id="L37"><a href="#L37">  37</a>         cv2.imwrite(&quot;%s/tile/%s/%s.webp&quot; % (SITE3, lv, stem), np.dstack([sm, (al * 255).astype(np.uint8)]), [cv2.IMWRITE_WEBP_QUALITY, q])</span>
+<span class="line" id="L38"><a href="#L38">  38</a>     has = False</span>
+<span class="line" id="L39"><a href="#L39">  39</a>     lab = cv2.imread(&quot;%s/seg_bev/%s.png&quot; % (s24.RUN24, stem), cv2.IMREAD_UNCHANGED)</span>
+<span class="line" id="L40"><a href="#L40">  40</a>     if lab is not None and lab.max() &gt; 0:</span>
+<span class="line" id="L41"><a href="#L41">  41</a>         small = np.zeros((h // 4, w // 4), np.uint8)</span>
+<span class="line" id="L42"><a href="#L42">  42</a>         for c in (3, 2, 1):</span>
+<span class="line" id="L43"><a href="#L43">  43</a>             m = cv2.resize((lab == c).astype(np.uint8) * 255, (w // 4, h // 4), interpolation=cv2.INTER_AREA) &gt; 20</span>
+<span class="line" id="L44"><a href="#L44">  44</a>             small[m] = c</span>
+<span class="line" id="L45"><a href="#L45">  45</a>         rgba = np.zeros((h // 4, w // 4, 4), np.uint8)</span>
+<span class="line" id="L46"><a href="#L46">  46</a>         for c, col in C6.SEG_RGBA.items(): rgba[small == c] = (col[2], col[1], col[0], col[3])</span>
+<span class="line" id="L47"><a href="#L47">  47</a>         cv2.imwrite(&quot;%s/tile/o1/%s.png&quot; % (SITE3, stem), rgba, [cv2.IMWRITE_PNG_COMPRESSION, 9]); has = True</span>
+<span class="line" id="L48"><a href="#L48">  48</a>     return stem, has</span>
+<span class="line" id="L49"><a href="#L49">  49</a> </span>
+<span class="line" id="L50"><a href="#L50">  50</a> def make_fmask(frame):</span>
+<span class="line" id="L51"><a href="#L51">  51</a>     stem = os.path.splitext(frame)[0]</span>
+<span class="line" id="L52"><a href="#L52">  52</a>     lab = load_label(WORK + &quot;/seg0924f&quot;, stem, WORK + &quot;/seg0924f_mark&quot;)</span>
+<span class="line" id="L53"><a href="#L53">  53</a>     if lab is None: return 0</span>
+<span class="line" id="L54"><a href="#L54">  54</a>     veh = cv2.dilate((lab == 2).astype(np.uint8), np.ones((3, 3), np.uint8))</span>
+<span class="line" id="L55"><a href="#L55">  55</a>     veh[:int(round(30 * lab.shape[0] / 720.0)) + 1] = 0                    # 顶部字幕条不算</span>
+<span class="line" id="L56"><a href="#L56">  56</a>     rgba = np.zeros(lab.shape + (4,), np.uint8); rgba[veh &gt; 0, 3] = 255</span>
+<span class="line" id="L57"><a href="#L57">  57</a>     cv2.imwrite(&quot;%s/fmask/%s.png&quot; % (SITE3, stem), rgba, [cv2.IMWRITE_PNG_COMPRESSION, 9])</span>
+<span class="line" id="L58"><a href="#L58">  58</a>     return int(veh.sum() &gt; 0)</span>
+<span class="line" id="L59"><a href="#L59">  59</a> </span>
+<span class="line" id="L60"><a href="#L60">  60</a> if __name__ == &quot;__main__&quot;:</span>
+<span class="line" id="L61"><a href="#L61">  61</a>     t0 = time.time()</span>
+<span class="line" id="L62"><a href="#L62">  62</a>     for d in (&quot;tile/t1&quot;, &quot;tile/t2&quot;, &quot;tile/o1&quot;, &quot;fmask&quot;): os.makedirs(&quot;%s/%s&quot; % (SITE3, d), exist_ok=True)</span>
+<span class="line" id="L63"><a href="#L63">  63</a>     for link, target in ((&quot;front&quot;, s24.D24 + &quot;/ch2_front&quot;), (&quot;tile/full&quot;, s24.RUN24 + &quot;/bev&quot;), (&quot;tile/src&quot;, s24.D24 + &quot;/ch1_rear&quot;)):</span>
+<span class="line" id="L64"><a href="#L64">  64</a>         p = &quot;%s/%s&quot; % (SITE3, link)</span>
+<span class="line" id="L65"><a href="#L65">  65</a>         if os.path.islink(p): os.remove(p)</span>
+<span class="line" id="L66"><a href="#L66">  66</a>         os.symlink(target, p)</span>
+<span class="line" id="L67"><a href="#L67">  67</a>     D = U.load_all(); G, n, rows, nr, tsr, node = D[&quot;G&quot;], D[&quot;n&quot;], D[&quot;rows&quot;], D[&quot;nr&quot;], D[&quot;tsr&quot;], D[&quot;node&quot;]</span>
+<span class="line" id="L68"><a href="#L68">  68</a>     Rn = np.load(WORK + &quot;/run24.npz&quot;, allow_pickle=True)</span>
+<span class="line" id="L69"><a href="#L69">  69</a>     X, seg, sch, dup, tile, tq, ts = Rn[&quot;X&quot;], Rn[&quot;seg&quot;], Rn[&quot;s&quot;], Rn[&quot;dup&quot;], Rn[&quot;tile&quot;], Rn[&quot;tile_q&quot;], Rn[&quot;ts&quot;]</span>
+<span class="line" id="L70"><a href="#L70">  70</a>     names = [r[&quot;bev&quot;] for r in rows]; stems = [os.path.splitext(v)[0] for v in names]</span>
+<span class="line" id="L71"><a href="#L71">  71</a>     o = json.load(open(WORK + &quot;/origin.json&quot;)); og = dict(lon0=o[&quot;lon0&quot;], lat0=o[&quot;lat0&quot;], m_lon=o[&quot;m_lon&quot;])</span>
+<span class="line" id="L72"><a href="#L72">  72</a>     Z = np.load(WORK + &quot;/r24_pose.npz&quot;, allow_pickle=True); assert [str(v) for v in Z[&quot;name&quot;]] == names</span>
+<span class="line" id="L73"><a href="#L73">  73</a>     # ---- 贴图 ----</span>
+<span class="line" id="L74"><a href="#L74">  74</a>     texf = WORK + &quot;/tex3.json&quot;</span>
+<span class="line" id="L75"><a href="#L75">  75</a>     if &quot;--notex&quot; not in sys.argv or not os.path.exists(texf):</span>
+<span class="line" id="L76"><a href="#L76">  76</a>         with Pool(48) as pool: tex = dict(pool.map(make_tex, names, chunksize=8))</span>
+<span class="line" id="L77"><a href="#L77">  77</a>         json.dump(tex, open(texf, &quot;w&quot;))</span>
+<span class="line" id="L78"><a href="#L78">  78</a>         print(&quot;贴图 %d 张, 有分割叠加层的 %d 张 (%.0fs)&quot; % (len(tex), sum(tex.values()), time.time() - t0), flush=True)</span>
+<span class="line" id="L79"><a href="#L79">  79</a>     tex = json.load(open(texf))</span>
+<span class="line" id="L80"><a href="#L80">  80</a>     # ---- 站点: 内容不重复的前摄照片 ----</span>
+<span class="line" id="L81"><a href="#L81">  81</a>     rep = np.arange(n)</span>
+<span class="line" id="L82"><a href="#L82">  82</a>     for j in range(n - 1):</span>
+<span class="line" id="L83"><a href="#L83">  83</a>         if dup[j]: rep[j + 1] = rep[j]</span>
+<span class="line" id="L84"><a href="#L84">  84</a>     keep = np.flatnonzero(rep == np.arange(n)); sidx = np.full(n, -1); sidx[keep] = np.arange(len(keep)); sidx = sidx[rep]</span>
+<span class="line" id="L85"><a href="#L85">  85</a>     segs_used = sorted(set(seg[keep].tolist()), key=lambda g: ts[keep][seg[keep] == g].min()); gmap = {g: i for i, g in enumerate(segs_used)}</span>
+<span class="line" id="L86"><a href="#L86">  86</a>     has_img = Rn[&quot;has_sr&quot;] | Rn[&quot;img_node&quot;] | Rn[&quot;has_vo&quot;] | Rn[&quot;has_rot&quot;]</span>
+<span class="line" id="L87"><a href="#L87">  87</a>     lonS, latS = en_to_lonlat(X[keep, 0], X[keep, 1], og)</span>
+<span class="line" id="L88"><a href="#L88">  88</a>     st = dict(f=[str(G[&quot;frame&quot;][j]) for j in keep], e=[round(float(v), 3) for v in X[keep, 0]], n=[round(float(v), 3) for v in X[keep, 1]],</span>
+<span class="line" id="L89"><a href="#L89">  89</a>               a=[round(float(v), 5) for v in X[keep, 2]], s=[round(float(v), 2) for v in sch[keep]], g=[gmap[int(g)] for g in seg[keep]],</span>
+<span class="line" id="L90"><a href="#L90">  90</a>               v=[round(float(v) * 3.6, 0) for v in G[&quot;speed&quot;][keep]], q=[int(has_img[j]) for j in keep],</span>
+<span class="line" id="L91"><a href="#L91">  91</a>               t=[datetime.datetime.fromtimestamp(G[&quot;ts&quot;][j], TZ).strftime(&quot;%H:%M:%S&quot;) for j in keep],</span>
+<span class="line" id="L92"><a href="#L92">  92</a>               ll=[[round(float(a), 7), round(float(b), 7)] for a, b in zip(lonS, latS)])</span>
+<span class="line" id="L93"><a href="#L93">  93</a>     S_n = len(keep); ts_s = G[&quot;ts&quot;][keep]; seg_s = seg[keep]</span>
+<span class="line" id="L94"><a href="#L94">  94</a>     if &quot;--notex&quot; not in sys.argv or len(os.listdir(SITE3 + &quot;/fmask&quot;)) &lt; S_n:</span>
+<span class="line" id="L95"><a href="#L95">  95</a>         with Pool(48) as pool: nveh = sum(pool.map(make_fmask, st[&quot;f&quot;], chunksize=16))</span>
+<span class="line" id="L96"><a href="#L96">  96</a>         print(&quot;前摄车辆掩膜 %d 张, 其中画面里有车的 %d 张 (%.0fs)&quot; % (S_n, nveh, time.time() - t0), flush=True)</span>
+<span class="line" id="L97"><a href="#L97">  97</a>     # ---- 俯视图 ----</span>
+<span class="line" id="L98"><a href="#L98">  98</a>     dets = {}</span>
+<span class="line" id="L99"><a href="#L99">  99</a>     for d in csv.DictReader(open(s24.RUN24 + &quot;/detections.csv&quot;, encoding=&quot;utf-8&quot;)):</span>
+<span class="line" id="L100"><a href="#L100"> 100</a>         if d[&quot;poly_bev_px&quot;] and float(d[&quot;in_window&quot;] or 0) &gt; 0: dets.setdefault(d[&quot;src&quot;], []).append(d)</span>
+<span class="line" id="L101"><a href="#L101"> 101</a>     dfr = {r[&quot;src&quot;]: r for r in csv.DictReader(open(s24.RUN24 + &quot;/disease_frames.csv&quot;, encoding=&quot;utf-8&quot;))}</span>
+<span class="line" id="L102"><a href="#L102"> 102</a>     meta = json.load(open(s24.RUN24 + &quot;/meta.json&quot;)); W_PX, H_PX = meta[&quot;out_size&quot;]</span>
+<span class="line" id="L103"><a href="#L103"> 103</a>     mk = cv2.imread(s24.RUN24 + &quot;/mask/valid.png&quot;, 0)</span>
+<span class="line" id="L104"><a href="#L104"> 104</a>     cnt = max(cv2.findContours((mk &gt; 0).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0], key=cv2.contourArea)</span>
+<span class="line" id="L105"><a href="#L105"> 105</a>     mask_uv = [[round(float(u) / mk.shape[1], 4), round(float(v) / mk.shape[0], 4)] for u, v in cv2.approxPolyDP(cnt, 3.0, True).reshape(-1, 2)]</span>
+<span class="line" id="L106"><a href="#L106"> 106</a>     lonT, latT = en_to_lonlat(tile[:, 0], tile[:, 1], og)</span>
+<span class="line" id="L107"><a href="#L107"> 107</a>     tseg = seg[node]</span>
+<span class="line" id="L108"><a href="#L108"> 108</a>     tiles = []; ndet = 0; ndis = 0; cls_count = {}</span>
+<span class="line" id="L109"><a href="#L109"> 109</a>     for k in range(nr):</span>
+<span class="line" id="L110"><a href="#L110"> 110</a>         r = rows[k]; dl = []</span>
+<span class="line" id="L111"><a href="#L111"> 111</a>         for d in dets.get(r[&quot;src&quot;], []):</span>
+<span class="line" id="L112"><a href="#L112"> 112</a>             pts = [[round(float(x) / W_PX, 4), round(float(y) / H_PX, 4)] for x, y in (q.split() for q in d[&quot;poly_bev_px&quot;].split(&quot;;&quot;))]</span>
+<span class="line" id="L113"><a href="#L113"> 113</a>             dl.append(dict(c=d[&quot;class&quot;], k=d[&quot;kind&quot;], s=round(float(d[&quot;score&quot;]), 3), iw=round(float(d[&quot;in_window&quot;]), 2), p=pts,</span>
+<span class="line" id="L114"><a href="#L114"> 114</a>                            len=round(float(d[&quot;length_m&quot;] or 0), 2), area=round(float(d[&quot;area_m2&quot;] or 0), 3)))</span>
+<span class="line" id="L115"><a href="#L115"> 115</a>             cls_count[d[&quot;class&quot;]] = cls_count.get(d[&quot;class&quot;], 0) + 1; ndet += 1; ndis += d[&quot;kind&quot;] == &quot;distress&quot;</span>
+<span class="line" id="L116"><a href="#L116"> 116</a>         f_ = dfr.get(r[&quot;src&quot;], {})</span>
+<span class="line" id="L117"><a href="#L117"> 117</a>         tiles.append(dict(id=stems[k], t=datetime.datetime.fromtimestamp(tsr[k], TZ).strftime(&quot;%H:%M:%S&quot;), e=round(float(tile[k, 0]), 3), n=round(float(tile[k, 1]), 3),</span>
+<span class="line" id="L118"><a href="#L118"> 118</a>                           a=round(float(tile[k, 2]), 5), s=round(float(Rn[&quot;tile_s&quot;][k]), 2), g=gmap.get(int(tseg[k]), -1), q=int(tq[k]), c=int(Z[&quot;cls&quot;][k]),</span>
+<span class="line" id="L119"><a href="#L119"> 119</a>                           v=round(float(r[&quot;speed_kmh&quot;] or 0), 0), ll=[round(float(lonT[k]), 7), round(float(latT[k]), 7)], gl=[float(r[&quot;lon&quot;]), float(r[&quot;lat&quot;])],</span>
+<span class="line" id="L120"><a href="#L120"> 120</a>                           ov=int(bool(tex.get(stems[k], False))), sa=[round(float(f_.get(&quot;seg1_m2&quot;) or 0), 3), round(float(f_.get(&quot;seg2_m2&quot;) or 0), 3)], d=dl))</span>
+<span class="line" id="L121"><a href="#L121"> 121</a>     # ---- 每个站点前方能看到的俯视图 (时间上在它之后、同一段、中心在前方 4.6~45 m); 以及默认选中的那张 ----</span>
+<span class="line" id="L122"><a href="#L122"> 122</a>     ordk = np.argsort(tsr, kind=&quot;stable&quot;); tso = tsr[ordk]</span>
+<span class="line" id="L123"><a href="#L123"> 123</a>     vis = []; sel = []</span>
+<span class="line" id="L124"><a href="#L124"> 124</a>     own = {}                                                         # 站点 -&gt; 同一时刻拍的那张俯视图 (在车后, 照片里看不到)</span>
+<span class="line" id="L125"><a href="#L125"> 125</a>     for k in range(nr):</span>
+<span class="line" id="L126"><a href="#L126"> 126</a>         if node[k] &lt; n: own.setdefault(int(sidx[node[k]]), k)</span>
+<span class="line" id="L127"><a href="#L127"> 127</a>     for i, j in enumerate(keep):</span>
+<span class="line" id="L128"><a href="#L128"> 128</a>         a0 = np.searchsorted(tso, G[&quot;ts&quot;][j], side=&quot;right&quot;); cand = ordk[a0:a0 + 60]</span>
+<span class="line" id="L129"><a href="#L129"> 129</a>         cand = cand[(tseg[cand] == seg[j])]</span>
+<span class="line" id="L130"><a href="#L130"> 130</a>         loc = U.to_local(tile[cand, :2], X[j, :2], X[j, 2]) if len(cand) else np.zeros((0, 2))</span>
+<span class="line" id="L131"><a href="#L131"> 131</a>         m = (loc[:, 1] &gt;= 4.6) &amp; (loc[:, 1] &lt;= 45) &amp; (np.abs(loc[:, 0]) &lt;= 8) if len(cand) else np.zeros(0, bool)</span>
+<span class="line" id="L132"><a href="#L132"> 132</a>         ii = np.argsort(loc[m, 1]); v_ = [int(c) for c in cand[m][ii]][:14]; ys = loc[m, 1][ii][:14]</span>
+<span class="line" id="L133"><a href="#L133"> 133</a>         vis.append(v_)</span>
+<span class="line" id="L134"><a href="#L134"> 134</a>         ok = [c for c, y in zip(v_, ys) if y &gt;= 6.0]</span>
+<span class="line" id="L135"><a href="#L135"> 135</a>         sel.append(ok[0] if ok else (v_[0] if v_ else own.get(i, -1)))</span>
+<span class="line" id="L136"><a href="#L136"> 136</a>     st[&quot;vis&quot;] = vis; st[&quot;sel&quot;] = sel</span>
+<span class="line" id="L137"><a href="#L137"> 137</a>     # ---- 每张俯视图最适合在哪个站点看: 更早的、同一段的站点里, 俯视图中心在前方 &gt;= 6 m 且最近的 ----</span>
+<span class="line" id="L138"><a href="#L138"> 138</a>     nbest = 0</span>
+<span class="line" id="L139"><a href="#L139"> 139</a>     for k in range(nr):</span>
+<span class="line" id="L140"><a href="#L140"> 140</a>         b1 = np.searchsorted(ts_s, tsr[k], side=&quot;left&quot;); best = -1</span>
+<span class="line" id="L141"><a href="#L141"> 141</a>         for i in range(b1 - 1, max(-1, b1 - 20), -1):</span>
+<span class="line" id="L142"><a href="#L142"> 142</a>             if seg_s[i] != tseg[k]: break</span>
+<span class="line" id="L143"><a href="#L143"> 143</a>             j = keep[i]; x, y = U.to_local(tile[k, :2], X[j, :2], X[j, 2])[0]</span>
+<span class="line" id="L144"><a href="#L144"> 144</a>             if y &gt;= 6.0 and abs(x) &lt; 6: best = i; break</span>
+<span class="line" id="L145"><a href="#L145"> 145</a>         if best &lt; 0:</span>
+<span class="line" id="L146"><a href="#L146"> 146</a>             best = int(sidx[node[k]]) if node[k] &lt; n else int(np.clip(b1, 0, S_n - 1))</span>
+<span class="line" id="L147"><a href="#L147"> 147</a>         else: nbest += 1</span>
+<span class="line" id="L148"><a href="#L148"> 148</a>         tiles[k][&quot;b&quot;] = int(best)</span>
+<span class="line" id="L149"><a href="#L149"> 149</a>     # ---- 相机 ----</span>
+<span class="line" id="L150"><a href="#L150"> 150</a>     cfg = dict(FC, height=CAL24F[3], roll=np.radians(CAL24F[0]), pitch=np.radians(CAL24F[1]), yaw=np.radians(CAL24F[2]))</span>
+<span class="line" id="L151"><a href="#L151"> 151</a>     R = BEVRenderer(cfg, (1280, 720), (-1, 1), (5, 6), 0.5, osd_rows=30)</span>
+<span class="line" id="L152"><a href="#L152"> 152</a>     cam = dict(W=1280, H=720, osd=30, fx=R.fx, fy=R.fy, cx=R.cx, cy=R.cy, dist=[float(v) for v in R.D.ravel()], R=[[float(v) for v in row] for row in R.R_c2w], h=float(R.h))</span>
+<span class="line" id="L153"><a href="#L153"> 153</a>     # 自检: 网页里的投影公式与 BEVRenderer.ground_to_image 是否一致</span>
+<span class="line" id="L154"><a href="#L154"> 154</a>     P = np.array([[-1.5, 6.0, 0.0], [2.0, 12.0, 0.0], [0.3, 30.0, 0.0]])</span>
+<span class="line" id="L155"><a href="#L155"> 155</a>     pc = (R.R_c2w.T @ (P.T - np.array([[0.], [0.], [R.h]]))).T; xn = pc[:, 0] / pc[:, 2]; yn = pc[:, 1] / pc[:, 2]; r2 = xn * xn + yn * yn</span>
+<span class="line" id="L156"><a href="#L156"> 156</a>     k1, k2, p1, p2, k3 = cam[&quot;dist&quot;]; rad = 1 + k1 * r2 + k2 * r2 * r2 + k3 * r2 ** 3</span>
+<span class="line" id="L157"><a href="#L157"> 157</a>     uv = np.c_[R.fx * (xn * rad + 2 * p1 * xn * yn + p2 * (r2 + 2 * xn * xn)) + R.cx, R.fy * (yn * rad + p1 * (r2 + 2 * yn * yn) + 2 * p2 * xn * yn) + R.cy]</span>
+<span class="line" id="L158"><a href="#L158"> 158</a>     assert np.abs(uv - R.ground_to_image(P)).max() &lt; 0.05, (uv, R.ground_to_image(P))</span>
+<span class="line" id="L159"><a href="#L159"> 159</a>     segs = []</span>
+<span class="line" id="L160"><a href="#L160"> 160</a>     for g in range(len(segs_used)):</span>
+<span class="line" id="L161"><a href="#L161"> 161</a>         ii = np.flatnonzero(np.array(st[&quot;g&quot;]) == g); segs.append([int(ii[0]), int(ii[-1]), st[&quot;s&quot;][ii[0]], st[&quot;s&quot;][ii[-1]]])</span>
+<span class="line" id="L162"><a href="#L162"> 162</a>     build = datetime.datetime.now().strftime(&quot;%m%d%H%M%S&quot;)</span>
+<span class="line" id="L163"><a href="#L163"> 163</a>     rig = T.get_rig()</span>
+<span class="line" id="L164"><a href="#L164"> 164</a>     out = dict(version=3, build=build, session=&quot;2026-09-24&quot;, origin=dict(lon0=o[&quot;lon0&quot;], lat0=o[&quot;lat0&quot;], m_lon=o[&quot;m_lon&quot;]), cam=cam,</span>
+<span class="line" id="L165"><a href="#L165"> 165</a>                tile_geom=dict(hw=float(U.HW), hl=float(U.HL), px=[W_PX, H_PX], mask=mask_uv, back=float(rig[&quot;L&quot;] + T.YCR)), lag_s=s24.LAG24,</span>
+<span class="line" id="L166"><a href="#L166"> 166</a>                classes={k: dict(zh=v[0], color=v[1], n=cls_count.get(k, 0)) for k, v in C6.CLS.items() if cls_count.get(k, 0)},</span>
+<span class="line" id="L167"><a href="#L167"> 167</a>                stats=dict(stations=S_n, photos=int(n), tiles=nr, q=[int((tq == c).sum()) for c in (0, 1, 2, 3)], ndet=ndet, ndis=ndis, ntile_dis=int(sum(1 for t in tiles if any(d[&quot;k&quot;] == &quot;distress&quot; for d in t[&quot;d&quot;]))),</span>
+<span class="line" id="L168"><a href="#L168"> 168</a>                           km=round(float(sum(b[3] - b[2] for b in segs)) / 1000, 2), seen=nbest),</span>
+<span class="line" id="L169"><a href="#L169"> 169</a>                segs=segs, st=st, tl=tiles)</span>
+<span class="line" id="L170"><a href="#L170"> 170</a>     json.dump(out, open(SITE3 + &quot;/data.json&quot;, &quot;w&quot;), ensure_ascii=False, separators=(&quot;,&quot;, &quot;:&quot;))</span>
+<span class="line" id="L171"><a href="#L171"> 171</a>     print(&quot;站点 %d 个 (前摄照片 %d 张, 去掉内容重复的 %d 张), 连续段 %d 个, 里程 %.2f km&quot; % (S_n, n, n - S_n, len(segs), out[&quot;stats&quot;][&quot;km&quot;]))</span>
+<span class="line" id="L172"><a href="#L172"> 172</a>     print(&quot;俯视图 %d 张: 依据 图像横纵 %d / 图像横向 %d / 轨迹推得 %d / 只有定位 %d; 能在前摄照片里看到的 %d 张 (%.0f%%); 检出 %d 个 (病害 %d), 有病害的俯视图 %d 张&quot;</span>
+<span class="line" id="L173"><a href="#L173"> 173</a>           % (nr, (tq == 3).sum(), (tq == 2).sum(), (tq == 1).sum(), (tq == 0).sum(), nbest, 100.0 * nbest / nr, ndet, ndis, out[&quot;stats&quot;][&quot;ntile_dis&quot;]))</span>
+<span class="line" id="L174"><a href="#L174"> 174</a>     nd_q = [sum(sum(1 for d in t[&quot;d&quot;] if d[&quot;k&quot;] == &quot;distress&quot;) for t in tiles if t[&quot;q&quot;] == c) for c in (0, 1, 2, 3)]</span>
+<span class="line" id="L175"><a href="#L175"> 175</a>     print(&quot;   病害检出按依据 [只有定位, 轨迹推得, 图像横向, 图像横纵]: %s; 不是&#x27;只有定位&#x27;的占 %.0f%%, 自己有图像配准的占 %.0f%%&quot; % (nd_q, 100.0 * sum(nd_q[1:]) / max(sum(nd_q), 1), 100.0 * sum(nd_q[2:]) / max(sum(nd_q), 1)))</span>
+<span class="line" id="L176"><a href="#L176"> 176</a>     sz = lambda d: sum(os.path.getsize(os.path.join(SITE3, d, f)) for f in os.listdir(os.path.join(SITE3, d))) / 1e6</span>
+<span class="line" id="L177"><a href="#L177"> 177</a>     print(&quot;data.json %.2f MB; 贴图 t1 %.0f MB, t2 %.0f MB, o1 %.0f MB, 车辆掩膜 %.1f MB; 构建号 %s; 用时 %.0fs&quot; % (os.path.getsize(SITE3 + &quot;/data.json&quot;) / 1e6, sz(&quot;tile/t1&quot;), sz(&quot;tile/t2&quot;), sz(&quot;tile/o1&quot;), sz(&quot;fmask&quot;), build, time.time() - t0))</span></pre></html>

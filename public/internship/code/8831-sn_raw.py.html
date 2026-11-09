@@ -1,0 +1,71 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>sn_raw.py</title><style>body{margin:24px;font:15px system-ui;background:#faf8f3;color:#243342}pre{overflow:auto;line-height:1.6;background:white;padding:16px}.line{display:block}.line:target{background:#fff1a8}a{color:#58728a}header{overflow-wrap:anywhere}</style><header><a href="/notes/series/internship/">返回实习专栏</a><h1>sn_raw.py</h1><p>只读快照：2026-11-09 · /home/yjl/crack/snap1012/build/sn_raw.py</p><p>SHA-256: 4c5bcc848bc7500946b1ac1bd6ee5769b82fe437e4137880aecc035441ee6135</p></header><pre><span class="line" id="L1"><a href="#L1">   1</a> # -*- coding: utf-8 -*-</span>
+<span class="line" id="L2"><a href="#L2">   2</a> &quot;&quot;&quot;诊断版（8831）只用的两样东西：平台表格 + 平台原始标定（~/data/0929/calib_raw_platform.json，车号 xax3…；</span>
+<span class="line" id="L3"><a href="#L3">   3</a> 注意表格设备号是 x9e3…，前缀不同，标定文件备注要求确认是同一台设备）。不用任何本项目修正过的标定、不做时刻修正。</span>
+<span class="line" id="L4"><a href="#L4">   4</a> 位姿：每张照片按它自己那一行的经纬度（WGS-84，经 lonlat_to_en 线性换成东北米）和航向角（表格 angle，自北顺时针，度）放车；</span>
+<span class="line" id="L5"><a href="#L5">   5</a> 路面平（z = 0）、车身不俯仰不横滚；相机 = 车 × 平台外参（BEVRenderer 约定，与 sn_common.R_cam_to_local 同一公式）。&quot;&quot;&quot;</span>
+<span class="line" id="L6"><a href="#L6">   6</a> import json</span>
+<span class="line" id="L7"><a href="#L7">   7</a> import math</span>
+<span class="line" id="L8"><a href="#L8">   8</a> import os</span>
+<span class="line" id="L9"><a href="#L9">   9</a> </span>
+<span class="line" id="L10"><a href="#L10">  10</a> import numpy as np</span>
+<span class="line" id="L11"><a href="#L11">  11</a> </span>
+<span class="line" id="L12"><a href="#L12">  12</a> from sn_common import HOME, IMG_W, IMG_H, CAL_W, CAL_H, load_csv, lonlat_to_en  # noqa</span>
+<span class="line" id="L13"><a href="#L13">  13</a> </span>
+<span class="line" id="L14"><a href="#L14">  14</a> PLATFORM = json.load(open(os.path.join(HOME, &quot;data/0929/calib_raw_platform.json&quot;)))</span>
+<span class="line" id="L15"><a href="#L15">  15</a> _BY = {c[&quot;channel&quot;]: c for c in PLATFORM}</span>
+<span class="line" id="L16"><a href="#L16">  16</a> RAW = {&quot;front&quot;: _BY[&quot;2&quot;], &quot;rear&quot;: _BY[&quot;1&quot;]}</span>
+<span class="line" id="L17"><a href="#L17">  17</a> </span>
+<span class="line" id="L18"><a href="#L18">  18</a> </span>
+<span class="line" id="L19"><a href="#L19">  19</a> def K_raw():</span>
+<span class="line" id="L20"><a href="#L20">  20</a>     c = RAW[&quot;front&quot;][&quot;intrinsic&quot;]; sx, sy = IMG_W / c[&quot;image_width&quot;], IMG_H / c[&quot;image_height&quot;]</span>
+<span class="line" id="L21"><a href="#L21">  21</a>     return np.array([[c[&quot;fx&quot;] * sx, 0, c[&quot;cx&quot;] * sx], [0, c[&quot;fy&quot;] * sy, c[&quot;cy&quot;] * sy], [0, 0, 1.0]])</span>
+<span class="line" id="L22"><a href="#L22">  22</a> </span>
+<span class="line" id="L23"><a href="#L23">  23</a> </span>
+<span class="line" id="L24"><a href="#L24">  24</a> def dist_raw():</span>
+<span class="line" id="L25"><a href="#L25">  25</a>     c = RAW[&quot;front&quot;][&quot;intrinsic&quot;]; return np.array([c[&quot;k1&quot;], c[&quot;k2&quot;], c[&quot;p1&quot;], c[&quot;p2&quot;], c.get(&quot;k3&quot;, 0.0)])</span>
+<span class="line" id="L26"><a href="#L26">  26</a> </span>
+<span class="line" id="L27"><a href="#L27">  27</a> </span>
+<span class="line" id="L28"><a href="#L28">  28</a> def cam_in_vehicle_raw(cam):</span>
+<span class="line" id="L29"><a href="#L29">  29</a>     &quot;&quot;&quot;(R_v_from_c, t_v)：相机系(x右 y下 z前) → 车体系(x右 y前 z上，原点 = 天线正下方地面)，平台原始外参&quot;&quot;&quot;</span>
+<span class="line" id="L30"><a href="#L30">  30</a>     e = RAW[cam][&quot;extrinsic&quot;]; g = RAW[cam][&quot;toGps&quot;]</span>
+<span class="line" id="L31"><a href="#L31">  31</a>     r, p, y = math.radians(e[&quot;roll&quot;]), math.radians(e[&quot;pitch&quot;]), math.radians(e[&quot;yaw&quot;])</span>
+<span class="line" id="L32"><a href="#L32">  32</a>     Rz = np.array([[math.cos(y), -math.sin(y), 0], [math.sin(y), math.cos(y), 0], [0, 0, 1]])</span>
+<span class="line" id="L33"><a href="#L33">  33</a>     Rx = np.array([[1, 0, 0], [0, math.cos(p), -math.sin(p)], [0, math.sin(p), math.cos(p)]])</span>
+<span class="line" id="L34"><a href="#L34">  34</a>     Ry = np.array([[math.cos(r), 0, math.sin(r)], [0, 1, 0], [-math.sin(r), 0, math.cos(r)]])</span>
+<span class="line" id="L35"><a href="#L35">  35</a>     base = np.array([[1, 0, 0], [0, 0, 1], [0, -1, 0]], float)</span>
+<span class="line" id="L36"><a href="#L36">  36</a>     R = Rz @ Rx @ Ry @ base</span>
+<span class="line" id="L37"><a href="#L37">  37</a>     t = np.array([0.0, float(g[&quot;x&quot;]), float(e[&quot;height&quot;])])</span>
+<span class="line" id="L38"><a href="#L38">  38</a>     if cam == &quot;rear&quot;:            # toGps yaw 180：相机朝后</span>
+<span class="line" id="L39"><a href="#L39">  39</a>         R = np.diag([-1.0, -1.0, 1.0]) @ R</span>
+<span class="line" id="L40"><a href="#L40">  40</a>     return R, t</span>
+<span class="line" id="L41"><a href="#L41">  41</a> </span>
+<span class="line" id="L42"><a href="#L42">  42</a> </span>
+<span class="line" id="L43"><a href="#L43">  43</a> def vehicle_pose(E, N, az_deg):</span>
+<span class="line" id="L44"><a href="#L44">  44</a>     &quot;&quot;&quot;车体 → 世界（东北天），平地、航向 az（自北顺时针）&quot;&quot;&quot;</span>
+<span class="line" id="L45"><a href="#L45">  45</a>     A = math.radians(az_deg)</span>
+<span class="line" id="L46"><a href="#L46">  46</a>     rt = np.array([math.cos(A), -math.sin(A), 0.0]); fw = np.array([math.sin(A), math.cos(A), 0.0])</span>
+<span class="line" id="L47"><a href="#L47">  47</a>     return np.c_[rt, fw, [0.0, 0.0, 1.0]], np.array([E, N, 0.0])     # 列 = 右、前、上（世界东北天）</span>
+<span class="line" id="L48"><a href="#L48">  48</a> </span>
+<span class="line" id="L49"><a href="#L49">  49</a> </span>
+<span class="line" id="L50"><a href="#L50">  50</a> def camera_w2c(E, N, az_deg, cam, calib=&quot;raw&quot;):</span>
+<span class="line" id="L51"><a href="#L51">  51</a>     &quot;&quot;&quot;calib = &quot;raw&quot;：平台原始外参；&quot;8829&quot;：8829 用的固定标定（sn_common.FRONT/REAR，杆臂同为 +1.6/−1.0 m；不含 8829 逐张优化出的量）&quot;&quot;&quot;</span>
+<span class="line" id="L52"><a href="#L52">  52</a>     Rwv, p0 = vehicle_pose(E, N, az_deg)</span>
+<span class="line" id="L53"><a href="#L53">  53</a>     if calib == &quot;8829&quot;:</span>
+<span class="line" id="L54"><a href="#L54">  54</a>         from sn_common import cam_in_vehicle</span>
+<span class="line" id="L55"><a href="#L55">  55</a>         Rvc, tv = cam_in_vehicle(cam)</span>
+<span class="line" id="L56"><a href="#L56">  56</a>     else:</span>
+<span class="line" id="L57"><a href="#L57">  57</a>         Rvc, tv = cam_in_vehicle_raw(cam)</span>
+<span class="line" id="L58"><a href="#L58">  58</a>     Rwc = Rwv @ Rvc; C = Rwv @ tv + p0</span>
+<span class="line" id="L59"><a href="#L59">  59</a>     M = np.eye(4); M[:3, :3] = Rwc.T; M[:3, 3] = -Rwc.T @ C</span>
+<span class="line" id="L60"><a href="#L60">  60</a>     return M</span>
+<span class="line" id="L61"><a href="#L61">  61</a> </span>
+<span class="line" id="L62"><a href="#L62">  62</a> </span>
+<span class="line" id="L63"><a href="#L63">  63</a> def project(Xw, M, K, D):</span>
+<span class="line" id="L64"><a href="#L64">  64</a>     &quot;&quot;&quot;世界点 (N×3) → 像素 (u, v)、相机前方深度 z；带径向/切向畸变&quot;&quot;&quot;</span>
+<span class="line" id="L65"><a href="#L65">  65</a>     Xc = Xw @ M[:3, :3].T + M[:3, 3]</span>
+<span class="line" id="L66"><a href="#L66">  66</a>     z = Xc[:, 2]; zz = np.where(z &gt; 0.1, z, np.nan)</span>
+<span class="line" id="L67"><a href="#L67">  67</a>     x = Xc[:, 0] / zz; y = Xc[:, 1] / zz; r2 = x * x + y * y</span>
+<span class="line" id="L68"><a href="#L68">  68</a>     k1, k2, p1, p2, k3 = D</span>
+<span class="line" id="L69"><a href="#L69">  69</a>     rad = 1 + k1 * r2 + k2 * r2 * r2 + k3 * r2 ** 3</span>
+<span class="line" id="L70"><a href="#L70">  70</a>     xd = x * rad + 2 * p1 * x * y + p2 * (r2 + 2 * x * x); yd = y * rad + p1 * (r2 + 2 * y * y) + 2 * p2 * x * y</span>
+<span class="line" id="L71"><a href="#L71">  71</a>     return K[0, 0] * xd + K[0, 2], K[1, 1] * yd + K[1, 2], z</span></pre></html>

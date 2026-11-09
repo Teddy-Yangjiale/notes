@@ -1,0 +1,73 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>serve.py</title><style>body{margin:24px;font:15px system-ui;background:#faf8f3;color:#243342}pre{overflow:auto;line-height:1.6;background:white;padding:16px}.line{display:block}.line:target{background:#fff1a8}a{color:#58728a}header{overflow-wrap:anywhere}</style><header><a href="/notes/series/internship/">返回实习专栏</a><h1>serve.py</h1><p>只读快照：2026-11-09 · /home/yjl/crack/show8821/serve.py</p><p>SHA-256: 3000fbc6aa456898b9d9e5c9e2382b8eb478109aaf79878525c207e8f92c0ae1</p></header><pre><span class="line" id="L1"><a href="#L1">   1</a> #!/usr/bin/env python3</span>
+<span class="line" id="L2"><a href="#L2">   2</a> # -*- coding: utf-8 -*-</span>
+<span class="line" id="L3"><a href="#L3">   3</a> &quot;&quot;&quot;8821 项目展示页的静态文件服务 (默认端口 8825)。只读地把同目录下的 site/ 发出去, 不碰 ~/crack/viewer3d。</span>
+<span class="line" id="L4"><a href="#L4">   4</a> 比 python -m http.server 多三件事: 支持 Range 请求 (视频拖动进度要用)、每个响应都带长度所以连接可以复用、不列目录。</span>
+<span class="line" id="L5"><a href="#L5">   5</a> 用法:  cd ~/crack/show8821 &amp;&amp; setsid nohup python3 serve.py --port 8825 &gt;&gt; logs/serve_8825.log 2&gt;&amp;1 &lt; /dev/null &amp;&quot;&quot;&quot;</span>
+<span class="line" id="L6"><a href="#L6">   6</a> import argparse, os, re, http.server, socketserver</span>
+<span class="line" id="L7"><a href="#L7">   7</a> </span>
+<span class="line" id="L8"><a href="#L8">   8</a> ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), &quot;site&quot;)</span>
+<span class="line" id="L9"><a href="#L9">   9</a> RANGE = re.compile(r&quot;bytes=(\d*)-(\d*)$&quot;)</span>
+<span class="line" id="L10"><a href="#L10">  10</a> </span>
+<span class="line" id="L11"><a href="#L11">  11</a> class Handler(http.server.SimpleHTTPRequestHandler):</span>
+<span class="line" id="L12"><a href="#L12">  12</a>     protocol_version = &quot;HTTP/1.1&quot;</span>
+<span class="line" id="L13"><a href="#L13">  13</a>     timeout = 75</span>
+<span class="line" id="L14"><a href="#L14">  14</a>     extensions_map = dict(http.server.SimpleHTTPRequestHandler.extensions_map, **{</span>
+<span class="line" id="L15"><a href="#L15">  15</a>         &quot;.html&quot;: &quot;text/html; charset=utf-8&quot;, &quot;.css&quot;: &quot;text/css; charset=utf-8&quot;, &quot;.js&quot;: &quot;text/javascript; charset=utf-8&quot;,</span>
+<span class="line" id="L16"><a href="#L16">  16</a>         &quot;.json&quot;: &quot;application/json; charset=utf-8&quot;, &quot;.mp4&quot;: &quot;video/mp4&quot;, &quot;.webp&quot;: &quot;image/webp&quot;, &quot;.svg&quot;: &quot;image/svg+xml&quot;})</span>
+<span class="line" id="L17"><a href="#L17">  17</a> </span>
+<span class="line" id="L18"><a href="#L18">  18</a>     def __init__(self, *a, **k):</span>
+<span class="line" id="L19"><a href="#L19">  19</a>         super().__init__(*a, directory=ROOT, **k)</span>
+<span class="line" id="L20"><a href="#L20">  20</a> </span>
+<span class="line" id="L21"><a href="#L21">  21</a>     def end_headers(self):</span>
+<span class="line" id="L22"><a href="#L22">  22</a>         self.send_header(&quot;Accept-Ranges&quot;, &quot;bytes&quot;)</span>
+<span class="line" id="L23"><a href="#L23">  23</a>         self.send_header(&quot;Cache-Control&quot;, &quot;no-cache&quot;)           # 每次都向服务器核对一下 (304), 重新生成素材后不会看到旧的</span>
+<span class="line" id="L24"><a href="#L24">  24</a>         super().end_headers()</span>
+<span class="line" id="L25"><a href="#L25">  25</a> </span>
+<span class="line" id="L26"><a href="#L26">  26</a>     def list_directory(self, path):</span>
+<span class="line" id="L27"><a href="#L27">  27</a>         self.send_error(404, &quot;Not found&quot;); return None</span>
+<span class="line" id="L28"><a href="#L28">  28</a> </span>
+<span class="line" id="L29"><a href="#L29">  29</a>     def send_head(self):</span>
+<span class="line" id="L30"><a href="#L30">  30</a>         self._range = None</span>
+<span class="line" id="L31"><a href="#L31">  31</a>         rng = self.headers.get(&quot;Range&quot;); path = self.translate_path(self.path)</span>
+<span class="line" id="L32"><a href="#L32">  32</a>         if not rng or not os.path.isfile(path): return super().send_head()</span>
+<span class="line" id="L33"><a href="#L33">  33</a>         m = RANGE.match(rng.strip())</span>
+<span class="line" id="L34"><a href="#L34">  34</a>         if not m or (m.group(1) == &quot;&quot; and m.group(2) == &quot;&quot;): return super().send_head()</span>
+<span class="line" id="L35"><a href="#L35">  35</a>         try: f = open(path, &quot;rb&quot;)</span>
+<span class="line" id="L36"><a href="#L36">  36</a>         except OSError: self.send_error(404, &quot;Not found&quot;); return None</span>
+<span class="line" id="L37"><a href="#L37">  37</a>         st = os.fstat(f.fileno()); size = st.st_size</span>
+<span class="line" id="L38"><a href="#L38">  38</a>         if m.group(1) == &quot;&quot;: start, end = max(0, size - int(m.group(2))), size - 1          # 末尾 N 个字节</span>
+<span class="line" id="L39"><a href="#L39">  39</a>         else: start = int(m.group(1)); end = min(int(m.group(2)), size - 1) if m.group(2) else size - 1</span>
+<span class="line" id="L40"><a href="#L40">  40</a>         if start &gt;= size or start &gt; end:</span>
+<span class="line" id="L41"><a href="#L41">  41</a>             f.close(); self.send_response(416); self.send_header(&quot;Content-Range&quot;, &quot;bytes */%d&quot; % size); self.send_header(&quot;Content-Length&quot;, &quot;0&quot;); self.end_headers(); return None</span>
+<span class="line" id="L42"><a href="#L42">  42</a>         self.send_response(206); self.send_header(&quot;Content-Type&quot;, self.guess_type(path)); self.send_header(&quot;Content-Range&quot;, &quot;bytes %d-%d/%d&quot; % (start, end, size))</span>
+<span class="line" id="L43"><a href="#L43">  43</a>         self.send_header(&quot;Content-Length&quot;, str(end - start + 1)); self.send_header(&quot;Last-Modified&quot;, self.date_time_string(st.st_mtime)); self.end_headers()</span>
+<span class="line" id="L44"><a href="#L44">  44</a>         f.seek(start); self._range = end - start + 1; return f</span>
+<span class="line" id="L45"><a href="#L45">  45</a> </span>
+<span class="line" id="L46"><a href="#L46">  46</a>     def copyfile(self, source, outputfile):</span>
+<span class="line" id="L47"><a href="#L47">  47</a>         try:</span>
+<span class="line" id="L48"><a href="#L48">  48</a>             left = getattr(self, &quot;_range&quot;, None)</span>
+<span class="line" id="L49"><a href="#L49">  49</a>             if left is None: return super().copyfile(source, outputfile)</span>
+<span class="line" id="L50"><a href="#L50">  50</a>             while left &gt; 0:</span>
+<span class="line" id="L51"><a href="#L51">  51</a>                 buf = source.read(min(262144, left))</span>
+<span class="line" id="L52"><a href="#L52">  52</a>                 if not buf: break</span>
+<span class="line" id="L53"><a href="#L53">  53</a>                 outputfile.write(buf); left -= len(buf)</span>
+<span class="line" id="L54"><a href="#L54">  54</a>         except (BrokenPipeError, ConnectionResetError):        # 浏览器换了播放位置, 主动断开</span>
+<span class="line" id="L55"><a href="#L55">  55</a>             self.close_connection = True</span>
+<span class="line" id="L56"><a href="#L56">  56</a> </span>
+<span class="line" id="L57"><a href="#L57">  57</a>     def log_error(self, fmt, *args):</span>
+<span class="line" id="L58"><a href="#L58">  58</a>         if &quot;timed out&quot; in fmt: return                            # 空闲连接到点关闭, 不算错</span>
+<span class="line" id="L59"><a href="#L59">  59</a>         super().log_error(fmt, *args)</span>
+<span class="line" id="L60"><a href="#L60">  60</a> </span>
+<span class="line" id="L61"><a href="#L61">  61</a>     def log_message(self, fmt, *args):</span>
+<span class="line" id="L62"><a href="#L62">  62</a>         if len(args) &gt;= 2 and str(args[1]) in (&quot;200&quot;, &quot;206&quot;, &quot;304&quot;): return      # 只记异常请求</span>
+<span class="line" id="L63"><a href="#L63">  63</a>         super().log_message(fmt, *args)</span>
+<span class="line" id="L64"><a href="#L64">  64</a> </span>
+<span class="line" id="L65"><a href="#L65">  65</a> class Server(socketserver.ThreadingTCPServer):</span>
+<span class="line" id="L66"><a href="#L66">  66</a>     allow_reuse_address = True; daemon_threads = True; request_queue_size = 64</span>
+<span class="line" id="L67"><a href="#L67">  67</a> </span>
+<span class="line" id="L68"><a href="#L68">  68</a> if __name__ == &quot;__main__&quot;:</span>
+<span class="line" id="L69"><a href="#L69">  69</a>     ap = argparse.ArgumentParser(); ap.add_argument(&quot;--port&quot;, type=int, default=8825); ap.add_argument(&quot;--bind&quot;, default=&quot;0.0.0.0&quot;); a = ap.parse_args()</span>
+<span class="line" id="L70"><a href="#L70">  70</a>     with Server((a.bind, a.port), Handler) as srv:</span>
+<span class="line" id="L71"><a href="#L71">  71</a>         print(&quot;show8821: http://%s:%d/  (目录 %s)&quot; % (a.bind, a.port, ROOT), flush=True)</span>
+<span class="line" id="L72"><a href="#L72">  72</a>         try: srv.serve_forever()</span>
+<span class="line" id="L73"><a href="#L73">  73</a>         except KeyboardInterrupt: pass</span></pre></html>

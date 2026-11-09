@@ -1,0 +1,421 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>server.py</title><style>body{margin:24px;font:15px system-ui;background:#faf8f3;color:#243342}pre{overflow:auto;line-height:1.6;background:white;padding:16px}.line{display:block}.line:target{background:#fff1a8}a{color:#58728a}header{overflow-wrap:anywhere}</style><header><a href="/notes/series/internship/">返回实习专栏</a><h1>server.py</h1><p>只读快照：2026-11-09 · /home/yjl/crack/annot_tool/server.py</p><p>SHA-256: f4612f62d38aa45f18d243123a1f2f6fd19a1be13b41c9190732e70886fbabf1</p></header><pre><span class="line" id="L1"><a href="#L1">   1</a> # -*- coding: utf-8 -*-</span>
+<span class="line" id="L2"><a href="#L2">   2</a> &quot;&quot;&quot;路面病害标注平台 (检测框 / 裂缝线 / 核对)。</span>
+<span class="line" id="L3"><a href="#L3">   3</a> </span>
+<span class="line" id="L4"><a href="#L4">   4</a> 直接读写评估集 eval_disease_v1 的现有文件, eval_disease.py 不用改:</span>
+<span class="line" id="L5"><a href="#L5">   5</a>     det_xml/&lt;名&gt;.xml   检测框 (VOC)</span>
+<span class="line" id="L6"><a href="#L6">   6</a>     seg_png/&lt;名&gt;.png   分割 (调色板彩图)</span>
+<span class="line" id="L7"><a href="#L7">   7</a>     notes.csv          done_det / done_seg / usable / road / annotator / remark</span>
+<span class="line" id="L8"><a href="#L8">   8</a> 另存一份完整状态 annot/&lt;名&gt;.json (框、保留/去掉的预测连通块、手画的线), 每次保存追加到 annot/_log.jsonl。</span>
+<span class="line" id="L9"><a href="#L9">   9</a> 首次启动把 det_xml、seg_png、notes.csv 打包备份到 annot/_orig_backup.tgz。pred/ 与 images/ 只读。</span>
+<span class="line" id="L10"><a href="#L10">  10</a> </span>
+<span class="line" id="L11"><a href="#L11">  11</a> 用法:</span>
+<span class="line" id="L12"><a href="#L12">  12</a>     ~/miniconda3/envs/crack/bin/python server.py --port 8830</span>
+<span class="line" id="L13"><a href="#L13">  13</a> &quot;&quot;&quot;</span>
+<span class="line" id="L14"><a href="#L14">  14</a> import argparse, csv, json, os, re, subprocess, tarfile, threading, time, urllib.parse</span>
+<span class="line" id="L15"><a href="#L15">  15</a> import xml.etree.ElementTree as ET</span>
+<span class="line" id="L16"><a href="#L16">  16</a> from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler</span>
+<span class="line" id="L17"><a href="#L17">  17</a> </span>
+<span class="line" id="L18"><a href="#L18">  18</a> import cv2</span>
+<span class="line" id="L19"><a href="#L19">  19</a> import numpy as np</span>
+<span class="line" id="L20"><a href="#L20">  20</a> </span>
+<span class="line" id="L21"><a href="#L21">  21</a> HERE = os.path.dirname(os.path.abspath(__file__))</span>
+<span class="line" id="L22"><a href="#L22">  22</a> CFG = {}</span>
+<span class="line" id="L23"><a href="#L23">  23</a> LOCK = threading.Lock()</span>
+<span class="line" id="L24"><a href="#L24">  24</a> PAL = {0: (200, 200, 200), 1: (0, 0, 200), 2: (0, 200, 0), 3: (200, 0, 0)}        # BGR, 同 config.SEG_PALETTE</span>
+<span class="line" id="L25"><a href="#L25">  25</a> NOTE_COLS = [&#x27;name&#x27;, &#x27;done_det&#x27;, &#x27;done_seg&#x27;, &#x27;usable&#x27;, &#x27;road&#x27;, &#x27;annotator&#x27;, &#x27;remark&#x27;]</span>
+<span class="line" id="L26"><a href="#L26">  26</a> # 中文名是按英文类名字面意思写的, 尚未经算法侧确认</span>
+<span class="line" id="L27"><a href="#L27">  27</a> CLASSES = [</span>
+<span class="line" id="L28"><a href="#L28">  28</a>     (&#x27;asphalt_crack_p&#x27;, &#x27;纵向裂缝&#x27;, &#x27;1&#x27;), (&#x27;asphalt_crack_t&#x27;, &#x27;横向裂缝&#x27;, &#x27;2&#x27;), (&#x27;asphalt_net&#x27;, &#x27;网裂&#x27;, &#x27;3&#x27;),</span>
+<span class="line" id="L29"><a href="#L29">  29</a>     (&#x27;asphalt_chap&#x27;, &#x27;龟裂&#x27;, &#x27;4&#x27;), (&#x27;asphalt_pit&#x27;, &#x27;坑槽&#x27;, &#x27;5&#x27;), (&#x27;asphalt_spall&#x27;, &#x27;松散/剥落&#x27;, &#x27;6&#x27;),</span>
+<span class="line" id="L30"><a href="#L30">  30</a>     (&#x27;asphalt_patch_block&#x27;, &#x27;块状修补&#x27;, &#x27;7&#x27;), (&#x27;asphalt_rut&#x27;, &#x27;车辙&#x27;, &#x27;8&#x27;), (&#x27;asphalt_sink&#x27;, &#x27;沉陷&#x27;, &#x27;9&#x27;),</span>
+<span class="line" id="L31"><a href="#L31">  31</a>     (&#x27;road_box_d&#x27;, &#x27;井盖/篦子&#x27;, &#x27;0&#x27;),</span>
+<span class="line" id="L32"><a href="#L32">  32</a>     (&#x27;asphalt_swell&#x27;, &#x27;拥包&#x27;, &#x27;&#x27;), (&#x27;asphalt_wave_swell&#x27;, &#x27;波浪拥包&#x27;, &#x27;&#x27;), (&#x27;asphalt_nibble&#x27;, &#x27;啃边&#x27;, &#x27;&#x27;),</span>
+<span class="line" id="L33"><a href="#L33">  33</a>     (&#x27;asphalt_frothing&#x27;, &#x27;泛油&#x27;, &#x27;&#x27;), (&#x27;cement_wrong _platform&#x27;, &#x27;水泥·错台&#x27;, &#x27;&#x27;), (&#x27;cement_broken&#x27;, &#x27;水泥·破碎板&#x27;, &#x27;&#x27;),</span>
+<span class="line" id="L34"><a href="#L34">  34</a>     (&#x27;cement_pit&#x27;, &#x27;水泥·坑洞&#x27;, &#x27;&#x27;), (&#x27;cement_swell&#x27;, &#x27;水泥·拱起&#x27;, &#x27;&#x27;), (&#x27;cement_sink&#x27;, &#x27;水泥·沉陷&#x27;, &#x27;&#x27;),</span>
+<span class="line" id="L35"><a href="#L35">  35</a>     (&#x27;cement_broken_kok&#x27;, &#x27;水泥·板角断裂&#x27;, &#x27;&#x27;), (&#x27;cement_crack_p&#x27;, &#x27;水泥·纵裂&#x27;, &#x27;&#x27;), (&#x27;cement_crack_t&#x27;, &#x27;水泥·横裂&#x27;, &#x27;&#x27;),</span>
+<span class="line" id="L36"><a href="#L36">  36</a>     (&#x27;cement_net&#x27;, &#x27;水泥·网裂&#x27;, &#x27;&#x27;), (&#x27;cement_spall_layer&#x27;, &#x27;水泥·表层剥落&#x27;, &#x27;&#x27;), (&#x27;cement_spall_kok&#x27;, &#x27;水泥·边角剥落&#x27;, &#x27;&#x27;),</span>
+<span class="line" id="L37"><a href="#L37">  37</a>     (&#x27;cement_barefaced&#x27;, &#x27;水泥·露骨&#x27;, &#x27;&#x27;),</span>
+<span class="line" id="L38"><a href="#L38">  38</a> ]</span>
+<span class="line" id="L39"><a href="#L39">  39</a> CLS_SET = {c[0] for c in CLASSES}</span>
+<span class="line" id="L40"><a href="#L40">  40</a> SAFE = re.compile(r&#x27;^[A-Za-z0-9_.\-]+$&#x27;)</span>
+<span class="line" id="L41"><a href="#L41">  41</a> _comp_cache = {}</span>
+<span class="line" id="L42"><a href="#L42">  42</a> </span>
+<span class="line" id="L43"><a href="#L43">  43</a> </span>
+<span class="line" id="L44"><a href="#L44">  44</a> # ------------------------------------------------------------------ 评估集读写</span>
+<span class="line" id="L45"><a href="#L45">  45</a> def S(*p):</span>
+<span class="line" id="L46"><a href="#L46">  46</a>     return os.path.join(CFG[&#x27;set&#x27;], *p)</span>
+<span class="line" id="L47"><a href="#L47">  47</a> </span>
+<span class="line" id="L48"><a href="#L48">  48</a> </span>
+<span class="line" id="L49"><a href="#L49">  49</a> def load_index():</span>
+<span class="line" id="L50"><a href="#L50">  50</a>     rows = list(csv.DictReader(open(S(&#x27;index.csv&#x27;), encoding=&#x27;utf-8-sig&#x27;)))</span>
+<span class="line" id="L51"><a href="#L51">  51</a>     seg80 = set()</span>
+<span class="line" id="L52"><a href="#L52">  52</a>     if os.path.exists(S(&#x27;priority_seg80.csv&#x27;)):</span>
+<span class="line" id="L53"><a href="#L53">  53</a>         seg80 = {r[&#x27;name&#x27;] for r in csv.DictReader(open(S(&#x27;priority_seg80.csv&#x27;), encoding=&#x27;utf-8-sig&#x27;))}</span>
+<span class="line" id="L54"><a href="#L54">  54</a>     for r in rows:</span>
+<span class="line" id="L55"><a href="#L55">  55</a>         r[&#x27;seg80&#x27;] = r[&#x27;name&#x27;] in seg80</span>
+<span class="line" id="L56"><a href="#L56">  56</a>     return rows</span>
+<span class="line" id="L57"><a href="#L57">  57</a> </span>
+<span class="line" id="L58"><a href="#L58">  58</a> </span>
+<span class="line" id="L59"><a href="#L59">  59</a> def read_notes():</span>
+<span class="line" id="L60"><a href="#L60">  60</a>     out = {}</span>
+<span class="line" id="L61"><a href="#L61">  61</a>     with open(S(&#x27;notes.csv&#x27;), encoding=&#x27;utf-8-sig&#x27;, newline=&#x27;&#x27;) as f:</span>
+<span class="line" id="L62"><a href="#L62">  62</a>         for r in csv.DictReader(f):</span>
+<span class="line" id="L63"><a href="#L63">  63</a>             out[r[&#x27;name&#x27;]] = {k: (r.get(k) or &#x27;&#x27;) for k in NOTE_COLS}</span>
+<span class="line" id="L64"><a href="#L64">  64</a>     return out</span>
+<span class="line" id="L65"><a href="#L65">  65</a> </span>
+<span class="line" id="L66"><a href="#L66">  66</a> </span>
+<span class="line" id="L67"><a href="#L67">  67</a> def write_notes(notes, order):</span>
+<span class="line" id="L68"><a href="#L68">  68</a>     tmp = S(&#x27;notes.csv.tmp&#x27;)</span>
+<span class="line" id="L69"><a href="#L69">  69</a>     with open(tmp, &#x27;w&#x27;, encoding=&#x27;utf-8&#x27;, newline=&#x27;&#x27;) as f:</span>
+<span class="line" id="L70"><a href="#L70">  70</a>         w = csv.DictWriter(f, fieldnames=NOTE_COLS)</span>
+<span class="line" id="L71"><a href="#L71">  71</a>         w.writeheader()</span>
+<span class="line" id="L72"><a href="#L72">  72</a>         for n in order:</span>
+<span class="line" id="L73"><a href="#L73">  73</a>             w.writerow(notes[n])</span>
+<span class="line" id="L74"><a href="#L74">  74</a>     os.replace(tmp, S(&#x27;notes.csv&#x27;))</span>
+<span class="line" id="L75"><a href="#L75">  75</a> </span>
+<span class="line" id="L76"><a href="#L76">  76</a> </span>
+<span class="line" id="L77"><a href="#L77">  77</a> def read_xml(path):</span>
+<span class="line" id="L78"><a href="#L78">  78</a>     out = []</span>
+<span class="line" id="L79"><a href="#L79">  79</a>     if not os.path.exists(path):</span>
+<span class="line" id="L80"><a href="#L80">  80</a>         return out</span>
+<span class="line" id="L81"><a href="#L81">  81</a>     for o in ET.parse(path).getroot().iter(&#x27;object&#x27;):</span>
+<span class="line" id="L82"><a href="#L82">  82</a>         bb = o.find(&#x27;bndbox&#x27;)</span>
+<span class="line" id="L83"><a href="#L83">  83</a>         if bb is None:</span>
+<span class="line" id="L84"><a href="#L84">  84</a>             continue</span>
+<span class="line" id="L85"><a href="#L85">  85</a>         sc = o.findtext(&#x27;score&#x27;)</span>
+<span class="line" id="L86"><a href="#L86">  86</a>         out.append(dict(cls=(o.findtext(&#x27;name&#x27;) or &#x27;&#x27;).strip(),</span>
+<span class="line" id="L87"><a href="#L87">  87</a>                         x1=float(bb.findtext(&#x27;xmin&#x27;)), y1=float(bb.findtext(&#x27;ymin&#x27;)),</span>
+<span class="line" id="L88"><a href="#L88">  88</a>                         x2=float(bb.findtext(&#x27;xmax&#x27;)), y2=float(bb.findtext(&#x27;ymax&#x27;)),</span>
+<span class="line" id="L89"><a href="#L89">  89</a>                         difficult=int(float(o.findtext(&#x27;difficult&#x27;) or 0)),</span>
+<span class="line" id="L90"><a href="#L90">  90</a>                         sealed=int(float(o.findtext(&#x27;sealed&#x27;) or 0)),</span>
+<span class="line" id="L91"><a href="#L91">  91</a>                         score=float(sc) if sc else None,</span>
+<span class="line" id="L92"><a href="#L92">  92</a>                         origin=(o.findtext(&#x27;origin&#x27;) or &#x27;model&#x27;)))</span>
+<span class="line" id="L93"><a href="#L93">  93</a>     return out</span>
+<span class="line" id="L94"><a href="#L94">  94</a> </span>
+<span class="line" id="L95"><a href="#L95">  95</a> </span>
+<span class="line" id="L96"><a href="#L96">  96</a> def write_xml(path, name, w, h, boxes):</span>
+<span class="line" id="L97"><a href="#L97">  97</a>     root = ET.Element(&#x27;annotation&#x27;)</span>
+<span class="line" id="L98"><a href="#L98">  98</a>     ET.SubElement(root, &#x27;folder&#x27;).text = &#x27;VOC&#x27;</span>
+<span class="line" id="L99"><a href="#L99">  99</a>     ET.SubElement(root, &#x27;filename&#x27;).text = name + &#x27;.jpg&#x27;</span>
+<span class="line" id="L100"><a href="#L100"> 100</a>     ET.SubElement(root, &#x27;object_num&#x27;).text = str(len(boxes))</span>
+<span class="line" id="L101"><a href="#L101"> 101</a>     sz = ET.SubElement(root, &#x27;size&#x27;)</span>
+<span class="line" id="L102"><a href="#L102"> 102</a>     for k, v in ((&#x27;width&#x27;, w), (&#x27;height&#x27;, h), (&#x27;depth&#x27;, 3)):</span>
+<span class="line" id="L103"><a href="#L103"> 103</a>         ET.SubElement(sz, k).text = str(v)</span>
+<span class="line" id="L104"><a href="#L104"> 104</a>     for b in boxes:</span>
+<span class="line" id="L105"><a href="#L105"> 105</a>         o = ET.SubElement(root, &#x27;object&#x27;)</span>
+<span class="line" id="L106"><a href="#L106"> 106</a>         ET.SubElement(o, &#x27;difficult&#x27;).text = str(int(b.get(&#x27;difficult&#x27;) or 0))</span>
+<span class="line" id="L107"><a href="#L107"> 107</a>         bb = ET.SubElement(o, &#x27;bndbox&#x27;)</span>
+<span class="line" id="L108"><a href="#L108"> 108</a>         for k, v in ((&#x27;xmin&#x27;, b[&#x27;x1&#x27;]), (&#x27;ymin&#x27;, b[&#x27;y1&#x27;]), (&#x27;xmax&#x27;, b[&#x27;x2&#x27;]), (&#x27;ymax&#x27;, b[&#x27;y2&#x27;])):</span>
+<span class="line" id="L109"><a href="#L109"> 109</a>             ET.SubElement(bb, k).text = str(int(round(v)))</span>
+<span class="line" id="L110"><a href="#L110"> 110</a>         ET.SubElement(o, &#x27;name&#x27;).text = b[&#x27;cls&#x27;]</span>
+<span class="line" id="L111"><a href="#L111"> 111</a>         if b.get(&#x27;score&#x27;) is not None:</span>
+<span class="line" id="L112"><a href="#L112"> 112</a>             ET.SubElement(o, &#x27;score&#x27;).text = &#x27;%.4f&#x27; % b[&#x27;score&#x27;]</span>
+<span class="line" id="L113"><a href="#L113"> 113</a>         ET.SubElement(o, &#x27;sealed&#x27;).text = str(int(b.get(&#x27;sealed&#x27;) or 0))</span>
+<span class="line" id="L114"><a href="#L114"> 114</a>         ET.SubElement(o, &#x27;origin&#x27;).text = b.get(&#x27;origin&#x27;) or &#x27;human&#x27;</span>
+<span class="line" id="L115"><a href="#L115"> 115</a>     ET.indent(root, &#x27;\t&#x27;)</span>
+<span class="line" id="L116"><a href="#L116"> 116</a>     ET.ElementTree(root).write(path, encoding=&#x27;utf-8&#x27;, xml_declaration=True)</span>
+<span class="line" id="L117"><a href="#L117"> 117</a> </span>
+<span class="line" id="L118"><a href="#L118"> 118</a> </span>
+<span class="line" id="L119"><a href="#L119"> 119</a> def pred_lab(name):</span>
+<span class="line" id="L120"><a href="#L120"> 120</a>     im = cv2.imread(S(&#x27;pred&#x27;, &#x27;seg_png&#x27;, name + &#x27;.png&#x27;), cv2.IMREAD_UNCHANGED)</span>
+<span class="line" id="L121"><a href="#L121"> 121</a>     if im is None:</span>
+<span class="line" id="L122"><a href="#L122"> 122</a>         return None</span>
+<span class="line" id="L123"><a href="#L123"> 123</a>     if im.ndim == 2:</span>
+<span class="line" id="L124"><a href="#L124"> 124</a>         lab = im.astype(np.uint8)</span>
+<span class="line" id="L125"><a href="#L125"> 125</a>         lab[lab &gt; 3] = 0</span>
+<span class="line" id="L126"><a href="#L126"> 126</a>         return lab</span>
+<span class="line" id="L127"><a href="#L127"> 127</a>     lab = np.zeros(im.shape[:2], np.uint8)</span>
+<span class="line" id="L128"><a href="#L128"> 128</a>     for k in (1, 2, 3):</span>
+<span class="line" id="L129"><a href="#L129"> 129</a>         lab[(im[..., :3] == np.array(PAL[k], np.uint8)).all(-1)] = k</span>
+<span class="line" id="L130"><a href="#L130"> 130</a>     return lab</span>
+<span class="line" id="L131"><a href="#L131"> 131</a> </span>
+<span class="line" id="L132"><a href="#L132"> 132</a> </span>
+<span class="line" id="L133"><a href="#L133"> 133</a> def comps(name):</span>
+<span class="line" id="L134"><a href="#L134"> 134</a>     &quot;&quot;&quot;模型预测分割的连通块: ids 图 (0=背景) + 列表。按图缓存。&quot;&quot;&quot;</span>
+<span class="line" id="L135"><a href="#L135"> 135</a>     if name in _comp_cache:</span>
+<span class="line" id="L136"><a href="#L136"> 136</a>         return _comp_cache[name]</span>
+<span class="line" id="L137"><a href="#L137"> 137</a>     lab = pred_lab(name)</span>
+<span class="line" id="L138"><a href="#L138"> 138</a>     if lab is None:</span>
+<span class="line" id="L139"><a href="#L139"> 139</a>         return None</span>
+<span class="line" id="L140"><a href="#L140"> 140</a>     ids = np.zeros(lab.shape, np.int32)</span>
+<span class="line" id="L141"><a href="#L141"> 141</a>     lst, base = [], 0</span>
+<span class="line" id="L142"><a href="#L142"> 142</a>     for c in (1, 2, 3):</span>
+<span class="line" id="L143"><a href="#L143"> 143</a>         n, cc, st, _ = cv2.connectedComponentsWithStats((lab == c).astype(np.uint8), 8)</span>
+<span class="line" id="L144"><a href="#L144"> 144</a>         if n &gt; 1:</span>
+<span class="line" id="L145"><a href="#L145"> 145</a>             m = cc &gt; 0</span>
+<span class="line" id="L146"><a href="#L146"> 146</a>             ids[m] = cc[m] + base</span>
+<span class="line" id="L147"><a href="#L147"> 147</a>             for i in range(1, n):</span>
+<span class="line" id="L148"><a href="#L148"> 148</a>                 lst.append(dict(id=int(base + i), cls=c, area=int(st[i, cv2.CC_STAT_AREA]),</span>
+<span class="line" id="L149"><a href="#L149"> 149</a>                                 bbox=[int(st[i, 0]), int(st[i, 1]), int(st[i, 0] + st[i, 2]), int(st[i, 1] + st[i, 3])]))</span>
+<span class="line" id="L150"><a href="#L150"> 150</a>             base += n - 1</span>
+<span class="line" id="L151"><a href="#L151"> 151</a>     if len(_comp_cache) &gt; 40:</span>
+<span class="line" id="L152"><a href="#L152"> 152</a>         _comp_cache.pop(next(iter(_comp_cache)))</span>
+<span class="line" id="L153"><a href="#L153"> 153</a>     _comp_cache[name] = (lab, ids, lst)</span>
+<span class="line" id="L154"><a href="#L154"> 154</a>     return _comp_cache[name]</span>
+<span class="line" id="L155"><a href="#L155"> 155</a> </span>
+<span class="line" id="L156"><a href="#L156"> 156</a> </span>
+<span class="line" id="L157"><a href="#L157"> 157</a> def render_seg(name, seg):</span>
+<span class="line" id="L158"><a href="#L158"> 158</a>     c = comps(name)</span>
+<span class="line" id="L159"><a href="#L159"> 159</a>     if c is None:</span>
+<span class="line" id="L160"><a href="#L160"> 160</a>         return False</span>
+<span class="line" id="L161"><a href="#L161"> 161</a>     lab0, ids, _ = c</span>
+<span class="line" id="L162"><a href="#L162"> 162</a>     lab = lab0.copy()</span>
+<span class="line" id="L163"><a href="#L163"> 163</a>     removed = [int(v) for v in seg.get(&#x27;removed&#x27;, [])]</span>
+<span class="line" id="L164"><a href="#L164"> 164</a>     if removed:</span>
+<span class="line" id="L165"><a href="#L165"> 165</a>         lab[np.isin(ids, removed)] = 0</span>
+<span class="line" id="L166"><a href="#L166"> 166</a>     for k, v in (seg.get(&#x27;recls&#x27;) or {}).items():</span>
+<span class="line" id="L167"><a href="#L167"> 167</a>         lab[ids == int(k)] = int(v)</span>
+<span class="line" id="L168"><a href="#L168"> 168</a>     for ln in seg.get(&#x27;lines&#x27;, []):</span>
+<span class="line" id="L169"><a href="#L169"> 169</a>         pts = np.round(np.array(ln[&#x27;pts&#x27;], float)).astype(np.int32).reshape(-1, 1, 2)</span>
+<span class="line" id="L170"><a href="#L170"> 170</a>         if len(pts) &gt;= 2:</span>
+<span class="line" id="L171"><a href="#L171"> 171</a>             cv2.polylines(lab, [pts], False, int(ln[&#x27;cls&#x27;]), thickness=max(1, int(ln.get(&#x27;w&#x27;, 4))), lineType=cv2.LINE_8)</span>
+<span class="line" id="L172"><a href="#L172"> 172</a>     pal = np.array([PAL[k] for k in range(4)], np.uint8)</span>
+<span class="line" id="L173"><a href="#L173"> 173</a>     cv2.imwrite(S(&#x27;seg_png&#x27;, name + &#x27;.png&#x27;), pal[lab])</span>
+<span class="line" id="L174"><a href="#L174"> 174</a>     return True</span>
+<span class="line" id="L175"><a href="#L175"> 175</a> </span>
+<span class="line" id="L176"><a href="#L176"> 176</a> </span>
+<span class="line" id="L177"><a href="#L177"> 177</a> def get_state(name, it):</span>
+<span class="line" id="L178"><a href="#L178"> 178</a>     p = S(&#x27;annot&#x27;, name + &#x27;.json&#x27;)</span>
+<span class="line" id="L179"><a href="#L179"> 179</a>     if os.path.exists(p):</span>
+<span class="line" id="L180"><a href="#L180"> 180</a>         st = json.load(open(p, encoding=&#x27;utf-8&#x27;))</span>
+<span class="line" id="L181"><a href="#L181"> 181</a>     else:</span>
+<span class="line" id="L182"><a href="#L182"> 182</a>         boxes = read_xml(S(&#x27;det_xml&#x27;, name + &#x27;.xml&#x27;))</span>
+<span class="line" id="L183"><a href="#L183"> 183</a>         for i, b in enumerate(boxes):</span>
+<span class="line" id="L184"><a href="#L184"> 184</a>             b[&#x27;id&#x27;] = i + 1</span>
+<span class="line" id="L185"><a href="#L185"> 185</a>         st = dict(boxes=boxes, seg=dict(removed=[], recls={}, lines=[]))</span>
+<span class="line" id="L186"><a href="#L186"> 186</a>     used = {(round(b[&#x27;x1&#x27;]), round(b[&#x27;y1&#x27;]), round(b[&#x27;x2&#x27;]), round(b[&#x27;y2&#x27;])) for b in st[&#x27;boxes&#x27;]}</span>
+<span class="line" id="L187"><a href="#L187"> 187</a>     cands = [b for b in read_xml(S(&#x27;pred&#x27;, &#x27;det_xml&#x27;, name + &#x27;.xml&#x27;))</span>
+<span class="line" id="L188"><a href="#L188"> 188</a>              if (b[&#x27;score&#x27;] or 0) &lt; 0.2 and (round(b[&#x27;x1&#x27;]), round(b[&#x27;y1&#x27;]), round(b[&#x27;x2&#x27;]), round(b[&#x27;y2&#x27;])) not in used]</span>
+<span class="line" id="L189"><a href="#L189"> 189</a>     c = comps(name)</span>
+<span class="line" id="L190"><a href="#L190"> 190</a>     st[&#x27;cands&#x27;] = cands</span>
+<span class="line" id="L191"><a href="#L191"> 191</a>     st[&#x27;comps&#x27;] = c[2] if c else []</span>
+<span class="line" id="L192"><a href="#L192"> 192</a>     st[&#x27;note&#x27;] = read_notes().get(name, {})</span>
+<span class="line" id="L193"><a href="#L193"> 193</a>     st[&#x27;name&#x27;], st[&#x27;w&#x27;], st[&#x27;h&#x27;] = name, int(it[&#x27;width&#x27;]), int(it[&#x27;height&#x27;])</span>
+<span class="line" id="L194"><a href="#L194"> 194</a>     st[&#x27;source&#x27;], st[&#x27;stratum&#x27;] = it[&#x27;source&#x27;], it[&#x27;stratum&#x27;]</span>
+<span class="line" id="L195"><a href="#L195"> 195</a>     return st</span>
+<span class="line" id="L196"><a href="#L196"> 196</a> </span>
+<span class="line" id="L197"><a href="#L197"> 197</a> </span>
+<span class="line" id="L198"><a href="#L198"> 198</a> def save_state(name, it, body):</span>
+<span class="line" id="L199"><a href="#L199"> 199</a>     boxes = []</span>
+<span class="line" id="L200"><a href="#L200"> 200</a>     for i, b in enumerate(body.get(&#x27;boxes&#x27;, [])):</span>
+<span class="line" id="L201"><a href="#L201"> 201</a>         if b.get(&#x27;cls&#x27;) not in CLS_SET:</span>
+<span class="line" id="L202"><a href="#L202"> 202</a>             raise ValueError(&#x27;未知类别 %r&#x27; % b.get(&#x27;cls&#x27;))</span>
+<span class="line" id="L203"><a href="#L203"> 203</a>         x1, x2 = sorted((float(b[&#x27;x1&#x27;]), float(b[&#x27;x2&#x27;])))</span>
+<span class="line" id="L204"><a href="#L204"> 204</a>         y1, y2 = sorted((float(b[&#x27;y1&#x27;]), float(b[&#x27;y2&#x27;])))</span>
+<span class="line" id="L205"><a href="#L205"> 205</a>         boxes.append(dict(id=i + 1, cls=b[&#x27;cls&#x27;], x1=x1, y1=y1, x2=x2, y2=y2, difficult=int(b.get(&#x27;difficult&#x27;) or 0),</span>
+<span class="line" id="L206"><a href="#L206"> 206</a>                           sealed=int(b.get(&#x27;sealed&#x27;) or 0), score=b.get(&#x27;score&#x27;), origin=b.get(&#x27;origin&#x27;) or &#x27;human&#x27;))</span>
+<span class="line" id="L207"><a href="#L207"> 207</a>     seg = body.get(&#x27;seg&#x27;) or {}</span>
+<span class="line" id="L208"><a href="#L208"> 208</a>     seg = dict(removed=[int(v) for v in seg.get(&#x27;removed&#x27;, [])],</span>
+<span class="line" id="L209"><a href="#L209"> 209</a>                recls={str(int(k)): int(v) for k, v in (seg.get(&#x27;recls&#x27;) or {}).items()},</span>
+<span class="line" id="L210"><a href="#L210"> 210</a>                lines=[dict(cls=int(l[&#x27;cls&#x27;]), w=int(l.get(&#x27;w&#x27;, 4)), pts=[[float(x), float(y)] for x, y in l[&#x27;pts&#x27;]])</span>
+<span class="line" id="L211"><a href="#L211"> 211</a>                       for l in seg.get(&#x27;lines&#x27;, []) if len(l.get(&#x27;pts&#x27;, [])) &gt;= 2])</span>
+<span class="line" id="L212"><a href="#L212"> 212</a>     who = (body.get(&#x27;annotator&#x27;) or &#x27;&#x27;).strip()[:40]</span>
+<span class="line" id="L213"><a href="#L213"> 213</a>     note_in = body.get(&#x27;note&#x27;) or {}</span>
+<span class="line" id="L214"><a href="#L214"> 214</a>     with LOCK:</span>
+<span class="line" id="L215"><a href="#L215"> 215</a>         st = dict(boxes=boxes, seg=seg, annotator=who, saved=time.strftime(&#x27;%Y-%m-%d %H:%M:%S&#x27;))</span>
+<span class="line" id="L216"><a href="#L216"> 216</a>         json.dump(st, open(S(&#x27;annot&#x27;, name + &#x27;.json&#x27;), &#x27;w&#x27;, encoding=&#x27;utf-8&#x27;), ensure_ascii=False)</span>
+<span class="line" id="L217"><a href="#L217"> 217</a>         with open(S(&#x27;annot&#x27;, &#x27;_log.jsonl&#x27;), &#x27;a&#x27;, encoding=&#x27;utf-8&#x27;) as f:</span>
+<span class="line" id="L218"><a href="#L218"> 218</a>             f.write(json.dumps(dict(name=name, **st), ensure_ascii=False) + &#x27;\n&#x27;)</span>
+<span class="line" id="L219"><a href="#L219"> 219</a>         write_xml(S(&#x27;det_xml&#x27;, name + &#x27;.xml&#x27;), name, int(it[&#x27;width&#x27;]), int(it[&#x27;height&#x27;]), boxes)</span>
+<span class="line" id="L220"><a href="#L220"> 220</a>         render_seg(name, seg)</span>
+<span class="line" id="L221"><a href="#L221"> 221</a>         notes = read_notes()</span>
+<span class="line" id="L222"><a href="#L222"> 222</a>         n = notes.setdefault(name, {k: &#x27;&#x27; for k in NOTE_COLS})</span>
+<span class="line" id="L223"><a href="#L223"> 223</a>         n[&#x27;name&#x27;] = name</span>
+<span class="line" id="L224"><a href="#L224"> 224</a>         for k in (&#x27;done_det&#x27;, &#x27;done_seg&#x27;, &#x27;usable&#x27;):</span>
+<span class="line" id="L225"><a href="#L225"> 225</a>             if k in note_in:</span>
+<span class="line" id="L226"><a href="#L226"> 226</a>                 n[k] = &#x27;1&#x27; if str(note_in[k]) in (&#x27;1&#x27;, &#x27;true&#x27;, &#x27;True&#x27;) else &#x27;0&#x27;</span>
+<span class="line" id="L227"><a href="#L227"> 227</a>         for k in (&#x27;road&#x27;, &#x27;remark&#x27;):</span>
+<span class="line" id="L228"><a href="#L228"> 228</a>             if k in note_in:</span>
+<span class="line" id="L229"><a href="#L229"> 229</a>                 n[k] = str(note_in[k]).replace(&#x27;\n&#x27;, &#x27; &#x27;)[:200]</span>
+<span class="line" id="L230"><a href="#L230"> 230</a>         if who:</span>
+<span class="line" id="L231"><a href="#L231"> 231</a>             n[&#x27;annotator&#x27;] = who</span>
+<span class="line" id="L232"><a href="#L232"> 232</a>         write_notes(notes, [r[&#x27;name&#x27;] for r in CFG[&#x27;index&#x27;]])</span>
+<span class="line" id="L233"><a href="#L233"> 233</a>     return dict(ok=True, saved=st[&#x27;saved&#x27;])</span>
+<span class="line" id="L234"><a href="#L234"> 234</a> </span>
+<span class="line" id="L235"><a href="#L235"> 235</a> </span>
+<span class="line" id="L236"><a href="#L236"> 236</a> def roi_contours():</span>
+<span class="line" id="L237"><a href="#L237"> 237</a>     out = {}</span>
+<span class="line" id="L238"><a href="#L238"> 238</a>     for src in (&#x27;video&#x27;, &#x27;platform&#x27;):</span>
+<span class="line" id="L239"><a href="#L239"> 239</a>         im = cv2.imread(S(&#x27;roi_%s.png&#x27; % src), cv2.IMREAD_GRAYSCALE)</span>
+<span class="line" id="L240"><a href="#L240"> 240</a>         if im is None:</span>
+<span class="line" id="L241"><a href="#L241"> 241</a>             continue</span>
+<span class="line" id="L242"><a href="#L242"> 242</a>         cs, _ = cv2.findContours((im &gt; 0).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)</span>
+<span class="line" id="L243"><a href="#L243"> 243</a>         out[src] = [cv2.approxPolyDP(c, 2.0, True).reshape(-1, 2).tolist() for c in cs if cv2.contourArea(c) &gt; 500]</span>
+<span class="line" id="L244"><a href="#L244"> 244</a>     return out</span>
+<span class="line" id="L245"><a href="#L245"> 245</a> </span>
+<span class="line" id="L246"><a href="#L246"> 246</a> </span>
+<span class="line" id="L247"><a href="#L247"> 247</a> # ------------------------------------------------------------------ 核对队列</span>
+<span class="line" id="L248"><a href="#L248"> 248</a> def Q(*p):</span>
+<span class="line" id="L249"><a href="#L249"> 249</a>     return os.path.join(HERE, &#x27;data&#x27;, &#x27;queues&#x27;, *p)</span>
+<span class="line" id="L250"><a href="#L250"> 250</a> </span>
+<span class="line" id="L251"><a href="#L251"> 251</a> </span>
+<span class="line" id="L252"><a href="#L252"> 252</a> def queue_list():</span>
+<span class="line" id="L253"><a href="#L253"> 253</a>     out = []</span>
+<span class="line" id="L254"><a href="#L254"> 254</a>     d = Q()</span>
+<span class="line" id="L255"><a href="#L255"> 255</a>     if not os.path.isdir(d):</span>
+<span class="line" id="L256"><a href="#L256"> 256</a>         return out</span>
+<span class="line" id="L257"><a href="#L257"> 257</a>     for f in sorted(os.listdir(d)):</span>
+<span class="line" id="L258"><a href="#L258"> 258</a>         if f.endswith(&#x27;.json&#x27;):</span>
+<span class="line" id="L259"><a href="#L259"> 259</a>             q = f[:-5]</span>
+<span class="line" id="L260"><a href="#L260"> 260</a>             items = json.load(open(Q(f), encoding=&#x27;utf-8&#x27;))</span>
+<span class="line" id="L261"><a href="#L261"> 261</a>             out.append(dict(q=q, title=items.get(&#x27;title&#x27;, q), n=len(items[&#x27;items&#x27;]), done=len(read_answers(q))))</span>
+<span class="line" id="L262"><a href="#L262"> 262</a>     return out</span>
+<span class="line" id="L263"><a href="#L263"> 263</a> </span>
+<span class="line" id="L264"><a href="#L264"> 264</a> </span>
+<span class="line" id="L265"><a href="#L265"> 265</a> def read_answers(q):</span>
+<span class="line" id="L266"><a href="#L266"> 266</a>     out = {}</span>
+<span class="line" id="L267"><a href="#L267"> 267</a>     p = Q(q + &#x27;_answers.csv&#x27;)</span>
+<span class="line" id="L268"><a href="#L268"> 268</a>     if os.path.exists(p):</span>
+<span class="line" id="L269"><a href="#L269"> 269</a>         for r in csv.DictReader(open(p, encoding=&#x27;utf-8-sig&#x27;)):</span>
+<span class="line" id="L270"><a href="#L270"> 270</a>             out[r[&#x27;id&#x27;]] = r           # 同一条多次作答, 以最后一次为准</span>
+<span class="line" id="L271"><a href="#L271"> 271</a>     return out</span>
+<span class="line" id="L272"><a href="#L272"> 272</a> </span>
+<span class="line" id="L273"><a href="#L273"> 273</a> </span>
+<span class="line" id="L274"><a href="#L274"> 274</a> def add_answer(q, body):</span>
+<span class="line" id="L275"><a href="#L275"> 275</a>     cols = [&#x27;id&#x27;, &#x27;real&#x27;, &#x27;cls&#x27;, &#x27;reason&#x27;, &#x27;same&#x27;, &#x27;annotator&#x27;, &#x27;time&#x27;]</span>
+<span class="line" id="L276"><a href="#L276"> 276</a>     row = {k: str(body.get(k, &#x27;&#x27;)) for k in cols}</span>
+<span class="line" id="L277"><a href="#L277"> 277</a>     row[&#x27;time&#x27;] = time.strftime(&#x27;%Y-%m-%d %H:%M:%S&#x27;)</span>
+<span class="line" id="L278"><a href="#L278"> 278</a>     if row[&#x27;real&#x27;] not in (&#x27;yes&#x27;, &#x27;wrongcls&#x27;, &#x27;no&#x27;, &#x27;unsure&#x27;):</span>
+<span class="line" id="L279"><a href="#L279"> 279</a>         raise ValueError(&#x27;real 取值不对&#x27;)</span>
+<span class="line" id="L280"><a href="#L280"> 280</a>     p = Q(q + &#x27;_answers.csv&#x27;)</span>
+<span class="line" id="L281"><a href="#L281"> 281</a>     with LOCK:</span>
+<span class="line" id="L282"><a href="#L282"> 282</a>         new = not os.path.exists(p)</span>
+<span class="line" id="L283"><a href="#L283"> 283</a>         with open(p, &#x27;a&#x27;, encoding=&#x27;utf-8&#x27;, newline=&#x27;&#x27;) as f:</span>
+<span class="line" id="L284"><a href="#L284"> 284</a>             w = csv.DictWriter(f, fieldnames=cols)</span>
+<span class="line" id="L285"><a href="#L285"> 285</a>             if new:</span>
+<span class="line" id="L286"><a href="#L286"> 286</a>                 w.writeheader()</span>
+<span class="line" id="L287"><a href="#L287"> 287</a>             w.writerow(row)</span>
+<span class="line" id="L288"><a href="#L288"> 288</a>     return dict(ok=True)</span>
+<span class="line" id="L289"><a href="#L289"> 289</a> </span>
+<span class="line" id="L290"><a href="#L290"> 290</a> </span>
+<span class="line" id="L291"><a href="#L291"> 291</a> # ------------------------------------------------------------------ HTTP</span>
+<span class="line" id="L292"><a href="#L292"> 292</a> class H(BaseHTTPRequestHandler):</span>
+<span class="line" id="L293"><a href="#L293"> 293</a>     protocol_version = &#x27;HTTP/1.1&#x27;</span>
+<span class="line" id="L294"><a href="#L294"> 294</a> </span>
+<span class="line" id="L295"><a href="#L295"> 295</a>     def log_message(self, fmt, *a):</span>
+<span class="line" id="L296"><a href="#L296"> 296</a>         if &#x27;/img/&#x27; in (a[0] if a else &#x27;&#x27;) or &#x27;/vimg/&#x27; in (a[0] if a else &#x27;&#x27;):</span>
+<span class="line" id="L297"><a href="#L297"> 297</a>             return</span>
+<span class="line" id="L298"><a href="#L298"> 298</a>         super().log_message(fmt, *a)</span>
+<span class="line" id="L299"><a href="#L299"> 299</a> </span>
+<span class="line" id="L300"><a href="#L300"> 300</a>     def _send(self, code, body, ctype=&#x27;application/json; charset=utf-8&#x27;, cache=None):</span>
+<span class="line" id="L301"><a href="#L301"> 301</a>         if isinstance(body, (dict, list)):</span>
+<span class="line" id="L302"><a href="#L302"> 302</a>             body = json.dumps(body, ensure_ascii=False).encode(&#x27;utf-8&#x27;)</span>
+<span class="line" id="L303"><a href="#L303"> 303</a>         elif isinstance(body, str):</span>
+<span class="line" id="L304"><a href="#L304"> 304</a>             body = body.encode(&#x27;utf-8&#x27;)</span>
+<span class="line" id="L305"><a href="#L305"> 305</a>         self.send_response(code)</span>
+<span class="line" id="L306"><a href="#L306"> 306</a>         self.send_header(&#x27;Content-Type&#x27;, ctype)</span>
+<span class="line" id="L307"><a href="#L307"> 307</a>         self.send_header(&#x27;Content-Length&#x27;, str(len(body)))</span>
+<span class="line" id="L308"><a href="#L308"> 308</a>         self.send_header(&#x27;Cache-Control&#x27;, cache or &#x27;no-store&#x27;)</span>
+<span class="line" id="L309"><a href="#L309"> 309</a>         self.end_headers()</span>
+<span class="line" id="L310"><a href="#L310"> 310</a>         self.wfile.write(body)</span>
+<span class="line" id="L311"><a href="#L311"> 311</a> </span>
+<span class="line" id="L312"><a href="#L312"> 312</a>     def _file(self, path, ctype):</span>
+<span class="line" id="L313"><a href="#L313"> 313</a>         if not os.path.isfile(path):</span>
+<span class="line" id="L314"><a href="#L314"> 314</a>             return self._send(404, dict(error=&#x27;没有这个文件&#x27;))</span>
+<span class="line" id="L315"><a href="#L315"> 315</a>         self._send(200, open(path, &#x27;rb&#x27;).read(), ctype, &#x27;public, max-age=86400&#x27;)</span>
+<span class="line" id="L316"><a href="#L316"> 316</a> </span>
+<span class="line" id="L317"><a href="#L317"> 317</a>     def _item(self, name):</span>
+<span class="line" id="L318"><a href="#L318"> 318</a>         if not SAFE.match(name) or name not in CFG[&#x27;by_name&#x27;]:</span>
+<span class="line" id="L319"><a href="#L319"> 319</a>             raise KeyError(name)</span>
+<span class="line" id="L320"><a href="#L320"> 320</a>         return CFG[&#x27;by_name&#x27;][name]</span>
+<span class="line" id="L321"><a href="#L321"> 321</a> </span>
+<span class="line" id="L322"><a href="#L322"> 322</a>     def do_GET(self):</span>
+<span class="line" id="L323"><a href="#L323"> 323</a>         try:</span>
+<span class="line" id="L324"><a href="#L324"> 324</a>             p = urllib.parse.urlparse(self.path).path</span>
+<span class="line" id="L325"><a href="#L325"> 325</a>             if p in (&#x27;/&#x27;, &#x27;/index.html&#x27;):</span>
+<span class="line" id="L326"><a href="#L326"> 326</a>                 return self._send(200, open(os.path.join(HERE, &#x27;index.html&#x27;), &#x27;rb&#x27;).read(), &#x27;text/html; charset=utf-8&#x27;)</span>
+<span class="line" id="L327"><a href="#L327"> 327</a>             if p == &#x27;/api/config&#x27;:</span>
+<span class="line" id="L328"><a href="#L328"> 328</a>                 return self._send(200, dict(classes=[dict(name=a, zh=b, key=c) for a, b, c in CLASSES], roi=CFG[&#x27;roi&#x27;],</span>
+<span class="line" id="L329"><a href="#L329"> 329</a>                                             set=CFG[&#x27;set&#x27;]))</span>
+<span class="line" id="L330"><a href="#L330"> 330</a>             if p == &#x27;/api/list&#x27;:</span>
+<span class="line" id="L331"><a href="#L331"> 331</a>                 notes = read_notes()</span>
+<span class="line" id="L332"><a href="#L332"> 332</a>                 out = []</span>
+<span class="line" id="L333"><a href="#L333"> 333</a>                 for r in CFG[&#x27;index&#x27;]:</span>
+<span class="line" id="L334"><a href="#L334"> 334</a>                     n = notes.get(r[&#x27;name&#x27;], {})</span>
+<span class="line" id="L335"><a href="#L335"> 335</a>                     out.append(dict(name=r[&#x27;name&#x27;], source=r[&#x27;source&#x27;], stratum=r[&#x27;stratum&#x27;], seg80=r[&#x27;seg80&#x27;],</span>
+<span class="line" id="L336"><a href="#L336"> 336</a>                                     done_det=n.get(&#x27;done_det&#x27;) == &#x27;1&#x27;, done_seg=n.get(&#x27;done_seg&#x27;) == &#x27;1&#x27;,</span>
+<span class="line" id="L337"><a href="#L337"> 337</a>                                     usable=n.get(&#x27;usable&#x27;, &#x27;1&#x27;) != &#x27;0&#x27;))</span>
+<span class="line" id="L338"><a href="#L338"> 338</a>                 return self._send(200, dict(items=out, queues=queue_list()))</span>
+<span class="line" id="L339"><a href="#L339"> 339</a>             m = re.match(r&#x27;^/api/item/([^/]+)$&#x27;, p)</span>
+<span class="line" id="L340"><a href="#L340"> 340</a>             if m:</span>
+<span class="line" id="L341"><a href="#L341"> 341</a>                 return self._send(200, get_state(m.group(1), self._item(m.group(1))))</span>
+<span class="line" id="L342"><a href="#L342"> 342</a>             m = re.match(r&#x27;^/img/([^/]+)\.jpg$&#x27;, p)</span>
+<span class="line" id="L343"><a href="#L343"> 343</a>             if m:</span>
+<span class="line" id="L344"><a href="#L344"> 344</a>                 self._item(m.group(1))</span>
+<span class="line" id="L345"><a href="#L345"> 345</a>                 return self._file(S(&#x27;images&#x27;, m.group(1) + &#x27;.jpg&#x27;), &#x27;image/jpeg&#x27;)</span>
+<span class="line" id="L346"><a href="#L346"> 346</a>             m = re.match(r&#x27;^/segmap/([^/]+)\.png$&#x27;, p)</span>
+<span class="line" id="L347"><a href="#L347"> 347</a>             if m:</span>
+<span class="line" id="L348"><a href="#L348"> 348</a>                 self._item(m.group(1))</span>
+<span class="line" id="L349"><a href="#L349"> 349</a>                 c = comps(m.group(1))</span>
+<span class="line" id="L350"><a href="#L350"> 350</a>                 if c is None:</span>
+<span class="line" id="L351"><a href="#L351"> 351</a>                     return self._send(404, dict(error=&#x27;没有预测分割&#x27;))</span>
+<span class="line" id="L352"><a href="#L352"> 352</a>                 lab, ids, _ = c</span>
+<span class="line" id="L353"><a href="#L353"> 353</a>                 arr = np.zeros(lab.shape + (3,), np.uint8)</span>
+<span class="line" id="L354"><a href="#L354"> 354</a>                 arr[..., 2] = ids &amp; 255</span>
+<span class="line" id="L355"><a href="#L355"> 355</a>                 arr[..., 1] = (ids &gt;&gt; 8) &amp; 255</span>
+<span class="line" id="L356"><a href="#L356"> 356</a>                 arr[..., 0] = lab</span>
+<span class="line" id="L357"><a href="#L357"> 357</a>                 return self._send(200, cv2.imencode(&#x27;.png&#x27;, arr)[1].tobytes(), &#x27;image/png&#x27;)</span>
+<span class="line" id="L358"><a href="#L358"> 358</a>             m = re.match(r&#x27;^/vimg/([a-z0-9]+)/([^/]+)$&#x27;, p)</span>
+<span class="line" id="L359"><a href="#L359"> 359</a>             if m and m.group(1) in CFG[&#x27;roots&#x27;] and SAFE.match(m.group(2)):</span>
+<span class="line" id="L360"><a href="#L360"> 360</a>                 return self._file(os.path.join(CFG[&#x27;roots&#x27;][m.group(1)], m.group(2)), &#x27;image/jpeg&#x27;)</span>
+<span class="line" id="L361"><a href="#L361"> 361</a>             m = re.match(r&#x27;^/api/vq/([^/]+)$&#x27;, p)</span>
+<span class="line" id="L362"><a href="#L362"> 362</a>             if m and SAFE.match(m.group(1)) and os.path.exists(Q(m.group(1) + &#x27;.json&#x27;)):</span>
+<span class="line" id="L363"><a href="#L363"> 363</a>                 d = json.load(open(Q(m.group(1) + &#x27;.json&#x27;), encoding=&#x27;utf-8&#x27;))</span>
+<span class="line" id="L364"><a href="#L364"> 364</a>                 return self._send(200, dict(title=d.get(&#x27;title&#x27;, &#x27;&#x27;), items=d[&#x27;items&#x27;], answers=read_answers(m.group(1))))</span>
+<span class="line" id="L365"><a href="#L365"> 365</a>             if p == &#x27;/api/eval&#x27;:</span>
+<span class="line" id="L366"><a href="#L366"> 366</a>                 py = CFG[&#x27;eval_python&#x27;]</span>
+<span class="line" id="L367"><a href="#L367"> 367</a>                 r = subprocess.run([py, &#x27;eval_disease.py&#x27;, &#x27;--set&#x27;, CFG[&#x27;set&#x27;]], cwd=CFG[&#x27;stitich&#x27;],</span>
+<span class="line" id="L368"><a href="#L368"> 368</a>                                    capture_output=True, text=True, timeout=600)</span>
+<span class="line" id="L369"><a href="#L369"> 369</a>                 md = S(&#x27;metrics.md&#x27;)</span>
+<span class="line" id="L370"><a href="#L370"> 370</a>                 txt = open(md, encoding=&#x27;utf-8&#x27;).read() if os.path.exists(md) and r.returncode == 0 else &#x27;&#x27;</span>
+<span class="line" id="L371"><a href="#L371"> 371</a>                 return self._send(200, dict(ok=r.returncode == 0, log=(r.stdout + r.stderr)[-4000:], metrics=txt))</span>
+<span class="line" id="L372"><a href="#L372"> 372</a>             return self._send(404, dict(error=&#x27;not found&#x27;))</span>
+<span class="line" id="L373"><a href="#L373"> 373</a>         except KeyError:</span>
+<span class="line" id="L374"><a href="#L374"> 374</a>             self._send(404, dict(error=&#x27;没有这张图&#x27;))</span>
+<span class="line" id="L375"><a href="#L375"> 375</a>         except Exception as e:                                     # noqa</span>
+<span class="line" id="L376"><a href="#L376"> 376</a>             self._send(500, dict(error=&#x27;%s: %s&#x27; % (type(e).__name__, e)))</span>
+<span class="line" id="L377"><a href="#L377"> 377</a> </span>
+<span class="line" id="L378"><a href="#L378"> 378</a>     def do_POST(self):</span>
+<span class="line" id="L379"><a href="#L379"> 379</a>         try:</span>
+<span class="line" id="L380"><a href="#L380"> 380</a>             p = urllib.parse.urlparse(self.path).path</span>
+<span class="line" id="L381"><a href="#L381"> 381</a>             body = json.loads(self.rfile.read(int(self.headers.get(&#x27;Content-Length&#x27;) or 0)) or b&#x27;{}&#x27;)</span>
+<span class="line" id="L382"><a href="#L382"> 382</a>             m = re.match(r&#x27;^/api/save/([^/]+)$&#x27;, p)</span>
+<span class="line" id="L383"><a href="#L383"> 383</a>             if m:</span>
+<span class="line" id="L384"><a href="#L384"> 384</a>                 return self._send(200, save_state(m.group(1), self._item(m.group(1)), body))</span>
+<span class="line" id="L385"><a href="#L385"> 385</a>             m = re.match(r&#x27;^/api/vq/([^/]+)$&#x27;, p)</span>
+<span class="line" id="L386"><a href="#L386"> 386</a>             if m and SAFE.match(m.group(1)) and os.path.exists(Q(m.group(1) + &#x27;.json&#x27;)):</span>
+<span class="line" id="L387"><a href="#L387"> 387</a>                 return self._send(200, add_answer(m.group(1), body))</span>
+<span class="line" id="L388"><a href="#L388"> 388</a>             return self._send(404, dict(error=&#x27;not found&#x27;))</span>
+<span class="line" id="L389"><a href="#L389"> 389</a>         except KeyError:</span>
+<span class="line" id="L390"><a href="#L390"> 390</a>             self._send(404, dict(error=&#x27;没有这张图&#x27;))</span>
+<span class="line" id="L391"><a href="#L391"> 391</a>         except Exception as e:                                     # noqa</span>
+<span class="line" id="L392"><a href="#L392"> 392</a>             self._send(500, dict(error=&#x27;%s: %s&#x27; % (type(e).__name__, e)))</span>
+<span class="line" id="L393"><a href="#L393"> 393</a> </span>
+<span class="line" id="L394"><a href="#L394"> 394</a> </span>
+<span class="line" id="L395"><a href="#L395"> 395</a> def main():</span>
+<span class="line" id="L396"><a href="#L396"> 396</a>     ap = argparse.ArgumentParser()</span>
+<span class="line" id="L397"><a href="#L397"> 397</a>     ap.add_argument(&#x27;--set&#x27;, default=&#x27;/home/yjl/data/0907/eval_disease_v1&#x27;)</span>
+<span class="line" id="L398"><a href="#L398"> 398</a>     ap.add_argument(&#x27;--stitich&#x27;, default=&#x27;/home/yjl/crack/stitich&#x27;)</span>
+<span class="line" id="L399"><a href="#L399"> 399</a>     ap.add_argument(&#x27;--eval-python&#x27;, default=&#x27;/home/yjl/miniconda3/envs/crack/bin/python&#x27;)</span>
+<span class="line" id="L400"><a href="#L400"> 400</a>     ap.add_argument(&#x27;--host&#x27;, default=&#x27;0.0.0.0&#x27;)</span>
+<span class="line" id="L401"><a href="#L401"> 401</a>     ap.add_argument(&#x27;--port&#x27;, type=int, default=8830)</span>
+<span class="line" id="L402"><a href="#L402"> 402</a>     a = ap.parse_args()</span>
+<span class="line" id="L403"><a href="#L403"> 403</a>     CFG.update(set=a.set, stitich=a.stitich, eval_python=a.eval_python,</span>
+<span class="line" id="L404"><a href="#L404"> 404</a>                roots=dict(f07=&#x27;/home/yjl/data/0907/work/frames&#x27;, r29=&#x27;/home/yjl/data/0929/ch1_rear&#x27;))</span>
+<span class="line" id="L405"><a href="#L405"> 405</a>     os.makedirs(S(&#x27;annot&#x27;), exist_ok=True)</span>
+<span class="line" id="L406"><a href="#L406"> 406</a>     os.makedirs(Q(), exist_ok=True)</span>
+<span class="line" id="L407"><a href="#L407"> 407</a>     bk = S(&#x27;annot&#x27;, &#x27;_orig_backup.tgz&#x27;)</span>
+<span class="line" id="L408"><a href="#L408"> 408</a>     if not os.path.exists(bk):</span>
+<span class="line" id="L409"><a href="#L409"> 409</a>         with tarfile.open(bk, &#x27;w:gz&#x27;) as t:</span>
+<span class="line" id="L410"><a href="#L410"> 410</a>             for n in (&#x27;det_xml&#x27;, &#x27;seg_png&#x27;, &#x27;notes.csv&#x27;):</span>
+<span class="line" id="L411"><a href="#L411"> 411</a>                 t.add(S(n), arcname=n)</span>
+<span class="line" id="L412"><a href="#L412"> 412</a>         print(&#x27;已备份原始 det_xml / seg_png / notes.csv -&gt;&#x27;, bk)</span>
+<span class="line" id="L413"><a href="#L413"> 413</a>     CFG[&#x27;index&#x27;] = load_index()</span>
+<span class="line" id="L414"><a href="#L414"> 414</a>     CFG[&#x27;by_name&#x27;] = {r[&#x27;name&#x27;]: r for r in CFG[&#x27;index&#x27;]}</span>
+<span class="line" id="L415"><a href="#L415"> 415</a>     CFG[&#x27;roi&#x27;] = roi_contours()</span>
+<span class="line" id="L416"><a href="#L416"> 416</a>     print(&#x27;评估集 %s: %d 张; http://%s:%d/&#x27; % (a.set, len(CFG[&#x27;index&#x27;]), a.host, a.port), flush=True)</span>
+<span class="line" id="L417"><a href="#L417"> 417</a>     ThreadingHTTPServer((a.host, a.port), H).serve_forever()</span>
+<span class="line" id="L418"><a href="#L418"> 418</a> </span>
+<span class="line" id="L419"><a href="#L419"> 419</a> </span>
+<span class="line" id="L420"><a href="#L420"> 420</a> if __name__ == &#x27;__main__&#x27;:</span>
+<span class="line" id="L421"><a href="#L421"> 421</a>     main()</span></pre></html>

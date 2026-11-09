@@ -1,0 +1,308 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>s04_register.py</title><style>body{margin:24px;font:15px system-ui;background:#faf8f3;color:#243342}pre{overflow:auto;line-height:1.6;background:white;padding:16px}.line{display:block}.line:target{background:#fff1a8}a{color:#58728a}header{overflow-wrap:anywhere}</style><header><a href="/notes/series/internship/">返回实习专栏</a><h1>s04_register.py</h1><p>只读快照：2026-11-09 · /home/yjl/crack/viewer3d/build/s04_register.py</p><p>SHA-256: c33fa585c1cb8a9c6f9bece979abdc1ca030e5bbc1c79de1cf2ccd688d726d5c</p></header><pre><span class="line" id="L1"><a href="#L1">   1</a> # -*- coding: utf-8 -*-</span>
+<span class="line" id="L2"><a href="#L2">   2</a> &quot;&quot;&quot;04: 把 0924 宽幅俯视图放进三维地图 —— 先按 GNSS, 再对着地图自己的路面正射底图做图像配准。</span>
+<span class="line" id="L3"><a href="#L3">   3</a> </span>
+<span class="line" id="L4"><a href="#L4">   4</a> 为什么 GNSS 不够: 两趟是两台车、相隔三周, 各自的定位误差都是米级, 直接叠上去车道线对不上。</span>
+<span class="line" id="L5"><a href="#L5">   5</a> 配准目标是 s03 生成的路面正射底图 (地图自己的车道线/井盖/路面文字在哪, 由它说了算)。</span>
+<span class="line" id="L6"><a href="#L6">   6</a> </span>
+<span class="line" id="L7"><a href="#L7">   7</a> 做法:</span>
+<span class="line" id="L8"><a href="#L8">   8</a>   1. GNSS 初值: 天线经纬度 -&gt; 局部坐标; 朝向取轨迹切向 (低速时退回罗盘); 后摄在天线后方 LEVER_BACK。</span>
+<span class="line" id="L9"><a href="#L9">   9</a>   2. 逐张: 俯视图降到 4 cm/px, 取带通特征 (去掉光照缓变, 留下标线/井盖/裂缝), 在底图上做归一化互相关,</span>
+<span class="line" id="L10"><a href="#L10">  10</a>      搜索范围 横向 ±5 m、纵向 ±8 m、转角 ±4 度。</span>
+<span class="line" id="L11"><a href="#L11">  11</a>   3. 单张往往有歧义 (车道线只约束横向, 虚线每 6 m 重复一次), 而 GNSS 误差沿路变化很慢 ——</span>
+<span class="line" id="L12"><a href="#L12">  12</a>      所以把前后各 WIN 米内的相关曲面叠起来取峰, 得到&quot;这一段&quot;的偏移; 再让每张在它附近 ±0.6 m 内微调。</span>
+<span class="line" id="L13"><a href="#L13">  13</a>   4. 底图没覆盖或没特征的地方不硬配, 沿用邻近的偏移, 并标记 conf=0。</span>
+<span class="line" id="L14"><a href="#L14">  14</a> &quot;&quot;&quot;</span>
+<span class="line" id="L15"><a href="#L15">  15</a> import sys, csv, time</span>
+<span class="line" id="L16"><a href="#L16">  16</a> import numpy as np, cv2</span>
+<span class="line" id="L17"><a href="#L17">  17</a> from multiprocessing import Pool</span>
+<span class="line" id="L18"><a href="#L18">  18</a> from common import *</span>
+<span class="line" id="L19"><a href="#L19">  19</a> from common import _gauss</span>
+<span class="line" id="L20"><a href="#L20">  20</a> </span>
+<span class="line" id="L21"><a href="#L21">  21</a> RUN0924 = STITCH + &quot;/out/ipm_0924_wide&quot;</span>
+<span class="line" id="L22"><a href="#L22">  22</a> REC0924 = HOME + &quot;/data/0924/prep_ch1/rear/records.csv&quot;</span>
+<span class="line" id="L23"><a href="#L23">  23</a> RES = 0.04</span>
+<span class="line" id="L24"><a href="#L24">  24</a> SX, SY = 5.0, 16.0                    # 搜索半宽: 横向 / 纵向 (m)</span>
+<span class="line" id="L25"><a href="#L25">  25</a> THETAS = [-4.0, -2.0, 0.0, 2.0, 4.0]</span>
+<span class="line" id="L26"><a href="#L26">  26</a> LEVER_BACK = 1.0                      # 后摄在 GNSS 天线后方 (m), 标定 toGps.x = -1</span>
+<span class="line" id="L27"><a href="#L27">  27</a> WIN = 30.0</span>
+<span class="line" id="L28"><a href="#L28">  28</a> </span>
+<span class="line" id="L29"><a href="#L29">  29</a> o = json.load(open(WORK + &quot;/origin.json&quot;))</span>
+<span class="line" id="L30"><a href="#L30">  30</a> og = dict(lon0=o[&quot;lon0&quot;], lat0=o[&quot;lat0&quot;], m_lon=o[&quot;m_lon&quot;])</span>
+<span class="line" id="L31"><a href="#L31">  31</a> meta = json.load(open(RUN0924 + &quot;/meta.json&quot;))</span>
+<span class="line" id="L32"><a href="#L32">  32</a> G = meta[&quot;ground&quot;]</span>
+<span class="line" id="L33"><a href="#L33">  33</a> X_LO, X_HI, Y_LO, Y_HI = G[&quot;x_lo&quot;], G[&quot;x_hi&quot;], G[&quot;y_lo&quot;], G[&quot;y_hi&quot;]</span>
+<span class="line" id="L34"><a href="#L34">  34</a> XC, YC = 0.5 * (X_LO + X_HI), 0.5 * (Y_LO + Y_HI)</span>
+<span class="line" id="L35"><a href="#L35">  35</a> TW, TH = int(round((X_HI - X_LO) / RES)), int(round((Y_HI - Y_LO) / RES))</span>
+<span class="line" id="L36"><a href="#L36">  36</a> </span>
+<span class="line" id="L37"><a href="#L37">  37</a> # ---------------- 底图 ----------------</span>
+<span class="line" id="L38"><a href="#L38">  38</a> ORTHO = {}</span>
+<span class="line" id="L39"><a href="#L39">  39</a> def load_ortho():</span>
+<span class="line" id="L40"><a href="#L40">  40</a>     idx = json.load(open(WORK + &quot;/ortho/index.json&quot;))</span>
+<span class="line" id="L41"><a href="#L41">  41</a>     for tid in idx[&quot;tiles&quot;]:</span>
+<span class="line" id="L42"><a href="#L42">  42</a>         im = cv2.imread(&quot;%s/ortho/%s.png&quot; % (WORK, tid))</span>
+<span class="line" id="L43"><a href="#L43">  43</a>         gx, gn = (int(v) for v in tid.split(&quot;_&quot;))</span>
+<span class="line" id="L44"><a href="#L44">  44</a>         b, g, r = (im[:, :, c].astype(np.int16) for c in range(3))</span>
+<span class="line" id="L45"><a href="#L45">  45</a>         veg = (g &gt; r + 10) &amp; (g &gt; b + 10)                                 # 绿化带/草地: 俯视图不可能落在上面</span>
+<span class="line" id="L46"><a href="#L46">  46</a>         ORTHO[(gx, gn)] = (cv2.cvtColor(im, cv2.COLOR_BGR2GRAY), im.max(axis=2) &gt; 0, veg)</span>
+<span class="line" id="L47"><a href="#L47">  47</a>     return idx</span>
+<span class="line" id="L48"><a href="#L48">  48</a> OIDX = load_ortho()</span>
+<span class="line" id="L49"><a href="#L49">  49</a> OT, OP = OIDX[&quot;tile&quot;], OIDX[&quot;px&quot;]</span>
+<span class="line" id="L50"><a href="#L50">  50</a> </span>
+<span class="line" id="L51"><a href="#L51">  51</a> def sample(E, N, with_veg=False):</span>
+<span class="line" id="L52"><a href="#L52">  52</a>     &quot;&quot;&quot;世界 (E,N) -&gt; 底图灰度与有效性 (最近邻)&quot;&quot;&quot;</span>
+<span class="line" id="L53"><a href="#L53">  53</a>     gx = np.floor(E / OT).astype(np.int64); gn = np.floor(N / OT).astype(np.int64)</span>
+<span class="line" id="L54"><a href="#L54">  54</a>     col = np.clip(((E - gx * OT) / RES).astype(np.int64), 0, OP - 1)</span>
+<span class="line" id="L55"><a href="#L55">  55</a>     row = np.clip((((gn + 1) * OT - N) / RES).astype(np.int64), 0, OP - 1)</span>
+<span class="line" id="L56"><a href="#L56">  56</a>     out = np.zeros(E.shape, np.float32); ok = np.zeros(E.shape, bool); vg = np.zeros(E.shape, bool)</span>
+<span class="line" id="L57"><a href="#L57">  57</a>     key = gx * 100003 + gn</span>
+<span class="line" id="L58"><a href="#L58">  58</a>     for k in np.unique(key):</span>
+<span class="line" id="L59"><a href="#L59">  59</a>         m = key == k</span>
+<span class="line" id="L60"><a href="#L60">  60</a>         t = ORTHO.get((int(gx[m][0]), int(gn[m][0])))</span>
+<span class="line" id="L61"><a href="#L61">  61</a>         if t is None: continue</span>
+<span class="line" id="L62"><a href="#L62">  62</a>         out[m] = t[0][row[m], col[m]]; ok[m] = t[1][row[m], col[m]]; vg[m] = t[2][row[m], col[m]]</span>
+<span class="line" id="L63"><a href="#L63">  63</a>     if with_veg: return out, ok, vg</span>
+<span class="line" id="L64"><a href="#L64">  64</a>     return out, ok</span>
+<span class="line" id="L65"><a href="#L65">  65</a> </span>
+<span class="line" id="L66"><a href="#L66">  66</a> def feature(g, valid):</span>
+<span class="line" id="L67"><a href="#L67">  67</a>     &quot;&quot;&quot;带通特征: 去掉 &gt;0.6 m 的缓变, 压掉 &lt;1 px 的噪声; 无效处置 0&quot;&quot;&quot;</span>
+<span class="line" id="L68"><a href="#L68">  68</a>     g = g.astype(np.float32)</span>
+<span class="line" id="L69"><a href="#L69">  69</a>     v = valid.astype(np.float32)</span>
+<span class="line" id="L70"><a href="#L70">  70</a>     k = int(0.6 / RES) | 1</span>
+<span class="line" id="L71"><a href="#L71">  71</a>     num = cv2.GaussianBlur(g * v, (0, 0), k / 2.0); den = cv2.GaussianBlur(v, (0, 0), k / 2.0)</span>
+<span class="line" id="L72"><a href="#L72">  72</a>     bg = num / np.maximum(den, 1e-3)</span>
+<span class="line" id="L73"><a href="#L73">  73</a>     f = cv2.GaussianBlur((g - bg) * v, (0, 0), 0.8)</span>
+<span class="line" id="L74"><a href="#L74">  74</a>     f = np.clip(f / 25.0, -1.0, 1.0)</span>
+<span class="line" id="L75"><a href="#L75">  75</a>     f[~valid] = 0</span>
+<span class="line" id="L76"><a href="#L76">  76</a>     return f</span>
+<span class="line" id="L77"><a href="#L77">  77</a> </span>
+<span class="line" id="L78"><a href="#L78">  78</a> MASK = None</span>
+<span class="line" id="L79"><a href="#L79">  79</a> def tile_feature(name):</span>
+<span class="line" id="L80"><a href="#L80">  80</a>     &quot;&quot;&quot;0924 俯视图 -&gt; 4 cm/px 的特征图与有效掩膜 (俯视图 2 mm/px, 先 1/8 解码再缩)&quot;&quot;&quot;</span>
+<span class="line" id="L81"><a href="#L81">  81</a>     global MASK</span>
+<span class="line" id="L82"><a href="#L82">  82</a>     im = cv2.imread(&quot;%s/bev/%s&quot; % (RUN0924, name), cv2.IMREAD_REDUCED_GRAYSCALE_4)</span>
+<span class="line" id="L83"><a href="#L83">  83</a>     if im is None: return None, None</span>
+<span class="line" id="L84"><a href="#L84">  84</a>     g = cv2.resize(im, (TW, TH), interpolation=cv2.INTER_AREA)</span>
+<span class="line" id="L85"><a href="#L85">  85</a>     if MASK is None:</span>
+<span class="line" id="L86"><a href="#L86">  86</a>         m = cv2.imread(RUN0924 + &quot;/mask/valid.png&quot;, 0)</span>
+<span class="line" id="L87"><a href="#L87">  87</a>         MASK = cv2.resize(m, (TW, TH), interpolation=cv2.INTER_AREA) &gt; 250</span>
+<span class="line" id="L88"><a href="#L88">  88</a>     return feature(g, MASK), MASK</span>
+<span class="line" id="L89"><a href="#L89">  89</a> </span>
+<span class="line" id="L90"><a href="#L90">  90</a> MARK_T = 0.40                         # 带通特征 &gt; 0.40 (约亮出背景 10 灰度) 视为标线</span>
+<span class="line" id="L91"><a href="#L91">  91</a> </span>
+<span class="line" id="L92"><a href="#L92">  92</a> def match_one(args):</span>
+<span class="line" id="L93"><a href="#L93">  93</a>     &quot;&quot;&quot;一张俯视图在一个 GNSS 初值下的匹配曲面。返回 (k, surf[theta, dy, dx] 降到 8 cm, cover, 标线像素数)</span>
+<span class="line" id="L94"><a href="#L94">  94</a> </span>
+<span class="line" id="L95"><a href="#L95">  95</a>     评分 = 标线掩膜的交并比 + 0.3 x 带通互相关。只用互相关会锁错车道: 俯视图里一小段虚线</span>
+<span class="line" id="L96"><a href="#L96">  96</a>     叠到底图的实线上, 分子一样大, 而平整沥青的带通特征是 0, &quot;底图这里有线、俯视图没有&quot;不受罚。</span>
+<span class="line" id="L97"><a href="#L97">  97</a>     交并比的分母把底图里没被对上的标线也算进去, 实线就不会再冒充虚线。</span>
+<span class="line" id="L98"><a href="#L98">  98</a>     &quot;&quot;&quot;</span>
+<span class="line" id="L99"><a href="#L99">  99</a>     k, name, C, psi = args</span>
+<span class="line" id="L100"><a href="#L100"> 100</a>     ft, mk = tile_feature(name)</span>
+<span class="line" id="L101"><a href="#L101"> 101</a>     if ft is None: return k, None, 0.0, 0</span>
+<span class="line" id="L102"><a href="#L102"> 102</a>     fwd0 = np.array([np.sin(psi), np.cos(psi)]); rt0 = np.array([np.cos(psi), -np.sin(psi)])</span>
+<span class="line" id="L103"><a href="#L103"> 103</a>     T0 = C + fwd0 * (-YC) + rt0 * (-XC)                                    # 俯视图中心的世界位置</span>
+<span class="line" id="L104"><a href="#L104"> 104</a>     mx, my = int(SX / RES), int(SY / RES)</span>
+<span class="line" id="L105"><a href="#L105"> 105</a>     PW, PH = TW + 2 * mx, TH + 2 * my</span>
+<span class="line" id="L106"><a href="#L106"> 106</a>     us = (np.arange(PW) + 0.5 - PW / 2.0) * RES                            # 相对中心, 图像右为正 = 车左</span>
+<span class="line" id="L107"><a href="#L107"> 107</a>     vs = (np.arange(PH) + 0.5 - PH / 2.0) * RES                            # 图像下为正 = 车前 (离车近)</span>
+<span class="line" id="L108"><a href="#L108"> 108</a>     U, Vv = np.meshgrid(us, vs)</span>
+<span class="line" id="L109"><a href="#L109"> 109</a>     e_t = float((ft * ft).sum()) + 1e-6</span>
+<span class="line" id="L110"><a href="#L110"> 110</a>     mkf = mk.astype(np.float32); area = float(mkf.sum())</span>
+<span class="line" id="L111"><a href="#L111"> 111</a>     Mt = ((ft &gt; MARK_T) &amp; mk).astype(np.float32); nT = float(Mt.sum())</span>
+<span class="line" id="L112"><a href="#L112"> 112</a>     surfs = []; cover = 0.0</span>
+<span class="line" id="L113"><a href="#L113"> 113</a>     for th in THETAS:</span>
+<span class="line" id="L114"><a href="#L114"> 114</a>         a = psi + np.radians(th)</span>
+<span class="line" id="L115"><a href="#L115"> 115</a>         fwd = np.array([np.sin(a), np.cos(a)]); rt = np.array([np.cos(a), -np.sin(a)])</span>
+<span class="line" id="L116"><a href="#L116"> 116</a>         E = T0[0] + rt[0] * (-U) + fwd[0] * (Vv); N = T0[1] + rt[1] * (-U) + fwd[1] * (Vv)</span>
+<span class="line" id="L117"><a href="#L117"> 117</a>         g, ok, vg = sample(E, N, True)</span>
+<span class="line" id="L118"><a href="#L118"> 118</a>         if ok.mean() &lt; 0.08:</span>
+<span class="line" id="L119"><a href="#L119"> 119</a>             surfs.append(np.full(((2 * my) // 2 + 1, (2 * mx) // 2 + 1), -1.0, np.float32)); continue</span>
+<span class="line" id="L120"><a href="#L120"> 120</a>         fo = feature(g, ok)</span>
+<span class="line" id="L121"><a href="#L121"> 121</a>         Mo = (fo &gt; MARK_T).astype(np.float32)</span>
+<span class="line" id="L122"><a href="#L122"> 122</a>         num = cv2.matchTemplate(fo, ft, cv2.TM_CCORR)</span>
+<span class="line" id="L123"><a href="#L123"> 123</a>         en = cv2.matchTemplate(fo * fo, mkf, cv2.TM_CCORR)</span>
+<span class="line" id="L124"><a href="#L124"> 124</a>         cv_ = cv2.matchTemplate(ok.astype(np.float32), mkf, cv2.TM_CCORR) / area</span>
+<span class="line" id="L125"><a href="#L125"> 125</a>         ncc = num / np.sqrt(np.maximum(en, 1e-6) * e_t)</span>
+<span class="line" id="L126"><a href="#L126"> 126</a>         bo = cv2.matchTemplate(Mo, mkf, cv2.TM_CCORR)                       # 底图在该位置足迹内的标线像素</span>
+<span class="line" id="L127"><a href="#L127"> 127</a>         if nT &gt;= 40:</span>
+<span class="line" id="L128"><a href="#L128"> 128</a>             inter = cv2.matchTemplate(Mo, Mt, cv2.TM_CCORR)</span>
+<span class="line" id="L129"><a href="#L129"> 129</a>             sc = inter / np.maximum(nT + bo - inter, 1.0) + 0.3 * ncc</span>
+<span class="line" id="L130"><a href="#L130"> 130</a>         else:                                                               # 俯视图里没有标线: 底图这里也不该有</span>
+<span class="line" id="L131"><a href="#L131"> 131</a>             sc = 0.3 * ncc - 2.0 * bo / area</span>
+<span class="line" id="L132"><a href="#L132"> 132</a>         # 俯视图是车轮下的路面, 不可能压在绿化带上: 足迹里植被每占 10%, 扣 0.25 分</span>
+<span class="line" id="L133"><a href="#L133"> 133</a>         sc = sc - 2.5 * cv2.matchTemplate(vg.astype(np.float32), mkf, cv2.TM_CCORR) / area</span>
+<span class="line" id="L134"><a href="#L134"> 134</a>         sc[cv_ &lt; 0.55] = -1.0                                              # 底图覆盖不足的位置不算</span>
+<span class="line" id="L135"><a href="#L135"> 135</a>         cover = max(cover, float(cv_[my, mx]))</span>
+<span class="line" id="L136"><a href="#L136"> 136</a>         # 纵向做 ±0.5 m 的最大值滤波再降采样: 容忍相邻几张之间的时间抖动</span>
+<span class="line" id="L137"><a href="#L137"> 137</a>         kk = int(0.5 / RES) * 2 + 1</span>
+<span class="line" id="L138"><a href="#L138"> 138</a>         sc = cv2.dilate(sc, np.ones((kk, 1), np.uint8))</span>
+<span class="line" id="L139"><a href="#L139"> 139</a>         surfs.append(sc[::2, ::2].astype(np.float32))</span>
+<span class="line" id="L140"><a href="#L140"> 140</a>     return k, np.stack(surfs), cover, int(nT)</span>
+<span class="line" id="L141"><a href="#L141"> 141</a> </span>
+<span class="line" id="L142"><a href="#L142"> 142</a> if __name__ == &quot;__main__&quot;:</span>
+<span class="line" id="L143"><a href="#L143"> 143</a>     t0 = time.time()</span>
+<span class="line" id="L144"><a href="#L144"> 144</a>     rec = {r[&quot;frame&quot;]: r for r in csv.DictReader(open(REC0924, encoding=&quot;utf-8&quot;))}</span>
+<span class="line" id="L145"><a href="#L145"> 145</a>     rows = [r for r in csv.DictReader(open(RUN0924 + &quot;/index.csv&quot;, encoding=&quot;utf-8&quot;))</span>
+<span class="line" id="L146"><a href="#L146"> 146</a>             if rec.get(r[&quot;src&quot;], {}).get(&quot;is_dup&quot;) != &quot;1&quot; and r[&quot;lon&quot;] and float(r[&quot;lon&quot;]) &gt; 1]</span>
+<span class="line" id="L147"><a href="#L147"> 147</a>     rows.sort(key=lambda r: int(r[&quot;timestamp_ms&quot;]))</span>
+<span class="line" id="L148"><a href="#L148"> 148</a>     n = len(rows)</span>
+<span class="line" id="L149"><a href="#L149"> 149</a>     E, N = lonlat_to_en([float(r[&quot;lon&quot;]) for r in rows], [float(r[&quot;lat&quot;]) for r in rows], og)</span>
+<span class="line" id="L150"><a href="#L150"> 150</a>     P = np.stack([E, N], 1)</span>
+<span class="line" id="L151"><a href="#L151"> 151</a>     ts = np.array([int(r[&quot;timestamp_ms&quot;]) for r in rows]) / 1000.0</span>
+<span class="line" id="L152"><a href="#L152"> 152</a>     spd = np.array([float(r[&quot;speed_kmh&quot;] or 0) for r in rows]); cmp_ = np.radians(np.array([float(r[&quot;angle_deg&quot;] or 0) for r in rows]))</span>
+<span class="line" id="L153"><a href="#L153"> 153</a>     # 朝向: 轨迹切向 (前后各 2 张, 基线够长才用), 否则罗盘</span>
+<span class="line" id="L154"><a href="#L154"> 154</a>     psi = cmp_.copy(); src_h = np.zeros(n, int)</span>
+<span class="line" id="L155"><a href="#L155"> 155</a>     for i in range(n):</span>
+<span class="line" id="L156"><a href="#L156"> 156</a>         a, b = max(0, i - 2), min(n - 1, i + 2)</span>
+<span class="line" id="L157"><a href="#L157"> 157</a>         d = P[b] - P[a]</span>
+<span class="line" id="L158"><a href="#L158"> 158</a>         if np.hypot(*d) &gt; 6.0 and ts[b] - ts[a] &lt; 8.0:</span>
+<span class="line" id="L159"><a href="#L159"> 159</a>             psi[i] = np.arctan2(d[0], d[1]); src_h[i] = 1</span>
+<span class="line" id="L160"><a href="#L160"> 160</a>     dcmp = np.degrees((psi - cmp_ + np.pi) % (2 * np.pi) - np.pi)</span>
+<span class="line" id="L161"><a href="#L161"> 161</a>     print(&quot;0924 有效俯视图 %d 张; 朝向取轨迹切向 %d 张, 罗盘 %d 张; 切向-罗盘 中位 %+.1f deg (IQR %+.1f~%+.1f)&quot;</span>
+<span class="line" id="L162"><a href="#L162"> 162</a>           % (n, src_h.sum(), n - src_h.sum(), np.median(dcmp[src_h == 1]), *np.percentile(dcmp[src_h == 1], [25, 75])))</span>
+<span class="line" id="L163"><a href="#L163"> 163</a>     fwd = np.stack([np.sin(psi), np.cos(psi)], 1)</span>
+<span class="line" id="L164"><a href="#L164"> 164</a>     C = P - fwd * LEVER_BACK                                               # 后摄的地面位置</span>
+<span class="line" id="L165"><a href="#L165"> 165</a>     with Pool(40) as pool:</span>
+<span class="line" id="L166"><a href="#L166"> 166</a>         res = pool.map(match_one, [(k, rows[k][&quot;bev&quot;], C[k], psi[k]) for k in range(n)], chunksize=8)</span>
+<span class="line" id="L167"><a href="#L167"> 167</a>     surf = [None] * n; cover = np.zeros(n)</span>
+<span class="line" id="L168"><a href="#L168"> 168</a>     nmark = np.zeros(n, int)</span>
+<span class="line" id="L169"><a href="#L169"> 169</a>     for k, s_, c, nm in res: surf[k] = s_; cover[k] = c; nmark[k] = nm</span>
+<span class="line" id="L170"><a href="#L170"> 170</a>     have = np.array([s_ is not None and s_.max() &gt; -0.5 for s_ in surf])</span>
+<span class="line" id="L171"><a href="#L171"> 171</a>     print(&quot;匹配曲面: %d 张有底图可比 (%.0f%%); 初值处底图覆盖率中位 %.2f; 俯视图里有标线的 %d 张 (%.0f%%); 用时 %.0fs&quot;</span>
+<span class="line" id="L172"><a href="#L172"> 172</a>           % (have.sum(), 100 * have.mean(), np.median(cover[have]), (nmark &gt;= 40).sum(), 100 * (nmark &gt;= 40).mean(), time.time() - t0))</span>
+<span class="line" id="L173"><a href="#L173"> 173</a>     shp = next(s_.shape for s_ in surf if s_ is not None)</span>
+<span class="line" id="L174"><a href="#L174"> 174</a>     nt, ny, nx = shp</span>
+<span class="line" id="L175"><a href="#L175"> 175</a>     step = 2 * RES</span>
+<span class="line" id="L176"><a href="#L176"> 176</a>     Z = np.zeros((n,) + shp, np.float32)</span>
+<span class="line" id="L177"><a href="#L177"> 177</a>     for k in range(n):</span>
+<span class="line" id="L178"><a href="#L178"> 178</a>         if surf[k] is not None: Z[k] = np.clip(surf[k], -1.0, None)</span>
+<span class="line" id="L179"><a href="#L179"> 179</a>     del surf</span>
+<span class="line" id="L180"><a href="#L180"> 180</a>     # ---- 分段: 时间间隔 &gt; 6 s 或跳变 &gt; 25 m 即断开 ----</span>
+<span class="line" id="L181"><a href="#L181"> 181</a>     brk = np.r_[True, (np.diff(ts) &gt; 6.0) | (np.linalg.norm(np.diff(P, axis=0), axis=1) &gt; 25.0)]</span>
+<span class="line" id="L182"><a href="#L182"> 182</a>     seg = np.cumsum(brk) - 1</span>
+<span class="line" id="L183"><a href="#L183"> 183</a>     sdist = np.zeros(n)</span>
+<span class="line" id="L184"><a href="#L184"> 184</a>     for i in range(1, n):</span>
+<span class="line" id="L185"><a href="#L185"> 185</a>         sdist[i] = 0 if brk[i] else sdist[i - 1] + np.hypot(*(P[i] - P[i - 1]))</span>
+<span class="line" id="L186"><a href="#L186"> 186</a>     dxs = (np.arange(nx) - nx // 2) * step                                 # 图像右为正 (= 车左)</span>
+<span class="line" id="L187"><a href="#L187"> 187</a>     dys = (np.arange(ny) - ny // 2) * step                                 # 图像下为正 (= 车前)</span>
+<span class="line" id="L188"><a href="#L188"> 188</a> </span>
+<span class="line" id="L189"><a href="#L189"> 189</a>     fwdv = np.stack([np.sin(psi), np.cos(psi)], 1); rtv = np.stack([np.cos(psi), -np.sin(psi)], 1)</span>
+<span class="line" id="L190"><a href="#L190"> 190</a> </span>
+<span class="line" id="L191"><a href="#L191"> 191</a>     def dp(em, gaps, lam, band=None):</span>
+<span class="line" id="L192"><a href="#L192"> 192</a>         &quot;&quot;&quot;沿序列的一维动态规划: em[k, state] 越大越好, 相邻两张的状态差按 lam*|d|/sqrt(间距) 罚分&quot;&quot;&quot;</span>
+<span class="line" id="L193"><a href="#L193"> 193</a>         K, S = em.shape</span>
+<span class="line" id="L194"><a href="#L194"> 194</a>         st = np.arange(S, dtype=np.float32)</span>
+<span class="line" id="L195"><a href="#L195"> 195</a>         D = np.abs(st[:, None] - st[None, :])</span>
+<span class="line" id="L196"><a href="#L196"> 196</a>         cost = em[0].copy(); back = np.zeros((K, S), np.int32)</span>
+<span class="line" id="L197"><a href="#L197"> 197</a>         for a_ in range(1, K):</span>
+<span class="line" id="L198"><a href="#L198"> 198</a>             tr = cost[None, :] - lam * D / np.sqrt(max(1.0, gaps[a_]))</span>
+<span class="line" id="L199"><a href="#L199"> 199</a>             back[a_] = tr.argmax(1); cost = tr.max(1) + em[a_]</span>
+<span class="line" id="L200"><a href="#L200"> 200</a>         path = np.zeros(K, int); path[-1] = int(cost.argmax())</span>
+<span class="line" id="L201"><a href="#L201"> 201</a>         for a_ in range(K - 1, 0, -1): path[a_ - 1] = back[a_, path[a_]]</span>
+<span class="line" id="L202"><a href="#L202"> 202</a>         return path</span>
+<span class="line" id="L203"><a href="#L203"> 203</a> </span>
+<span class="line" id="L204"><a href="#L204"> 204</a>     # ---- 行驶方向先验: 靠右行驶, 往北的车不可能在往南的那半幅上 ----</span>
+<span class="line" id="L205"><a href="#L205"> 205</a>     # 三维地图自己的轨迹带方向。每张俯视图找最近的&quot;同向&quot;与&quot;对向&quot;地图帧, 算出它们在本车横向上的位置。</span>
+<span class="line" id="L206"><a href="#L206"> 206</a>     # 同向轨迹给一个弱的吸引 (sigma 5 m), 对向轨迹正上方给一个排斥。没有这一条时, 落在中央绿化带上的</span>
+<span class="line" id="L207"><a href="#L207"> 207</a>     # 定位初值会被&quot;不压绿化带&quot;的约束随机推向两侧, 实测整趟往北的图被推到了往南的车道上。</span>
+<span class="line" id="L208"><a href="#L208"> 208</a>     from scipy.spatial import cKDTree</span>
+<span class="line" id="L209"><a href="#L209"> 209</a>     f03 = np.load(WORK + &quot;/frames.npz&quot;)</span>
+<span class="line" id="L210"><a href="#L210"> 210</a>     mv03 = np.flatnonzero(f03[&quot;moving&quot;])</span>
+<span class="line" id="L211"><a href="#L211"> 211</a>     p03 = f03[&quot;p&quot;][mv03][:, [0, 2]]; h03 = f03[&quot;fwd_h&quot;][mv03][:, [0, 2]]</span>
+<span class="line" id="L212"><a href="#L212"> 212</a>     tree03 = cKDTree(p03)</span>
+<span class="line" id="L213"><a href="#L213"> 213</a>     lat_same = np.full(n, np.nan); lat_opp = np.full(n, np.nan)</span>
+<span class="line" id="L214"><a href="#L214"> 214</a>     for i in range(n):</span>
+<span class="line" id="L215"><a href="#L215"> 215</a>         nb = tree03.query_ball_point(C[i], 30.0)</span>
+<span class="line" id="L216"><a href="#L216"> 216</a>         if not nb: continue</span>
+<span class="line" id="L217"><a href="#L217"> 217</a>         nb = np.array(nb); d = p03[nb] - C[i]</span>
+<span class="line" id="L218"><a href="#L218"> 218</a>         lon_ = d @ fwdv[i]; lat_ = d @ rtv[i]; dot = h03[nb] @ fwdv[i]</span>
+<span class="line" id="L219"><a href="#L219"> 219</a>         near = np.abs(lon_ + YC) &lt; 6.0                                     # 只看俯视图所在里程附近的地图帧</span>
+<span class="line" id="L220"><a href="#L220"> 220</a>         for sel, arr in (((dot &gt; 0.5) &amp; near, lat_same), ((dot &lt; -0.5) &amp; near, lat_opp)):</span>
+<span class="line" id="L221"><a href="#L221"> 221</a>             if sel.any(): arr[i] = lat_[sel][np.argmin(np.abs(lat_[sel]))]</span>
+<span class="line" id="L222"><a href="#L222"> 222</a>     print(&quot;行驶方向先验: 附近有同向地图轨迹的 %d 张 (%.0f%%), 有对向轨迹的 %d 张; 同向轨迹的横向距离 中位 %.1f m&quot;</span>
+<span class="line" id="L223"><a href="#L223"> 223</a>           % (np.isfinite(lat_same).sum(), 100 * np.isfinite(lat_same).mean(), np.isfinite(lat_opp).sum(), np.nanmedian(np.abs(lat_same))))</span>
+<span class="line" id="L224"><a href="#L224"> 224</a> </span>
+<span class="line" id="L225"><a href="#L225"> 225</a>     off = np.zeros((n, 3)); conf_lat = np.zeros(n); conf_lon = np.zeros(n); lon_ok = np.zeros(n, bool)</span>
+<span class="line" id="L226"><a href="#L226"> 226</a>     for sg in np.unique(seg):</span>
+<span class="line" id="L227"><a href="#L227"> 227</a>         m = np.flatnonzero(seg == sg)</span>
+<span class="line" id="L228"><a href="#L228"> 228</a>         if len(m) &lt; 3 or not have[m].any(): continue</span>
+<span class="line" id="L229"><a href="#L229"> 229</a>         gaps = np.r_[1.0, np.diff(sdist[m])]</span>
+<span class="line" id="L230"><a href="#L230"> 230</a>         acc = np.zeros((len(m),) + shp, np.float32); cnt = np.zeros(len(m))</span>
+<span class="line" id="L231"><a href="#L231"> 231</a>         for a_, i in enumerate(m):</span>
+<span class="line" id="L232"><a href="#L232"> 232</a>             jj = m[(np.abs(sdist[m] - sdist[i]) &lt;= WIN) &amp; have[m]]</span>
+<span class="line" id="L233"><a href="#L233"> 233</a>             if len(jj): acc[a_] = Z[jj].mean(0); cnt[a_] = len(jj)</span>
+<span class="line" id="L234"><a href="#L234"> 234</a>         # ---- A. 横向: 对纵向与转角取最大 -&gt; 横向响应 -&gt; 动态规划 ----</span>
+<span class="line" id="L235"><a href="#L235"> 235</a>         em = acc.max(axis=(1, 2))</span>
+<span class="line" id="L236"><a href="#L236"> 236</a>         em = em - np.median(em, axis=1, keepdims=True)</span>
+<span class="line" id="L237"><a href="#L237"> 237</a>         em = em - 0.5 * (dxs[None, :] / 2.5) ** 2 * 0.04                    # GNSS 横向先验 sigma 2.5 m</span>
+<span class="line" id="L238"><a href="#L238"> 238</a>         pos_r = -dxs[None, :]                                               # 该状态下俯视图相对 GNSS 初值向&quot;车右&quot;挪了多少</span>
+<span class="line" id="L239"><a href="#L239"> 239</a>         ls, lo = lat_same[m][:, None], lat_opp[m][:, None]</span>
+<span class="line" id="L240"><a href="#L240"> 240</a>         em = em - np.where(np.isfinite(ls), 0.5 * ((pos_r - np.nan_to_num(ls)) / 5.0) ** 2 * 0.08, 0.0)</span>
+<span class="line" id="L241"><a href="#L241"> 241</a>         em = em - np.where(np.isfinite(lo), 0.35 * np.exp(-0.5 * ((pos_r - np.nan_to_num(lo)) / 1.5) ** 2), 0.0)</span>
+<span class="line" id="L242"><a href="#L242"> 242</a>         px = dp(em.astype(np.float32), gaps, 0.35 * step / 0.08)</span>
+<span class="line" id="L243"><a href="#L243"> 243</a>         # ---- B. 转角: 每张在选定横向位置上响应最强的角, 沿路中值 ----</span>
+<span class="line" id="L244"><a href="#L244"> 244</a>         col = np.stack([acc[a_][:, :, max(0, px[a_] - 1):px[a_] + 2].max(2) for a_ in range(len(m))])   # [K, theta, dy]</span>
+<span class="line" id="L245"><a href="#L245"> 245</a>         rt_ = col.max(2); ti = rt_.argmax(1)</span>
+<span class="line" id="L246"><a href="#L246"> 246</a>         th = np.array([THETAS[t] for t in ti], float)</span>
+<span class="line" id="L247"><a href="#L247"> 247</a>         for a_ in range(len(m)):</span>
+<span class="line" id="L248"><a href="#L248"> 248</a>             t_ = ti[a_]</span>
+<span class="line" id="L249"><a href="#L249"> 249</a>             if 0 &lt; t_ &lt; nt - 1:</span>
+<span class="line" id="L250"><a href="#L250"> 250</a>                 y0, y1, y2 = rt_[a_, t_ - 1], rt_[a_, t_], rt_[a_, t_ + 1]; den = y0 - 2 * y1 + y2</span>
+<span class="line" id="L251"><a href="#L251"> 251</a>                 if den &lt; -1e-6: th[a_] += 0.5 * (y0 - y2) / den * (THETAS[1] - THETAS[0])</span>
+<span class="line" id="L252"><a href="#L252"> 252</a>         th = np.array([np.median(th[max(0, a_ - 3):a_ + 4]) for a_ in range(len(m))])</span>
+<span class="line" id="L253"><a href="#L253"> 253</a>         for a_, i in enumerate(m):</span>
+<span class="line" id="L254"><a href="#L254"> 254</a>             x_ = px[a_]</span>
+<span class="line" id="L255"><a href="#L255"> 255</a>             e_row = acc[a_].max(axis=(0, 1)); pk = e_row[x_]; base = np.median(e_row)</span>
+<span class="line" id="L256"><a href="#L256"> 256</a>             conf_lat[i] = float(np.clip((pk - base) / max(pk, 1e-6) * 1.5, 0, 1) * min(1.0, cnt[a_] / 4.0) * min(1.0, max(pk, 0) / 0.10))</span>
+<span class="line" id="L257"><a href="#L257"> 257</a>             off[i] = [dxs[x_], 0.0, th[a_]]</span>
+<span class="line" id="L258"><a href="#L258"> 258</a>     # 横向没把握的张数不少 (底图在该车道分辨不清、或俯视图里没有标线)。它们仍取动态规划的解 ——</span>
+<span class="line" id="L259"><a href="#L259"> 259</a>     # 该解带 GNSS 先验、沿路平滑和&quot;不压绿化带&quot;的约束, 比退回纯 GNSS 更不容易出现&quot;贴图落在绿化带上&quot;。</span>
+<span class="line" id="L260"><a href="#L260"> 260</a>     # 只有底图完全没覆盖的张 (have=False) 才沿用同段邻近的偏移。</span>
+<span class="line" id="L261"><a href="#L261"> 261</a>     for sg in np.unique(seg):</span>
+<span class="line" id="L262"><a href="#L262"> 262</a>         m = np.flatnonzero(seg == sg); g = m[have[m]]</span>
+<span class="line" id="L263"><a href="#L263"> 263</a>         w_ = m[~have[m]]</span>
+<span class="line" id="L264"><a href="#L264"> 264</a>         if len(g) &gt;= 1 and len(w_):</span>
+<span class="line" id="L265"><a href="#L265"> 265</a>             for c in (0, 2): off[w_, c] = np.interp(sdist[w_], sdist[g], off[g, c])</span>
+<span class="line" id="L266"><a href="#L266"> 266</a>         elif len(g) == 0:</span>
+<span class="line" id="L267"><a href="#L267"> 267</a>             off[m] = 0.0</span>
+<span class="line" id="L268"><a href="#L268"> 268</a>     # ---- C. 纵向: 只信&quot;锚点&quot; ----</span>
+<span class="line" id="L269"><a href="#L269"> 269</a>     # 沿路方向, 车道实线不给信息, 虚线每 6 m 重复; 试过沿序列的动态规划去跟虚线相位, 不稳 (会把</span>
+<span class="line" id="L270"><a href="#L270"> 270</a>     # 本来只差 1 m 的减速带挪走 14 m), 弃用。只有含减速带/停止线/箭头/文字的俯视图, 其单张匹配曲面</span>
+<span class="line" id="L271"><a href="#L271"> 271</a>     # 才有二维唯一的峰 —— 这些作锚点, 影响沿路 ±ANCHOR_R 米 (三角权), 更远处不动 (沿用 GNSS)。</span>
+<span class="line" id="L272"><a href="#L272"> 272</a>     ANCHOR_R = 45.0</span>
+<span class="line" id="L273"><a href="#L273"> 273</a>     anchor = np.zeros(n, bool); a_off = np.zeros((n, 3)); a_uni = np.zeros(n)</span>
+<span class="line" id="L274"><a href="#L274"> 274</a>     for i in range(n):</span>
+<span class="line" id="L275"><a href="#L275"> 275</a>         if not have[i] or nmark[i] &lt; 900: continue</span>
+<span class="line" id="L276"><a href="#L276"> 276</a>         t_, y_, x_ = np.unravel_index(np.argmax(Z[i]), Z[i].shape)</span>
+<span class="line" id="L277"><a href="#L277"> 277</a>         pk = Z[i][t_, y_, x_]</span>
+<span class="line" id="L278"><a href="#L278"> 278</a>         s2 = Z[i].max(0).copy(); r = int(2.5 / step)</span>
+<span class="line" id="L279"><a href="#L279"> 279</a>         s2[max(0, y_ - r):y_ + r + 1, max(0, x_ - r):x_ + r + 1] = 0</span>
+<span class="line" id="L280"><a href="#L280"> 280</a>         u = 1.0 - max(s2.max(), 0.0) / max(pk, 1e-6)</span>
+<span class="line" id="L281"><a href="#L281"> 281</a>         if pk &gt; 0.40 and u &gt; 0.20 and abs(dys[y_]) &lt; SY - 0.5:</span>
+<span class="line" id="L282"><a href="#L282"> 282</a>             anchor[i] = True; a_off[i] = [dxs[x_], dys[y_], THETAS[t_]]; a_uni[i] = u</span>
+<span class="line" id="L283"><a href="#L283"> 283</a>     for sg in np.unique(seg):</span>
+<span class="line" id="L284"><a href="#L284"> 284</a>         m = np.flatnonzero(seg == sg); g = m[anchor[m]]</span>
+<span class="line" id="L285"><a href="#L285"> 285</a>         if len(g) == 0: continue</span>
+<span class="line" id="L286"><a href="#L286"> 286</a>         for i in m:</span>
+<span class="line" id="L287"><a href="#L287"> 287</a>             w = np.clip(1.0 - np.abs(sdist[g] - sdist[i]) / ANCHOR_R, 0.0, None)</span>
+<span class="line" id="L288"><a href="#L288"> 288</a>             if w.sum() &lt;= 0: continue</span>
+<span class="line" id="L289"><a href="#L289"> 289</a>             j = g[int(np.argmax(w))]                                   # 最近的锚点说了算, 权重随距离衰减到 0</span>
+<span class="line" id="L290"><a href="#L290"> 290</a>             off[i, 1] = a_off[j, 1] * w.max()</span>
+<span class="line" id="L291"><a href="#L291"> 291</a>             conf_lon[i] = float(w.max()); lon_ok[i] = w.max() &gt; 0.5</span>
+<span class="line" id="L292"><a href="#L292"> 292</a>             if anchor[i]: off[i, 0] = a_off[i, 0]; conf_lat[i] = max(conf_lat[i], 0.8)</span>
+<span class="line" id="L293"><a href="#L293"> 293</a>     print(&quot;纵向锚点 %d 张; 落在锚点影响范围内的俯视图 %d 张 (%.0f%%), 其中权重&gt;0.5 的 %d 张&quot;</span>
+<span class="line" id="L294"><a href="#L294"> 294</a>           % (anchor.sum(), (conf_lon &gt; 0).sum(), 100 * (conf_lon &gt; 0).mean(), lon_ok.sum()))</span>
+<span class="line" id="L295"><a href="#L295"> 295</a>     print(&quot;  锚点处沿路偏移: 中位 %+.2f m, 范围 %+.2f ~ %+.2f m&quot; % (np.median(a_off[anchor, 1]), a_off[anchor, 1].min(), a_off[anchor, 1].max()))</span>
+<span class="line" id="L296"><a href="#L296"> 296</a>     final = off.copy()</span>
+<span class="line" id="L297"><a href="#L297"> 297</a>     conf = conf_lat</span>
+<span class="line" id="L298"><a href="#L298"> 298</a>     good = have &amp; (conf_lat &gt; 0.3)</span>
+<span class="line" id="L299"><a href="#L299"> 299</a>     print(&quot;横向配上 (conf&gt;0.3): %d 张 (%.0f%%), 其中 conf&gt;0.6 %d 张 (%.0f%%)&quot;</span>
+<span class="line" id="L300"><a href="#L300"> 300</a>           % (good.sum(), 100 * good.mean(), (have &amp; (conf_lat &gt; 0.6)).sum(), 100 * (have &amp; (conf_lat &gt; 0.6)).mean()))</span>
+<span class="line" id="L301"><a href="#L301"> 301</a>     print(&quot;  相对 GNSS 初值的偏移: 横向(车右为正) 中位 %+.2f m (IQR %+.2f~%+.2f, |.| p90 %.2f);  纵向(车前为正) 中位 %+.2f m (IQR %+.2f~%+.2f);  转角 中位 %+.2f deg (IQR %+.2f~%+.2f)&quot;</span>
+<span class="line" id="L302"><a href="#L302"> 302</a>           % (np.median(-off[good, 0]), *np.percentile(-off[good, 0], [25, 75]), np.percentile(np.abs(off[good, 0]), 90),</span>
+<span class="line" id="L303"><a href="#L303"> 303</a>              np.median(off[good, 1]), *np.percentile(off[good, 1], [25, 75]), np.median(off[good, 2]), *np.percentile(off[good, 2], [25, 75])))</span>
+<span class="line" id="L304"><a href="#L304"> 304</a>     wpk = conf_lon</span>
+<span class="line" id="L305"><a href="#L305"> 305</a>     np.savez(WORK + &quot;/reg0924.npz&quot;, frame=np.array([r[&quot;src&quot;] for r in rows]), ts=ts, P=P, psi=psi, C=C, off=off, final=final,</span>
+<span class="line" id="L306"><a href="#L306"> 306</a>              conf=conf, conf_lon=conf_lon, lon_ok=lon_ok, anchor=anchor, cover=cover, seg=seg, sdist=sdist, have=have, nmark=nmark,</span>
+<span class="line" id="L307"><a href="#L307"> 307</a>              geom=np.array([X_LO, X_HI, Y_LO, Y_HI, XC, YC, RES, SX, SY]))</span>
+<span class="line" id="L308"><a href="#L308"> 308</a>     print(&quot;写出 work/reg0924.npz, 用时 %.0fs&quot; % (time.time() - t0))</span></pre></html>

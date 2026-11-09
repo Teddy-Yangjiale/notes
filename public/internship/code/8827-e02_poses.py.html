@@ -1,0 +1,40 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>e02_poses.py</title><style>body{margin:24px;font:15px system-ui;background:#faf8f3;color:#243342}pre{overflow:auto;line-height:1.6;background:white;padding:16px}.line{display:block}.line:target{background:#fff1a8}a{color:#58728a}header{overflow-wrap:anywhere}</style><header><a href="/notes/series/internship/">返回实习专栏</a><h1>e02_poses.py</h1><p>只读快照：2026-11-09 · /home/yjl/crack/city8827/build/e02_poses.py</p><p>SHA-256: 617bf7b6690eba0671497998013ed317026b19be1db69f8e35e0c84cb35101ca</p></header><pre><span class="line" id="L1"><a href="#L1">   1</a> # -*- coding: utf-8 -*-</span>
+<span class="line" id="L2"><a href="#L2">   2</a> &quot;&quot;&quot;e02: 这一段每帧的六自由度位姿。优先用 8826 的光束法平差结果 (work/gs/ba/&lt;块&gt;.npz 的 c2w, 全局 ENU), 没有的帧退回地图轨迹的平面位姿。</span>
+<span class="line" id="L3"><a href="#L3">   3</a> 坐标: 全局 ENU (E, N, U), 单位米, 与 8821/8826 的 E/N 一致, U = 0 是路面。相机系 x 右 y 下 z 前。</span>
+<span class="line" id="L4"><a href="#L4">   4</a> 输出 work/poses.npz: frames, c2w (n,4,4), src (0 轨迹 / 1 平差), 以及 work/poses.json (给网页用的轨迹: 每帧 E, N, 航向)。</span>
+<span class="line" id="L5"><a href="#L5">   5</a> 用法: e02_poses.py &lt;起帧&gt; &lt;止帧&gt;&quot;&quot;&quot;</span>
+<span class="line" id="L6"><a href="#L6">   6</a> import sys, os, json, glob</span>
+<span class="line" id="L7"><a href="#L7">   7</a> import numpy as np</span>
+<span class="line" id="L8"><a href="#L8">   8</a> HERE = os.path.dirname(os.path.abspath(__file__)); WORK = os.path.dirname(HERE) + &quot;/work&quot;</span>
+<span class="line" id="L9"><a href="#L9">   9</a> sys.path.insert(0, os.path.expanduser(&quot;~/crack/show8821/build&quot;))</span>
+<span class="line" id="L10"><a href="#L10">  10</a> from sc_common import Cam, Track</span>
+<span class="line" id="L11"><a href="#L11">  11</a> V26 = os.path.expanduser(&quot;~/crack/viewer8826&quot;)</span>
+<span class="line" id="L12"><a href="#L12">  12</a> F0, F1 = int(sys.argv[1]), int(sys.argv[2]); tr = Track(); cam = Cam(1.0)</span>
+<span class="line" id="L13"><a href="#L13">  13</a> def track_c2w(k):</span>
+<span class="line" id="L14"><a href="#L14">  14</a>     &quot;&quot;&quot;地图轨迹的平面位姿 -&gt; c2w: 车身系 (x 右, y 前, z 上) 绕 z 转到 ENU (航向 psi 自北顺时针)&quot;&quot;&quot;</span>
+<span class="line" id="L15"><a href="#L15">  15</a>     ps = tr.psi[k]; c, s = np.cos(ps), np.sin(ps); Rv = np.array([[c, s, 0], [-s, c, 0], [0, 0, 1.0]])    # 车身 -&gt; ENU (与 local_to_world 一致: E = x c + y s, N = -x s + y c)</span>
+<span class="line" id="L16"><a href="#L16">  16</a>     M = np.eye(4); M[:3, :3] = Rv @ cam.R; M[:3, 3] = [tr.E[k], tr.N[k], cam.h]; return M</span>
+<span class="line" id="L17"><a href="#L17">  17</a> chunks = json.load(open(V26 + &quot;/work/gs/chunks.json&quot;)); chunks = chunks[&quot;chunks&quot;] if isinstance(chunks, dict) else chunks</span>
+<span class="line" id="L18"><a href="#L18">  18</a> ba = {}</span>
+<span class="line" id="L19"><a href="#L19">  19</a> for ch in chunks:</span>
+<span class="line" id="L20"><a href="#L20">  20</a>     p = &quot;%s/work/gs/ba/%s.npz&quot; % (V26, ch[&quot;id&quot;])</span>
+<span class="line" id="L21"><a href="#L21">  21</a>     if not os.path.exists(p) or ch[&quot;f1&quot;] &lt; F0 or ch[&quot;f0&quot;] &gt; F1: continue</span>
+<span class="line" id="L22"><a href="#L22">  22</a>     z = np.load(p); C = z[&quot;c2w&quot;].copy(); C0 = z[&quot;c2w0&quot;].copy()                    # 核对过: npz 里的 c2w 已经是全局 ENU (块原点只用于 pts)</span>
+<span class="line" id="L23"><a href="#L23">  23</a>     for f, M, M0 in zip(z[&quot;frames&quot;], C, C0):</span>
+<span class="line" id="L24"><a href="#L24">  24</a>         core = ch[&quot;f0&quot;] &lt;= f &lt;= ch[&quot;f1&quot;]</span>
+<span class="line" id="L25"><a href="#L25">  25</a>         if int(f) not in ba or core: ba[int(f)] = (M, M0, ch[&quot;id&quot;], core)</span>
+<span class="line" id="L26"><a href="#L26">  26</a> frames = [f for f in range(F0, F1 + 1) if f in tr.row]; c2w = []; src = []; dev = []</span>
+<span class="line" id="L27"><a href="#L27">  27</a> for f in frames:</span>
+<span class="line" id="L28"><a href="#L28">  28</a>     k = tr.row[f]; Mt = track_c2w(k)</span>
+<span class="line" id="L29"><a href="#L29">  29</a>     if f in ba:</span>
+<span class="line" id="L30"><a href="#L30">  30</a>         M, M0, cid, core = ba[f]; c2w.append(M); src.append(1); dev.append(np.linalg.norm(M[:3, 3] - Mt[:3, 3]))</span>
+<span class="line" id="L31"><a href="#L31">  31</a>         if f == frames[0] or f == frames[-1] or f % 50 == 0: print(&quot;  帧 %d (%s%s): 平差前后相差 %.2f m; 平差前与我这里算的轨迹位姿相差 %.3f m / 旋转 %.4f&quot; % (f, cid, &quot;&quot; if core else &quot; 边缘&quot;, np.linalg.norm(M[:3, 3] - M0[:3, 3]), np.linalg.norm(M0[:3, 3] - Mt[:3, 3]), np.abs(M0[:3, :3] - Mt[:3, :3]).max()))</span>
+<span class="line" id="L32"><a href="#L32">  32</a>     else: c2w.append(Mt); src.append(0); dev.append(0.0)</span>
+<span class="line" id="L33"><a href="#L33">  33</a> c2w = np.array(c2w); src = np.array(src); dev = np.array(dev)</span>
+<span class="line" id="L34"><a href="#L34">  34</a> # 相邻帧的步长 (平差位姿) 与轨迹步长比一比, 看块与块之间有没有跳</span>
+<span class="line" id="L35"><a href="#L35">  35</a> P = c2w[:, :3, 3]; step = np.linalg.norm(np.diff(P, axis=0), axis=1); step_t = np.array([np.hypot(tr.E[tr.row[b]] - tr.E[tr.row[a]], tr.N[tr.row[b]] - tr.N[tr.row[a]]) for a, b in zip(frames[:-1], frames[1:])])</span>
+<span class="line" id="L36"><a href="#L36">  36</a> r = step / np.maximum(step_t, 1e-6); print(&quot;帧 %d~%d: %d 帧, 平差位姿 %d 帧 (%.0f%%); 平差相对轨迹的位移 中位 %.2f m 最大 %.2f m; 相邻步长比 (平差/轨迹) 中位 %.3f, 最偏 %.3f 在帧 %d; 相机高 %.2f~%.2f m&quot; % (</span>
+<span class="line" id="L37"><a href="#L37">  37</a>     F0, F1, len(frames), src.sum(), 100 * src.mean(), np.median(dev[src == 1]) if src.any() else 0, dev.max(), np.median(r), r[np.argmax(np.abs(np.log(r)))], frames[int(np.argmax(np.abs(np.log(r))))], P[:, 2].min(), P[:, 2].max()))</span>
+<span class="line" id="L38"><a href="#L38">  38</a> np.savez(WORK + &quot;/poses.npz&quot;, frames=np.array(frames), c2w=c2w, src=src)</span>
+<span class="line" id="L39"><a href="#L39">  39</a> heading = [float(np.degrees(np.arctan2(M[:3, :3][0, 2], M[:3, :3][1, 2])) % 360) for M in c2w]          # 相机 z 轴 (前) 在 ENU 里的方位角 (自北顺时针)</span>
+<span class="line" id="L40"><a href="#L40">  40</a> json.dump(dict(frames=frames, E=[round(float(v), 3) for v in P[:, 0]], N=[round(float(v), 3) for v in P[:, 1]], U=[round(float(v), 3) for v in P[:, 2]], heading=[round(h, 2) for h in heading], src=src.tolist()), open(WORK + &quot;/poses.json&quot;, &quot;w&quot;))</span></pre></html>

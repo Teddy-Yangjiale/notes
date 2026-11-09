@@ -1,0 +1,48 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>e05_export.py</title><style>body{margin:24px;font:15px system-ui;background:#faf8f3;color:#243342}pre{overflow:auto;line-height:1.6;background:white;padding:16px}.line{display:block}.line:target{background:#fff1a8}a{color:#58728a}header{overflow-wrap:anywhere}</style><header><a href="/notes/series/internship/">返回实习专栏</a><h1>e05_export.py</h1><p>只读快照：2026-11-09 · /home/yjl/crack/city8827/build/e05_export.py</p><p>SHA-256: fd01d82ec9653622528bf5fc548de28f029be2adb2e0eaa367cb7fe35968d92d</p></header><pre><span class="line" id="L1"><a href="#L1">   1</a> # -*- coding: utf-8 -*-</span>
+<span class="line" id="L2"><a href="#L2">   2</a> &quot;&quot;&quot;e05: 把训练结果导出成网页用的场景 (site/scene/):</span>
+<span class="line" id="L3"><a href="#L3">   3</a>   scene.ply   高斯 (标准 3DGS PLY, 带球谐; ENU 坐标原样, 网页里旋转); 先按不透明度剪枝到 --keep 个以内</span>
+<span class="line" id="L4"><a href="#L4">   4</a>   sky.png     天空的等距柱状贴图, 已换成 three.js 的列约定 (u = 0 西, 0.25 北, 0.5 东; 行 0 = 天顶)</span>
+<span class="line" id="L5"><a href="#L5">   5</a>   meta.json   原点、漫游走廊 (核心帧的位置和航向)、训练统计</span>
+<span class="line" id="L6"><a href="#L6">   6</a> 用法: e05_export.py --name v1 [--keep 2500000] [--core 852 990] [--sh 3]&quot;&quot;&quot;</span>
+<span class="line" id="L7"><a href="#L7">   7</a> import os, sys, json, argparse, shutil, glob</span>
+<span class="line" id="L8"><a href="#L8">   8</a> import numpy as np, torch</span>
+<span class="line" id="L9"><a href="#L9">   9</a> sys.path.append(glob.glob(os.path.expanduser(&quot;~/3dgs/.venvs/geometry/lib/python3.12/site-packages&quot;))[0])     # gaussian 环境没有 cv2/scipy (同 e04)</span>
+<span class="line" id="L10"><a href="#L10">  10</a> from scipy.spatial.transform import Rotation</span>
+<span class="line" id="L11"><a href="#L11">  11</a> sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))</span>
+<span class="line" id="L12"><a href="#L12">  12</a> from cc_common import *</span>
+<span class="line" id="L13"><a href="#L13">  13</a> from gsplat.exporter import export_splats</span>
+<span class="line" id="L14"><a href="#L14">  14</a> </span>
+<span class="line" id="L15"><a href="#L15">  15</a> ap = argparse.ArgumentParser(); ap.add_argument(&quot;--name&quot;, required=True); ap.add_argument(&quot;--keep&quot;, type=int, default=2500000); ap.add_argument(&quot;--core&quot;, type=int, nargs=2, default=[852, 990]); ap.add_argument(&quot;--sh&quot;, type=int, default=3); ap.add_argument(&quot;--format&quot;, default=&quot;ply&quot;, choices=[&quot;ply&quot;, &quot;ply_compressed&quot;]); ap.add_argument(&quot;--out&quot;, default=&quot;&quot;); ap.add_argument(&quot;--chunk&quot;, default=&quot;&quot;)        # 按块导出: 只留核心区 (按高斯的沿路里程归块), 写到 site/scene/&lt;块&gt;/       # 输出文件名 (不含目录); 默认 scene.ply / scene.compressed.ply       # ply_compressed: SuperSplat 压缩格式 (Spark 能读), 体积约为标准 PLY 的 1/4</span>
+<span class="line" id="L16"><a href="#L16">  16</a> A = ap.parse_args(); RUN = &quot;%s/gs/%s&quot; % (WORK, A.name); OUT = SITE + &quot;/scene&quot; + (&quot;/&quot; + A.chunk if A.chunk else &quot;&quot;); os.makedirs(OUT, exist_ok=True)</span>
+<span class="line" id="L17"><a href="#L17">  17</a> CH = None</span>
+<span class="line" id="L18"><a href="#L18">  18</a> if A.chunk:</span>
+<span class="line" id="L19"><a href="#L19">  19</a>     cj = json.load(open(WORK + &quot;/chunks.json&quot;)); CH = [c for c in cj[&quot;chunks&quot;] if c[&quot;id&quot;] == A.chunk][0]; A.core = [CH[&quot;fc0&quot;], CH[&quot;fc1&quot;]]</span>
+<span class="line" id="L20"><a href="#L20">  20</a> z = np.load(RUN + &quot;/params.npz&quot;); meta = json.load(open(RUN + &quot;/meta.json&quot;)); n0 = len(z[&quot;means&quot;])</span>
+<span class="line" id="L21"><a href="#L21">  21</a> op = 1 / (1 + np.exp(-z[&quot;opacities&quot;])); keep = np.argsort(-op)[:A.keep] if n0 &gt; A.keep else np.arange(n0); keep = keep[op[keep] &gt; 0.01]</span>
+<span class="line" id="L22"><a href="#L22">  22</a> if CH:                                                                                          # 核心区裁剪: 每个高斯按最近轨迹点的里程归块, 段首/段尾的块把前/后多出来的也收下</span>
+<span class="line" id="L23"><a href="#L23">  23</a>     from scipy.spatial import cKDTree</span>
+<span class="line" id="L24"><a href="#L24">  24</a>     tr = Track(); m = np.flatnonzero(tr.seg == CH[&quot;seg&quot;]); kd = cKDTree(np.c_[tr.E[m], tr.N[m]]); sg = tr.s[m[kd.query(z[&quot;means&quot;][keep][:, :2])[1]]] - tr.s[m[0]]</span>
+<span class="line" id="L25"><a href="#L25">  25</a>     first = CH[&quot;s0&quot;] &lt;= 0.5; last = CH[&quot;s1&quot;] &gt;= float(tr.s[m[-1]] - tr.s[m[0]]) - 0.5</span>
+<span class="line" id="L26"><a href="#L26">  26</a>     inside = ((sg &gt;= CH[&quot;s0&quot;] - 2.0) | first) &amp; ((sg &lt; CH[&quot;s1&quot;] + 2.0) | last); keep = keep[inside]; print(&quot;块 %s: 核心区里程 %.0f~%.0f m, 留下 %d / %d 个高斯&quot; % (A.chunk, CH[&quot;s0&quot;], CH[&quot;s1&quot;], len(keep), inside.size))</span>
+<span class="line" id="L27"><a href="#L27">  27</a> M = np.array([[1, 0, 0], [0, 0, 1], [0, -1, 0]], float)                                        # ENU -&gt; 查看器 (E, U, -N); 只用于走廊等矢量数据</span>
+<span class="line" id="L28"><a href="#L28">  28</a> # 高斯本身按训练时的 ENU 坐标原样导出 (位置、朝向、球谐都不动), 由网页把整个对象绕 x 轴转 -90 度:</span>
+<span class="line" id="L29"><a href="#L29">  29</a> # 换坐标系必须连球谐一起旋转, 否则视角相关的颜色全错 (2026-10-10 踩过: 画面花成色块)。让渲染器在物体坐标里算球谐最省事也最稳。</span>
+<span class="line" id="L30"><a href="#L30">  30</a> means = z[&quot;means&quot;][keep]; quats = z[&quot;quats&quot;][keep]</span>
+<span class="line" id="L31"><a href="#L31">  31</a> n_sh = (A.sh + 1) ** 2 - 1; shN = z[&quot;shN&quot;][keep].astype(np.float32)[:, :n_sh]</span>
+<span class="line" id="L32"><a href="#L32">  32</a> T = lambda a: torch.tensor(np.ascontiguousarray(a), dtype=torch.float32)</span>
+<span class="line" id="L33"><a href="#L33">  33</a> export_splats(means=T(means), scales=T(z[&quot;scales&quot;][keep]), quats=T(quats), opacities=T(z[&quot;opacities&quot;][keep]), sh0=T(z[&quot;sh0&quot;][keep]), shN=T(shN), format=A.format, save_to=OUT + &quot;/&quot; + (A.out or (&quot;scene.ply&quot; if A.format == &quot;ply&quot; else &quot;scene.compressed.ply&quot;)))</span>
+<span class="line" id="L34"><a href="#L34">  34</a> if A.out: print(&quot;只写高斯文件, 不动 meta.json / sky.png&quot;); sys.exit(0)</span>
+<span class="line" id="L35"><a href="#L35">  35</a> import cv2</span>
+<span class="line" id="L36"><a href="#L36">  36</a> sky = cv2.imread(RUN + &quot;/sky.png&quot;).astype(np.float32); H_, W_ = sky.shape[:2]</span>
+<span class="line" id="L37"><a href="#L37">  37</a> # 训练出的天空贴图只有真正看到天空的方向是可信的: 地平线以下和被高斯挡住的方向会学出花色。显示用的版本: 地平线以下填中性灰, 整体轻微模糊去掉色块</span>
+<span class="line" id="L38"><a href="#L38">  38</a> el = (0.5 - (np.arange(H_) + 0.5) / H_) * 180.0; low = el &lt; -2.0; sky[low] = np.array([200, 198, 196], np.float32)</span>
+<span class="line" id="L39"><a href="#L39">  39</a> band = (el &gt;= -2.0) &amp; (el &lt; 6.0); sky[band] = sky[band] * 0.6 + np.array([205, 203, 200], np.float32) * 0.4</span>
+<span class="line" id="L40"><a href="#L40">  40</a> sky = cv2.GaussianBlur(sky, (0, 0), 1.6); sky = np.roll(sky, -W_ // 4, axis=1)                                     # three.js 的等距柱状贴图: u=0.25 是北; 训练贴图的北在 u=0.5, 左移四分之一</span>
+<span class="line" id="L41"><a href="#L41">  41</a> cv2.imwrite(OUT + &quot;/sky.png&quot;, np.clip(sky, 0, 255).astype(np.uint8))</span>
+<span class="line" id="L42"><a href="#L42">  42</a> # 漫游走廊: 核心帧的位置 (查看器系) 与航向 (自北顺时针, 度)</span>
+<span class="line" id="L43"><a href="#L43">  43</a> P = Poses(); core = [f for f in P.frames if A.core[0] &lt;= f &lt;= A.core[1]]; pos = np.array([P[f][:3, 3] for f in core]); fwd = np.array([P[f][:3, :3][:, 2] for f in core])</span>
+<span class="line" id="L44"><a href="#L44">  44</a> heading = np.degrees(np.arctan2(fwd[:, 0], fwd[:, 1])) % 360; pv = pos @ M.T</span>
+<span class="line" id="L45"><a href="#L45">  45</a> json.dump(dict(name=A.name, n=int(len(keep)), n_trained=n0, sh=A.sh, hold_psnr=meta.get(&quot;hold_psnr&quot;), hold_psnr_cc=meta.get(&quot;hold_psnr_cc&quot;), hold_ssim=meta.get(&quot;hold_ssim&quot;), frames=meta.get(&quot;frames&quot;), core=A.core,</span>
+<span class="line" id="L46"><a href="#L46">  46</a>                cam_height=float(np.median(pos[:, 2])), path=[[round(float(a), 3), round(float(b), 3), round(float(c), 3)] for a, b, c in pv], heading=[round(float(h), 2) for h in heading], core_frames=core,</span>
+<span class="line" id="L47"><a href="#L47">  47</a>                note=&quot;走廊等矢量数据: X = 东, Y = 上, Z = -北 (米, 原点与 8821/8826 相同); 高斯文件是 ENU (x 东 y 北 z 上), 网页里绕 x 轴转 -90 度; heading 自北顺时针&quot;), open(OUT + &quot;/meta.json&quot;, &quot;w&quot;))</span>
+<span class="line" id="L48"><a href="#L48">  48</a> fn = OUT + &quot;/&quot; + (A.out or (&quot;scene.ply&quot; if A.format == &quot;ply&quot; else &quot;scene.compressed.ply&quot;)); print(&quot;导出 %d / %d 个高斯 -&gt; %s (%.0f MB); 走廊 %d 个点, 长 %.0f m&quot; % (len(keep), n0, fn, os.path.getsize(fn) / 1e6, len(core), np.linalg.norm(np.diff(pos, axis=0), axis=1).sum()))</span></pre></html>

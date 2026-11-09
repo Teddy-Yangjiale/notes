@@ -1,0 +1,117 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>abot_preprocessing.py</title><style>body{font:15px system-ui;margin:24px;background:#faf8f3}pre{overflow:auto;line-height:1.6}pre span{display:block}span:target{background:#fff1a8}header{overflow-wrap:anywhere}</style><header><a href="/notes/series/internship/">实习专栏</a><h1>abot_preprocessing.py</h1><p>2026-11-07 model audit snapshot</p><p>SHA-256 2bd9a67916be7cdd11806d77c1d433b497ebedda9aa37c9f8da79677ed671b40</p></header><pre><span id="L1"><a href="#L1">   1</a> from __future__ import annotations</span>
+<span id="L2"><a href="#L2">   2</a> </span>
+<span id="L3"><a href="#L3">   3</a> from dataclasses import dataclass</span>
+<span id="L4"><a href="#L4">   4</a> from pathlib import Path</span>
+<span id="L5"><a href="#L5">   5</a> from typing import Iterable, Sequence</span>
+<span id="L6"><a href="#L6">   6</a> </span>
+<span id="L7"><a href="#L7">   7</a> import numpy as np</span>
+<span id="L8"><a href="#L8">   8</a> import torch</span>
+<span id="L9"><a href="#L9">   9</a> import torchvision.transforms.functional as tvf</span>
+<span id="L10"><a href="#L10">  10</a> from PIL import Image</span>
+<span id="L11"><a href="#L11">  11</a> from torchvision.transforms import InterpolationMode</span>
+<span id="L12"><a href="#L12">  12</a> </span>
+<span id="L13"><a href="#L13">  13</a> </span>
+<span id="L14"><a href="#L14">  14</a> DEFAULT_PAD_RGB = (0.485, 0.456, 0.406)</span>
+<span id="L15"><a href="#L15">  15</a> </span>
+<span id="L16"><a href="#L16">  16</a> </span>
+<span id="L17"><a href="#L17">  17</a> @dataclass(frozen=True)</span>
+<span id="L18"><a href="#L18">  18</a> class FovTransform:</span>
+<span id="L19"><a href="#L19">  19</a>     source_height: int</span>
+<span id="L20"><a href="#L20">  20</a>     source_width: int</span>
+<span id="L21"><a href="#L21">  21</a>     resized_height: int</span>
+<span id="L22"><a href="#L22">  22</a>     target_height: int</span>
+<span id="L23"><a href="#L23">  23</a>     target_width: int</span>
+<span id="L24"><a href="#L24">  24</a>     crop_top: int = 0</span>
+<span id="L25"><a href="#L25">  25</a>     crop_bottom: int = 0</span>
+<span id="L26"><a href="#L26">  26</a>     pad_top: int = 0</span>
+<span id="L27"><a href="#L27">  27</a>     pad_bottom: int = 0</span>
+<span id="L28"><a href="#L28">  28</a> </span>
+<span id="L29"><a href="#L29">  29</a>     @property</span>
+<span id="L30"><a href="#L30">  30</a>     def valid_rows(self) -&gt; slice:</span>
+<span id="L31"><a href="#L31">  31</a>         return slice(self.pad_top, self.target_height - self.pad_bottom)</span>
+<span id="L32"><a href="#L32">  32</a> </span>
+<span id="L33"><a href="#L33">  33</a> </span>
+<span id="L34"><a href="#L34">  34</a> def _to_chw01(image: Image.Image | np.ndarray | torch.Tensor) -&gt; torch.Tensor:</span>
+<span id="L35"><a href="#L35">  35</a>     if isinstance(image, Image.Image):</span>
+<span id="L36"><a href="#L36">  36</a>         return tvf.to_tensor(image.convert(&quot;RGB&quot;))</span>
+<span id="L37"><a href="#L37">  37</a>     if isinstance(image, np.ndarray):</span>
+<span id="L38"><a href="#L38">  38</a>         tensor = torch.from_numpy(np.asarray(image).copy())</span>
+<span id="L39"><a href="#L39">  39</a>         if tensor.ndim != 3 or tensor.shape[-1] != 3:</span>
+<span id="L40"><a href="#L40">  40</a>             raise ValueError(f&quot;Expected HWC RGB array, got {tuple(tensor.shape)}&quot;)</span>
+<span id="L41"><a href="#L41">  41</a>         tensor = tensor.permute(2, 0, 1)</span>
+<span id="L42"><a href="#L42">  42</a>     elif torch.is_tensor(image):</span>
+<span id="L43"><a href="#L43">  43</a>         tensor = image.detach().cpu()</span>
+<span id="L44"><a href="#L44">  44</a>         if tensor.ndim != 3:</span>
+<span id="L45"><a href="#L45">  45</a>             raise ValueError(f&quot;Expected three-dimensional image, got {tuple(tensor.shape)}&quot;)</span>
+<span id="L46"><a href="#L46">  46</a>         if tensor.shape[-1] == 3:</span>
+<span id="L47"><a href="#L47">  47</a>             tensor = tensor.permute(2, 0, 1)</span>
+<span id="L48"><a href="#L48">  48</a>         elif tensor.shape[0] != 3:</span>
+<span id="L49"><a href="#L49">  49</a>             raise ValueError(f&quot;Expected CHW or HWC RGB tensor, got {tuple(tensor.shape)}&quot;)</span>
+<span id="L50"><a href="#L50">  50</a>     else:</span>
+<span id="L51"><a href="#L51">  51</a>         raise TypeError(f&quot;Unsupported image type: {type(image).__name__}&quot;)</span>
+<span id="L52"><a href="#L52">  52</a>     tensor = tensor.float()</span>
+<span id="L53"><a href="#L53">  53</a>     if tensor.numel() and float(tensor.max()) &gt; 1.5:</span>
+<span id="L54"><a href="#L54">  54</a>         tensor = tensor / 255.0</span>
+<span id="L55"><a href="#L55">  55</a>     return tensor.clamp_(0.0, 1.0).contiguous()</span>
+<span id="L56"><a href="#L56">  56</a> </span>
+<span id="L57"><a href="#L57">  57</a> </span>
+<span id="L58"><a href="#L58">  58</a> def preprocess_image(</span>
+<span id="L59"><a href="#L59">  59</a>     image: Image.Image | np.ndarray | torch.Tensor,</span>
+<span id="L60"><a href="#L60">  60</a>     *,</span>
+<span id="L61"><a href="#L61">  61</a>     height: int = 280,</span>
+<span id="L62"><a href="#L62">  62</a>     width: int = 504,</span>
+<span id="L63"><a href="#L63">  63</a>     pad_rgb: Sequence[float] = DEFAULT_PAD_RGB,</span>
+<span id="L64"><a href="#L64">  64</a> ) -&gt; tuple[torch.Tensor, FovTransform]:</span>
+<span id="L65"><a href="#L65">  65</a>     &quot;&quot;&quot;Width-lock resize followed by center crop or ImageNet-mean vertical pad.&quot;&quot;&quot;</span>
+<span id="L66"><a href="#L66">  66</a>     tensor = _to_chw01(image)</span>
+<span id="L67"><a href="#L67">  67</a>     _, source_height, source_width = tensor.shape</span>
+<span id="L68"><a href="#L68">  68</a>     resized_height = max(1, round(source_height * width / max(source_width, 1)))</span>
+<span id="L69"><a href="#L69">  69</a>     tensor = tvf.resize(</span>
+<span id="L70"><a href="#L70">  70</a>         tensor,</span>
+<span id="L71"><a href="#L71">  71</a>         [resized_height, width],</span>
+<span id="L72"><a href="#L72">  72</a>         interpolation=InterpolationMode.BICUBIC,</span>
+<span id="L73"><a href="#L73">  73</a>         antialias=True,</span>
+<span id="L74"><a href="#L74">  74</a>     )</span>
+<span id="L75"><a href="#L75">  75</a>     crop_top = crop_bottom = pad_top = pad_bottom = 0</span>
+<span id="L76"><a href="#L76">  76</a>     if resized_height &gt; height:</span>
+<span id="L77"><a href="#L77">  77</a>         crop_top = round((resized_height - height) * 0.5)</span>
+<span id="L78"><a href="#L78">  78</a>         crop_bottom = resized_height - height - crop_top</span>
+<span id="L79"><a href="#L79">  79</a>         tensor = tvf.crop(tensor, crop_top, 0, height, width)</span>
+<span id="L80"><a href="#L80">  80</a>     elif resized_height &lt; height:</span>
+<span id="L81"><a href="#L81">  81</a>         pad_top = (height - resized_height) // 2</span>
+<span id="L82"><a href="#L82">  82</a>         pad_bottom = height - resized_height - pad_top</span>
+<span id="L83"><a href="#L83">  83</a>         color = torch.as_tensor(pad_rgb, dtype=tensor.dtype).view(3, 1, 1)</span>
+<span id="L84"><a href="#L84">  84</a>         canvas = color.expand(3, height, width).clone()</span>
+<span id="L85"><a href="#L85">  85</a>         canvas[:, pad_top : pad_top + resized_height] = tensor</span>
+<span id="L86"><a href="#L86">  86</a>         tensor = canvas</span>
+<span id="L87"><a href="#L87">  87</a>     transform = FovTransform(</span>
+<span id="L88"><a href="#L88">  88</a>         source_height=source_height,</span>
+<span id="L89"><a href="#L89">  89</a>         source_width=source_width,</span>
+<span id="L90"><a href="#L90">  90</a>         resized_height=resized_height,</span>
+<span id="L91"><a href="#L91">  91</a>         target_height=height,</span>
+<span id="L92"><a href="#L92">  92</a>         target_width=width,</span>
+<span id="L93"><a href="#L93">  93</a>         crop_top=crop_top,</span>
+<span id="L94"><a href="#L94">  94</a>         crop_bottom=crop_bottom,</span>
+<span id="L95"><a href="#L95">  95</a>         pad_top=pad_top,</span>
+<span id="L96"><a href="#L96">  96</a>         pad_bottom=pad_bottom,</span>
+<span id="L97"><a href="#L97">  97</a>     )</span>
+<span id="L98"><a href="#L98">  98</a>     # Preserve the tiny bicubic boundary overshoots used by the published</span>
+<span id="L99"><a href="#L99">  99</a>     # inference pipeline; clamping here changes long-horizon pose composition.</span>
+<span id="L100"><a href="#L100"> 100</a>     return tensor, transform</span>
+<span id="L101"><a href="#L101"> 101</a> </span>
+<span id="L102"><a href="#L102"> 102</a> </span>
+<span id="L103"><a href="#L103"> 103</a> def iter_preprocessed(</span>
+<span id="L104"><a href="#L104"> 104</a>     paths: Iterable[str | Path], *, height: int = 280, width: int = 504</span>
+<span id="L105"><a href="#L105"> 105</a> ):</span>
+<span id="L106"><a href="#L106"> 106</a>     reference: FovTransform | None = None</span>
+<span id="L107"><a href="#L107"> 107</a>     for index, path in enumerate(paths):</span>
+<span id="L108"><a href="#L108"> 108</a>         with Image.open(path) as image:</span>
+<span id="L109"><a href="#L109"> 109</a>             tensor, transform = preprocess_image(image, height=height, width=width)</span>
+<span id="L110"><a href="#L110"> 110</a>         if reference is None:</span>
+<span id="L111"><a href="#L111"> 111</a>             reference = transform</span>
+<span id="L112"><a href="#L112"> 112</a>         elif transform != reference:</span>
+<span id="L113"><a href="#L113"> 113</a>             raise ValueError(</span>
+<span id="L114"><a href="#L114"> 114</a>                 f&quot;Inconsistent frame geometry at index {index}: {transform} != {reference}&quot;</span>
+<span id="L115"><a href="#L115"> 115</a>             )</span>
+<span id="L116"><a href="#L116"> 116</a>         yield tensor, transform</span>
+<span id="L117"><a href="#L117"> 117</a> </span></pre></html>

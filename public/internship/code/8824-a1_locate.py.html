@@ -1,0 +1,132 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>a1_locate.py</title><style>body{margin:24px;font:15px system-ui;background:#faf8f3;color:#243342}pre{overflow:auto;line-height:1.6;background:white;padding:16px}.line{display:block}.line:target{background:#fff1a8}a{color:#58728a}header{overflow-wrap:anywhere}</style><header><a href="/notes/series/internship/">返回实习专栏</a><h1>a1_locate.py</h1><p>只读快照：2026-11-09 · /home/yjl/asset8824/run/a1_locate.py</p><p>SHA-256: 2bb0f77de3eb134ababbb5e8823422a44eef2228c07927b51f3d76bb146690e7</p></header><pre><span class="line" id="L1"><a href="#L1">   1</a> # -*- coding: utf-8 -*-</span>
+<span class="line" id="L2"><a href="#L2">   2</a> &quot;&quot;&quot;A1 · 用 P0 米制位姿重新定位全部资产。产物 outputs/assets3d.parquet。&quot;&quot;&quot;</span>
+<span class="line" id="L3"><a href="#L3">   3</a> import sys, json, os</span>
+<span class="line" id="L4"><a href="#L4">   4</a> sys.path.insert(0, &quot;/home/yjl/asset8824&quot;)</span>
+<span class="line" id="L5"><a href="#L5">   5</a> os.environ.setdefault(&quot;GLOG_minloglevel&quot;, &quot;2&quot;)</span>
+<span class="line" id="L6"><a href="#L6">   6</a> import numpy as np, pandas as pd</span>
+<span class="line" id="L7"><a href="#L7">   7</a> import config as C</span>
+<span class="line" id="L8"><a href="#L8">   8</a> from a import geom as G</span>
+<span class="line" id="L9"><a href="#L9">   9</a> </span>
+<span class="line" id="L10"><a href="#L10">  10</a> K = G.K_mat(C.FX, C.FY, C.CX, C.CY)</span>
+<span class="line" id="L11"><a href="#L11">  11</a> </span>
+<span class="line" id="L12"><a href="#L12">  12</a> poses = {r[&quot;frame_id&quot;]: r for r in (json.loads(l) for l in open(C.POSES))}</span>
+<span class="line" id="L13"><a href="#L13">  13</a> tracks = pd.read_parquet(C.TRACKS)</span>
+<span class="line" id="L14"><a href="#L14">  14</a> props = pd.read_parquet(C.PROPOSALS).set_index(&quot;proposal_id&quot;)</span>
+<span class="line" id="L15"><a href="#L15">  15</a> orig = json.load(open(C.ENU_ORIG))</span>
+<span class="line" id="L16"><a href="#L16">  16</a> frames = pd.read_parquet(C.FRAMES_PQ).set_index(&quot;frame_id&quot;)</span>
+<span class="line" id="L17"><a href="#L17">  17</a> </span>
+<span class="line" id="L18"><a href="#L18">  18</a> def kind_of(label):</span>
+<span class="line" id="L19"><a href="#L19">  19</a>     if label in C.FLAT_ON_GROUND:  return &quot;flat&quot;</span>
+<span class="line" id="L20"><a href="#L20">  20</a>     if label in C.STANDING_ON_GND: return &quot;standing&quot;</span>
+<span class="line" id="L21"><a href="#L21">  21</a>     return &quot;off&quot;</span>
+<span class="line" id="L22"><a href="#L22">  22</a> </span>
+<span class="line" id="L23"><a href="#L23">  23</a> rows, skipped = [], []</span>
+<span class="line" id="L24"><a href="#L24">  24</a> for t in tracks.itertuples():</span>
+<span class="line" id="L25"><a href="#L25">  25</a>     label = t.label</span>
+<span class="line" id="L26"><a href="#L26">  26</a>     kind = kind_of(label)</span>
+<span class="line" id="L27"><a href="#L27">  27</a>     pids = json.loads(t.obs_proposal_ids) if isinstance(t.obs_proposal_ids, str) else list(t.obs_proposal_ids)</span>
+<span class="line" id="L28"><a href="#L28">  28</a>     obs, meta = [], []</span>
+<span class="line" id="L29"><a href="#L29">  29</a>     for pid in pids:</span>
+<span class="line" id="L30"><a href="#L30">  30</a>         if pid not in props.index:      continue</span>
+<span class="line" id="L31"><a href="#L31">  31</a>         p = props.loc[pid]</span>
+<span class="line" id="L32"><a href="#L32">  32</a>         fid = p.frame_id</span>
+<span class="line" id="L33"><a href="#L33">  33</a>         if fid not in poses:            continue</span>
+<span class="line" id="L34"><a href="#L34">  34</a>         pz = poses[fid]</span>
+<span class="line" id="L35"><a href="#L35">  35</a>         R_cw = np.asarray(pz[&quot;R&quot;]); Cw = np.asarray(pz[&quot;C&quot;])</span>
+<span class="line" id="L36"><a href="#L36">  36</a>         u, v = G.anchor_uv((p.box_x0, p.box_y0, p.box_x1, p.box_y1), kind)</span>
+<span class="line" id="L37"><a href="#L37">  37</a>         obs.append((R_cw, Cw, u, v))</span>
+<span class="line" id="L38"><a href="#L38">  38</a>         meta.append({&quot;frame_id&quot;: fid, &quot;pid&quot;: pid, &quot;u&quot;: float(u), &quot;v&quot;: float(v),</span>
+<span class="line" id="L39"><a href="#L39">  39</a>                      &quot;box&quot;: [float(p.box_x0), float(p.box_y0), float(p.box_x1), float(p.box_y1)],</span>
+<span class="line" id="L40"><a href="#L40">  40</a>                      &quot;leaf&quot;: None if pd.isna(p.leaf) else str(p.leaf),</span>
+<span class="line" id="L41"><a href="#L41">  41</a>                      &quot;score&quot;: float(p.score)})</span>
+<span class="line" id="L42"><a href="#L42">  42</a>     if len(obs) &lt; C.MIN_OBS:</span>
+<span class="line" id="L43"><a href="#L43">  43</a>         skipped.append((t.track_id, label, len(obs), &quot;观测不足&quot;)); continue</span>
+<span class="line" id="L44"><a href="#L44">  44</a> </span>
+<span class="line" id="L45"><a href="#L45">  45</a>     out = {&quot;asset_id&quot;: t.track_id, &quot;label&quot;: label, &quot;kind&quot;: kind,</span>
+<span class="line" id="L46"><a href="#L46">  46</a>            &quot;n_obs&quot;: len(obs), &quot;leaf_vote&quot;: None}</span>
+<span class="line" id="L47"><a href="#L47">  47</a>     leaves = [m[&quot;leaf&quot;] for m in meta if m[&quot;leaf&quot;]]</span>
+<span class="line" id="L48"><a href="#L48">  48</a>     if leaves:</span>
+<span class="line" id="L49"><a href="#L49">  49</a>         out[&quot;leaf_vote&quot;] = pd.Series(leaves).mode().iloc[0]</span>
+<span class="line" id="L50"><a href="#L50">  50</a>         out[&quot;leaf_agree&quot;] = round(leaves.count(out[&quot;leaf_vote&quot;]) / len(obs), 3)</span>
+<span class="line" id="L51"><a href="#L51">  51</a>     else:</span>
+<span class="line" id="L52"><a href="#L52">  52</a>         out[&quot;leaf_agree&quot;] = 0.0</span>
+<span class="line" id="L53"><a href="#L53">  53</a> </span>
+<span class="line" id="L54"><a href="#L54">  54</a>     if kind in (&quot;flat&quot;, &quot;standing&quot;):</span>
+<span class="line" id="L55"><a href="#L55">  55</a>         # 射线 × 局部路面：路面高程由位姿直接给出，z = C_z − 1.60</span>
+<span class="line" id="L56"><a href="#L56">  56</a>         P, rng, keep = [], [], []</span>
+<span class="line" id="L57"><a href="#L57">  57</a>         K_inv = np.linalg.inv(K)</span>
+<span class="line" id="L58"><a href="#L58">  58</a>         for (R_cw, Cw, u, v), m in zip(obs, meta):</span>
+<span class="line" id="L59"><a href="#L59">  59</a>             o, d = G.ray(K_inv, R_cw, Cw, u, v)</span>
+<span class="line" id="L60"><a href="#L60">  60</a>             hit = G.ground_intersect(o, d, Cw[2] - C.CAM_HEIGHT_M)</span>
+<span class="line" id="L61"><a href="#L61">  61</a>             if hit is None: continue</span>
+<span class="line" id="L62"><a href="#L62">  62</a>             X, t_ = hit</span>
+<span class="line" id="L63"><a href="#L63">  63</a>             if t_ &gt; C.MAX_RANGE_M: continue</span>
+<span class="line" id="L64"><a href="#L64">  64</a>             P.append(X); rng.append(t_); keep.append(m)</span>
+<span class="line" id="L65"><a href="#L65">  65</a>         if len(P) &lt; C.MIN_OBS:</span>
+<span class="line" id="L66"><a href="#L66">  66</a>             skipped.append((t.track_id, label, len(P), &quot;地面交点不足&quot;)); continue</span>
+<span class="line" id="L67"><a href="#L67">  67</a>         P = np.asarray(P)</span>
+<span class="line" id="L68"><a href="#L68">  68</a>         med = np.median(P, axis=0)</span>
+<span class="line" id="L69"><a href="#L69">  69</a>         dev = np.linalg.norm(P - med, axis=1)</span>
+<span class="line" id="L70"><a href="#L70">  70</a>         mad = np.median(dev) + 1e-9</span>
+<span class="line" id="L71"><a href="#L71">  71</a>         ok = dev &lt; max(3.0 * mad, 0.5)          # 稳健剔除</span>
+<span class="line" id="L72"><a href="#L72">  72</a>         Xf = P[ok].mean(axis=0)</span>
+<span class="line" id="L73"><a href="#L73">  73</a>         out.update({&quot;method&quot;: &quot;ground_ray&quot;,</span>
+<span class="line" id="L74"><a href="#L74">  74</a>                     &quot;east_m&quot;: Xf[0], &quot;north_m&quot;: Xf[1], &quot;z_m&quot;: Xf[2],</span>
+<span class="line" id="L75"><a href="#L75">  75</a>                     &quot;scatter_m&quot;: float(np.linalg.norm(P[ok] - Xf, axis=1).std()),</span>
+<span class="line" id="L76"><a href="#L76">  76</a>                     &quot;spread_m&quot;: float(dev.max()),</span>
+<span class="line" id="L77"><a href="#L77">  77</a>                     &quot;range_m&quot;: float(np.median(np.asarray(rng)[ok])),</span>
+<span class="line" id="L78"><a href="#L78">  78</a>                     &quot;min_range_m&quot;: float(np.min(rng)),</span>
+<span class="line" id="L79"><a href="#L79">  79</a>                     &quot;n_used&quot;: int(ok.sum()), &quot;rms_px&quot;: None,</span>
+<span class="line" id="L80"><a href="#L80">  80</a>                     &quot;max_angle_deg&quot;: None, &quot;cond&quot;: None,</span>
+<span class="line" id="L81"><a href="#L81">  81</a>                     &quot;height_above_road_m&quot;: 0.0})</span>
+<span class="line" id="L82"><a href="#L82">  82</a>         obs_keep = [m for m, k in zip(keep, ok) if k]</span>
+<span class="line" id="L83"><a href="#L83">  83</a>     else:</span>
+<span class="line" id="L84"><a href="#L84">  84</a>         r = G.robust_triangulate(obs, K, C.HUBER_PX, C.MAX_ITER)</span>
+<span class="line" id="L85"><a href="#L85">  85</a>         if r is None or r[&quot;X&quot;] is None:</span>
+<span class="line" id="L86"><a href="#L86">  86</a>             skipped.append((t.track_id, label, len(obs), &quot;三角化失败&quot;)); continue</span>
+<span class="line" id="L87"><a href="#L87">  87</a>         X = r[&quot;X&quot;]</span>
+<span class="line" id="L88"><a href="#L88">  88</a>         rng = [np.linalg.norm(X - Cw) for (_, Cw, _, _) in obs]</span>
+<span class="line" id="L89"><a href="#L89">  89</a>         zr = np.median([poses[m[&quot;frame_id&quot;]][&quot;C&quot;][2] for m in meta]) - C.CAM_HEIGHT_M</span>
+<span class="line" id="L90"><a href="#L90">  90</a>         out.update({&quot;method&quot;: &quot;triangulate&quot;,</span>
+<span class="line" id="L91"><a href="#L91">  91</a>                     &quot;east_m&quot;: X[0], &quot;north_m&quot;: X[1], &quot;z_m&quot;: X[2],</span>
+<span class="line" id="L92"><a href="#L92">  92</a>                     &quot;scatter_m&quot;: None,</span>
+<span class="line" id="L93"><a href="#L93">  93</a>                     &quot;spread_m&quot;: None,</span>
+<span class="line" id="L94"><a href="#L94">  94</a>                     &quot;range_m&quot;: float(np.median(rng)),</span>
+<span class="line" id="L95"><a href="#L95">  95</a>                     &quot;min_range_m&quot;: float(np.min(rng)),</span>
+<span class="line" id="L96"><a href="#L96">  96</a>                     &quot;n_used&quot;: r[&quot;n_used&quot;], &quot;rms_px&quot;: round(r[&quot;rms_px&quot;], 3),</span>
+<span class="line" id="L97"><a href="#L97">  97</a>                     &quot;max_angle_deg&quot;: round(r[&quot;max_angle&quot;], 3),</span>
+<span class="line" id="L98"><a href="#L98">  98</a>                     &quot;cond&quot;: round(r[&quot;cond&quot;], 1),</span>
+<span class="line" id="L99"><a href="#L99">  99</a>                     &quot;height_above_road_m&quot;: float(X[2] - zr)})</span>
+<span class="line" id="L100"><a href="#L100"> 100</a>         obs_keep = [m for m, w in zip(meta, r[&quot;w&quot;]) if w &gt; 0.3]</span>
+<span class="line" id="L101"><a href="#L101"> 101</a> </span>
+<span class="line" id="L102"><a href="#L102"> 102</a>     lon, lat = G.enu_to_wgs84(out[&quot;east_m&quot;], out[&quot;north_m&quot;],</span>
+<span class="line" id="L103"><a href="#L103"> 103</a>                               orig[&quot;lon0&quot;], orig[&quot;lat0&quot;], orig[&quot;lat_ref&quot;])</span>
+<span class="line" id="L104"><a href="#L104"> 104</a>     out[&quot;lon&quot;], out[&quot;lat&quot;] = round(lon, 8), round(lat, 8)</span>
+<span class="line" id="L105"><a href="#L105"> 105</a>     out[&quot;in_inventory&quot;] = label not in C.NOT_INVENTORY</span>
+<span class="line" id="L106"><a href="#L106"> 106</a>     out[&quot;obs&quot;] = json.dumps(obs_keep, ensure_ascii=False)</span>
+<span class="line" id="L107"><a href="#L107"> 107</a>     out[&quot;first_frame&quot;] = obs_keep[0][&quot;frame_id&quot;] if obs_keep else None</span>
+<span class="line" id="L108"><a href="#L108"> 108</a>     rows.append(out)</span>
+<span class="line" id="L109"><a href="#L109"> 109</a> </span>
+<span class="line" id="L110"><a href="#L110"> 110</a> df = pd.DataFrame(rows)</span>
+<span class="line" id="L111"><a href="#L111"> 111</a> df.to_parquet(C.OUT / &quot;assets3d.parquet&quot;)</span>
+<span class="line" id="L112"><a href="#L112"> 112</a> df.drop(columns=[&quot;obs&quot;]).to_csv(C.OUT / &quot;assets3d.csv&quot;, index=False)</span>
+<span class="line" id="L113"><a href="#L113"> 113</a> </span>
+<span class="line" id="L114"><a href="#L114"> 114</a> print(f&quot;定位 {len(df)} / {len(tracks)} 个 track，跳过 {len(skipped)}&quot;)</span>
+<span class="line" id="L115"><a href="#L115"> 115</a> for s in skipped: print(&quot;   跳过&quot;, s)</span>
+<span class="line" id="L116"><a href="#L116"> 116</a> print()</span>
+<span class="line" id="L117"><a href="#L117"> 117</a> print(df.groupby([&quot;label&quot;, &quot;method&quot;]).agg(</span>
+<span class="line" id="L118"><a href="#L118"> 118</a>     n=(&quot;asset_id&quot;, &quot;size&quot;), 观测中位=(&quot;n_obs&quot;, &quot;median&quot;),</span>
+<span class="line" id="L119"><a href="#L119"> 119</a>     距离中位=(&quot;range_m&quot;, &quot;median&quot;)).to_string())</span>
+<span class="line" id="L120"><a href="#L120"> 120</a> off = df[df.method == &quot;triangulate&quot;]</span>
+<span class="line" id="L121"><a href="#L121"> 121</a> if len(off):</span>
+<span class="line" id="L122"><a href="#L122"> 122</a>     print(f&quot;\n离地类三角化 {len(off)} 个:&quot;)</span>
+<span class="line" id="L123"><a href="#L123"> 123</a>     print(f&quot;  重投影 RMS: 中位 {off.rms_px.median():.2f} px  p90 {off.rms_px.quantile(.9):.2f} px&quot;)</span>
+<span class="line" id="L124"><a href="#L124"> 124</a>     print(f&quot;  最大射线夹角: 中位 {off.max_angle_deg.median():.2f}°  &quot;</span>
+<span class="line" id="L125"><a href="#L125"> 125</a>           f&quot;&lt;{C.MIN_TRI_ANGLE}° 的 {int((off.max_angle_deg &lt; C.MIN_TRI_ANGLE).sum())} 个&quot;)</span>
+<span class="line" id="L126"><a href="#L126"> 126</a>     print(f&quot;  离路面高度: 中位 {off.height_above_road_m.median():.2f} m  &quot;</span>
+<span class="line" id="L127"><a href="#L127"> 127</a>           f&quot;p10 {off.height_above_road_m.quantile(.1):.2f}  p90 {off.height_above_road_m.quantile(.9):.2f}&quot;)</span>
+<span class="line" id="L128"><a href="#L128"> 128</a> gnd = df[df.method == &quot;ground_ray&quot;]</span>
+<span class="line" id="L129"><a href="#L129"> 129</a> if len(gnd):</span>
+<span class="line" id="L130"><a href="#L130"> 130</a>     print(f&quot;\n贴地类地面求交 {len(gnd)} 个:&quot;)</span>
+<span class="line" id="L131"><a href="#L131"> 131</a>     print(f&quot;  多帧散布: 中位 {gnd.scatter_m.median():.3f} m  p90 {gnd.scatter_m.quantile(.9):.3f} m&quot;)</span>
+<span class="line" id="L132"><a href="#L132"> 132</a>     print(f&quot;  观测距离: 中位 {gnd.range_m.median():.1f} m&quot;)</span></pre></html>

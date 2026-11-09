@@ -1,0 +1,136 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>p22_rawortho.py</title><style>body{margin:24px;font:15px system-ui;background:#faf8f3;color:#243342}pre{overflow:auto;line-height:1.6;background:white;padding:16px}.line{display:block}.line:target{background:#fff1a8}a{color:#58728a}header{overflow-wrap:anywhere}</style><header><a href="/notes/series/internship/">返回实习专栏</a><h1>p22_rawortho.py</h1><p>只读快照：2026-11-09 · /home/yjl/crack/snap1012/build/p22_rawortho.py</p><p>SHA-256: 4a50c8f1bcd527042ac67bea20cde339ad389599008715ef157cef79ae0794eb</p></header><pre><span class="line" id="L1"><a href="#L1">   1</a> # -*- coding: utf-8 -*-</span>
+<span class="line" id="L2"><a href="#L2">   2</a> &quot;&quot;&quot;P22 诊断版（8831）原始路面图：只用平台表格 + 平台原始标定（sn_raw）。</span>
+<span class="line" id="L3"><a href="#L3">   3</a> 每张照片（前摄、后摄，打不开的除外；重复画面、少数拨照放）按自己那一行的经纬度和航向角放车，路面平、车身不俯仰不横滚，</span>
+<span class="line" id="L4"><a href="#L4">   4</a> 直接投到 z = 0 的地面；前摄取相机前方 4.5–14 m、横向 ±7 m，后摄取后方 1.2–10 m、横向 ±5 m；画面顶部时间水印和底部车头不用。</span>
+<span class="line" id="L5"><a href="#L5">   5</a> 多张照片按 (3/d)² 简单平均，不挑图、不调曝光——位置不一致会直接显示成重影。</span>
+<span class="line" id="L6"><a href="#L6">   6</a> 输出 work/raw/raw_poses.npz、work/raw/ortho_raw/{gx}_{gn}.png + index.json（瓦片约定同 8829）。</span>
+<span class="line" id="L7"><a href="#L7">   7</a> --calib 8829（8832）：只把内外参换成 8829 用的那套，其余完全不变 → work/raw/poses_cal8829.npz、work/raw/ortho_cal8829/。</span>
+<span class="line" id="L8"><a href="#L8">   8</a> --calib 8829 --time clock（8833）：再把照片时刻改到 3 Hz 取帧时钟上（全部照片），位置、航向在表格轨迹上按拍摄时刻线性插值 → ortho_cal8829_clock/。</span>
+<span class="line" id="L9"><a href="#L9">   9</a> 用法: OMP_NUM_THREADS=1 python p22_rawortho.py [--workers 32] [--tiles=a_b,...] [--resume] [--calib raw|8829] [--time table|clock]</span>
+<span class="line" id="L10"><a href="#L10">  10</a> &quot;&quot;&quot;</span>
+<span class="line" id="L11"><a href="#L11">  11</a> import argparse</span>
+<span class="line" id="L12"><a href="#L12">  12</a> import json</span>
+<span class="line" id="L13"><a href="#L13">  13</a> import math</span>
+<span class="line" id="L14"><a href="#L14">  14</a> import os</span>
+<span class="line" id="L15"><a href="#L15">  15</a> import sys</span>
+<span class="line" id="L16"><a href="#L16">  16</a> import time</span>
+<span class="line" id="L17"><a href="#L17">  17</a> from multiprocessing import Pool</span>
+<span class="line" id="L18"><a href="#L18">  18</a> </span>
+<span class="line" id="L19"><a href="#L19">  19</a> import cv2</span>
+<span class="line" id="L20"><a href="#L20">  20</a> import numpy as np</span>
+<span class="line" id="L21"><a href="#L21">  21</a> cv2.setNumThreads(1)</span>
+<span class="line" id="L22"><a href="#L22">  22</a> from scipy.spatial import cKDTree</span>
+<span class="line" id="L23"><a href="#L23">  23</a> </span>
+<span class="line" id="L24"><a href="#L24">  24</a> sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))</span>
+<span class="line" id="L25"><a href="#L25">  25</a> from sn_common import WORK, IMG_W, IMG_H, OSD_ROWS, load_csv, lonlat_to_en, photo_path  # noqa</span>
+<span class="line" id="L26"><a href="#L26">  26</a> from sn_raw import K_raw, dist_raw, camera_w2c, project  # noqa</span>
+<span class="line" id="L27"><a href="#L27">  27</a> </span>
+<span class="line" id="L28"><a href="#L28">  28</a> ap = argparse.ArgumentParser()</span>
+<span class="line" id="L29"><a href="#L29">  29</a> ap.add_argument(&quot;--workers&quot;, type=int, default=32); ap.add_argument(&quot;--tiles&quot;, default=&quot;&quot;)</span>
+<span class="line" id="L30"><a href="#L30">  30</a> ap.add_argument(&quot;--resume&quot;, action=&quot;store_true&quot;, help=&quot;已有的瓦片不重画&quot;)</span>
+<span class="line" id="L31"><a href="#L31">  31</a> ap.add_argument(&quot;--calib&quot;, default=&quot;raw&quot;, choices=[&quot;raw&quot;, &quot;8829&quot;], help=&quot;raw = 平台原始内外参（8831）；8829 = 8829 用的内外参（8832），其余完全不变&quot;)</span>
+<span class="line" id="L32"><a href="#L32">  32</a> ap.add_argument(&quot;--time&quot;, default=&quot;table&quot;, choices=[&quot;table&quot;, &quot;clock&quot;],</span>
+<span class="line" id="L33"><a href="#L33">  33</a>                 help=&quot;table = 表格时刻；clock = 按相机 3 Hz 取帧时钟改成触发前最近一拍（work/raw/clock_fit.json），位置/航向在表格轨迹上按该时刻插值（8833）&quot;)</span>
+<span class="line" id="L34"><a href="#L34">  34</a> args = ap.parse_args()</span>
+<span class="line" id="L35"><a href="#L35">  35</a> OUT = f&quot;{WORK}/raw&quot;</span>
+<span class="line" id="L36"><a href="#L36">  36</a> TAG = &quot;raw&quot; if (args.calib, args.time) == (&quot;raw&quot;, &quot;table&quot;) else (&quot;cal8829&quot; if args.calib == &quot;8829&quot; else &quot;rawcal&quot;) + (&quot;_clock&quot; if args.time == &quot;clock&quot; else &quot;&quot;)</span>
+<span class="line" id="L37"><a href="#L37">  37</a> OD = f&quot;{OUT}/ortho_{TAG}&quot;; os.makedirs(OD, exist_ok=True)</span>
+<span class="line" id="L38"><a href="#L38">  38</a> POSES = f&quot;{OUT}/raw_poses.npz&quot; if TAG == &quot;raw&quot; else f&quot;{OUT}/poses_{TAG}.npz&quot;</span>
+<span class="line" id="L39"><a href="#L39">  39</a> C = load_csv(); Q = np.load(WORK + &quot;/q01_photo.npz&quot;, allow_pickle=True)</span>
+<span class="line" id="L40"><a href="#L40">  40</a> if args.calib == &quot;raw&quot;:</span>
+<span class="line" id="L41"><a href="#L41">  41</a>     K = K_raw(); D = dist_raw()</span>
+<span class="line" id="L42"><a href="#L42">  42</a> else:</span>
+<span class="line" id="L43"><a href="#L43">  43</a>     from sn_common import K_scaled, DIST</span>
+<span class="line" id="L44"><a href="#L44">  44</a>     K = K_scaled(); D = DIST.copy()</span>
+<span class="line" id="L45"><a href="#L45">  45</a> RANGE = {2: (4.5, 14.0, 7.0), 1: (1.2, 10.0, 5.0)}      # 通道: 近, 远, 横向（米）</span>
+<span class="line" id="L46"><a href="#L46">  46</a> BOT = {2: 700, 1: 690}</span>
+<span class="line" id="L47"><a href="#L47">  47</a> </span>
+<span class="line" id="L48"><a href="#L48">  48</a> # ---- 位姿：每行自己的经纬度、航向角（--time clock：换成拍摄时刻在表格轨迹上的插值）----</span>
+<span class="line" id="L49"><a href="#L49">  49</a> rows = np.where(Q[&quot;ok&quot;] == 1)[0]</span>
+<span class="line" id="L50"><a href="#L50">  50</a> E, N = lonlat_to_en(C[&quot;lon&quot;][rows], C[&quot;lat&quot;][rows]); AZ = C[&quot;angle&quot;][rows].astype(float); TT = C[&quot;t&quot;][rows].astype(float)</span>
+<span class="line" id="L51"><a href="#L51">  51</a> if args.time == &quot;clock&quot;:</span>
+<span class="line" id="L52"><a href="#L52">  52</a>     CF = json.load(open(f&quot;{OUT}/clock_fit.json&quot;))</span>
+<span class="line" id="L53"><a href="#L53">  53</a>     # 拍摄时刻 = 表格时刻之前最近的一拍（每路相机自己的 T、φ），所有照片一律这样改。</span>
+<span class="line" id="L54"><a href="#L54">  54</a>     # 少数拨也改：与它完全相同的那张照片必须同一时刻——只改多数行时这种对只有 3% 时刻一致，全改后 74%（work/raw/chk_minor.py）</span>
+<span class="line" id="L55"><a href="#L55">  55</a>     cap = TT.copy()</span>
+<span class="line" id="L56"><a href="#L56">  56</a>     for ch, nm in ((2, &quot;front&quot;), (1, &quot;rear&quot;)):</span>
+<span class="line" id="L57"><a href="#L57">  57</a>         T_, ph = CF[nm][&quot;T&quot;], CF[nm][&quot;phi&quot;]</span>
+<span class="line" id="L58"><a href="#L58">  58</a>         m = C[&quot;ch&quot;][rows] == ch</span>
+<span class="line" id="L59"><a href="#L59">  59</a>         cap[m] = TT[m] - np.mod(TT[m] - ph, T_)</span>
+<span class="line" id="L60"><a href="#L60">  60</a>     # 表格轨迹（全部行，两路相机同一时刻的行合并）按时间插值</span>
+<span class="line" id="L61"><a href="#L61">  61</a>     Ea, Na = lonlat_to_en(C[&quot;lon&quot;], C[&quot;lat&quot;]); ta = np.round(C[&quot;t&quot;].astype(float), 3)</span>
+<span class="line" id="L62"><a href="#L62">  62</a>     tu, inv = np.unique(ta, return_inverse=True); cnt = np.bincount(inv)</span>
+<span class="line" id="L63"><a href="#L63">  63</a>     Eu = np.bincount(inv, Ea) / cnt; Nu = np.bincount(inv, Na) / cnt</span>
+<span class="line" id="L64"><a href="#L64">  64</a>     Au = np.degrees(np.unwrap(np.radians(np.array([C[&quot;angle&quot;][inv == k][0] for k in range(len(tu))]))))</span>
+<span class="line" id="L65"><a href="#L65">  65</a>     E, N = np.interp(cap, tu, Eu), np.interp(cap, tu, Nu); AZ = np.mod(np.interp(cap, tu, Au), 360.0)</span>
+<span class="line" id="L66"><a href="#L66">  66</a>     print(f&quot;clock: moved {int((cap &lt; TT - 1e-6).sum())} photos, mean shift {np.mean(TT - cap):.3f} s&quot;, flush=True)</span>
+<span class="line" id="L67"><a href="#L67">  67</a>     TT = cap</span>
+<span class="line" id="L68"><a href="#L68">  68</a> W2C = np.array([camera_w2c(e, n, a, &quot;front&quot; if ch == 2 else &quot;rear&quot;, args.calib) for e, n, a, ch in zip(E, N, AZ, C[&quot;ch&quot;][rows])])</span>
+<span class="line" id="L69"><a href="#L69">  69</a> np.savez(POSES, rows=rows, ch=C[&quot;ch&quot;][rows], t=TT, E=E, N=N, az=AZ, speed=C[&quot;speed&quot;][rows], w2c=W2C)</span>
+<span class="line" id="L70"><a href="#L70">  70</a> fw = np.c_[np.sin(np.radians(AZ)), np.cos(np.radians(AZ))]</span>
+<span class="line" id="L71"><a href="#L71">  71</a> sgn = np.where(C[&quot;ch&quot;][rows] == 2, 1.0, -1.0)</span>
+<span class="line" id="L72"><a href="#L72">  72</a> foot = np.c_[E, N] + fw * (sgn * np.where(C[&quot;ch&quot;][rows] == 2, 9.0, 5.0))[:, None]      # 足迹中心</span>
+<span class="line" id="L73"><a href="#L73">  73</a> FT = cKDTree(foot)</span>
+<span class="line" id="L74"><a href="#L74">  74</a> print(&quot;photos&quot;, len(rows), &quot;front&quot;, int((C[&quot;ch&quot;][rows] == 2).sum()), &quot;rear&quot;, int((C[&quot;ch&quot;][rows] == 1).sum()), flush=True)</span>
+<span class="line" id="L75"><a href="#L75">  75</a> </span>
+<span class="line" id="L76"><a href="#L76">  76</a> if args.tiles:</span>
+<span class="line" id="L77"><a href="#L77">  77</a>     tiles = [tuple(map(int, t.split(&quot;_&quot;))) for t in args.tiles.split(&quot;,&quot;)]</span>
+<span class="line" id="L78"><a href="#L78">  78</a> else:</span>
+<span class="line" id="L79"><a href="#L79">  79</a>     s = set()</span>
+<span class="line" id="L80"><a href="#L80">  80</a>     for e, n in foot:</span>
+<span class="line" id="L81"><a href="#L81">  81</a>         for de in (-12, 0, 12):</span>
+<span class="line" id="L82"><a href="#L82">  82</a>             for dn in (-12, 0, 12):</span>
+<span class="line" id="L83"><a href="#L83">  83</a>                 s.add((int(math.floor((e + de) / 20)), int(math.floor((n + dn) / 20))))</span>
+<span class="line" id="L84"><a href="#L84">  84</a>     tiles = sorted(s)</span>
+<span class="line" id="L85"><a href="#L85">  85</a> TP = 1000; RES = 0.02; q = (np.arange(TP) + 0.5) * RES</span>
+<span class="line" id="L86"><a href="#L86">  86</a> </span>
+<span class="line" id="L87"><a href="#L87">  87</a> </span>
+<span class="line" id="L88"><a href="#L88">  88</a> def render(tile):</span>
+<span class="line" id="L89"><a href="#L89">  89</a>     gx, gn = tile; e0, n0 = gx * 20.0, gn * 20.0</span>
+<span class="line" id="L90"><a href="#L90">  90</a>     fn = f&quot;{OD}/{gx}_{gn}.png&quot;</span>
+<span class="line" id="L91"><a href="#L91">  91</a>     if args.resume and os.path.exists(fn):</span>
+<span class="line" id="L92"><a href="#L92">  92</a>         a = cv2.imread(fn, cv2.IMREAD_UNCHANGED)</span>
+<span class="line" id="L93"><a href="#L93">  93</a>         if a is not None:</span>
+<span class="line" id="L94"><a href="#L94">  94</a>             return dict(id=f&quot;{gx}_{gn}&quot;, e0=e0, n0=n0, cov=round(float((a[:, :, 3] &gt; 0).mean()), 4))</span>
+<span class="line" id="L95"><a href="#L95">  95</a>     GE, GN = np.meshgrid(e0 + q, n0 + 20 - q)</span>
+<span class="line" id="L96"><a href="#L96">  96</a>     P = np.c_[GE.ravel(), GN.ravel(), np.zeros(TP * TP)]</span>
+<span class="line" id="L97"><a href="#L97">  97</a>     acc = np.zeros((TP * TP, 3), np.float32); ws = np.zeros(TP * TP, np.float32)</span>
+<span class="line" id="L98"><a href="#L98">  98</a>     for i in FT.query_ball_point([e0 + 10, n0 + 10], 30.0):</span>
+<span class="line" id="L99"><a href="#L99">  99</a>         r, ch, M = int(rows[i]), int(C[&quot;ch&quot;][rows[i]]), W2C[i]</span>
+<span class="line" id="L100"><a href="#L100"> 100</a>         lo, hi, lat = RANGE[ch]</span>
+<span class="line" id="L101"><a href="#L101"> 101</a>         Cw = -M[:3, :3].T @ M[:3, 3]; f = fw[i]; rt = np.array([f[1], -f[0]])</span>
+<span class="line" id="L102"><a href="#L102"> 102</a>         rel = P[:, :2] - Cw[:2]; al = rel @ f * (1 if ch == 2 else -1); la = np.abs(rel @ rt)</span>
+<span class="line" id="L103"><a href="#L103"> 103</a>         m = (al &gt; lo) &amp; (al &lt; hi) &amp; (la &lt; lat)</span>
+<span class="line" id="L104"><a href="#L104"> 104</a>         if m.sum() &lt; 200:</span>
+<span class="line" id="L105"><a href="#L105"> 105</a>             continue</span>
+<span class="line" id="L106"><a href="#L106"> 106</a>         idx = np.flatnonzero(m)</span>
+<span class="line" id="L107"><a href="#L107"> 107</a>         u, v, z = project(P[idx], M, K, D)</span>
+<span class="line" id="L108"><a href="#L108"> 108</a>         ok = np.isfinite(u) &amp; (u &gt;= 1) &amp; (u &lt; IMG_W - 2) &amp; (v &gt;= OSD_ROWS + 4) &amp; (v &lt; BOT[ch] - 2)</span>
+<span class="line" id="L109"><a href="#L109"> 109</a>         if ok.sum() &lt; 200:</span>
+<span class="line" id="L110"><a href="#L110"> 110</a>             continue</span>
+<span class="line" id="L111"><a href="#L111"> 111</a>         idx, u, v = idx[ok], u[ok], v[ok]</span>
+<span class="line" id="L112"><a href="#L112"> 112</a>         im = cv2.imread(photo_path(r, ch))</span>
+<span class="line" id="L113"><a href="#L113"> 113</a>         if im is None:</span>
+<span class="line" id="L114"><a href="#L114"> 114</a>             continue</span>
+<span class="line" id="L115"><a href="#L115"> 115</a>         mu = np.full(TP * TP, -1, np.float32); mv = np.full(TP * TP, -1, np.float32); mu[idx] = u; mv[idx] = v</span>
+<span class="line" id="L116"><a href="#L116"> 116</a>         col = cv2.remap(im, mu.reshape(TP, TP), mv.reshape(TP, TP), cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT).reshape(-1, 3)[idx]</span>
+<span class="line" id="L117"><a href="#L117"> 117</a>         d = np.hypot(*(P[idx, :2] - Cw[:2]).T)</span>
+<span class="line" id="L118"><a href="#L118"> 118</a>         w = (3.0 / d) ** 2</span>
+<span class="line" id="L119"><a href="#L119"> 119</a>         acc[idx] += col.astype(np.float32) * w[:, None]; ws[idx] += w</span>
+<span class="line" id="L120"><a href="#L120"> 120</a>     cov = ws &gt; 0</span>
+<span class="line" id="L121"><a href="#L121"> 121</a>     if cov.sum() &lt; 400:</span>
+<span class="line" id="L122"><a href="#L122"> 122</a>         return None</span>
+<span class="line" id="L123"><a href="#L123"> 123</a>     out = np.zeros((TP * TP, 4), np.uint8)</span>
+<span class="line" id="L124"><a href="#L124"> 124</a>     out[cov, :3] = np.clip(acc[cov] / ws[cov, None], 0, 255).astype(np.uint8); out[cov, 3] = 255</span>
+<span class="line" id="L125"><a href="#L125"> 125</a>     cv2.imwrite(fn, out.reshape(TP, TP, 4), [cv2.IMWRITE_PNG_COMPRESSION, 3])</span>
+<span class="line" id="L126"><a href="#L126"> 126</a>     return dict(id=f&quot;{gx}_{gn}&quot;, e0=e0, n0=n0, cov=round(float(cov.mean()), 4))</span>
+<span class="line" id="L127"><a href="#L127"> 127</a> </span>
+<span class="line" id="L128"><a href="#L128"> 128</a> </span>
+<span class="line" id="L129"><a href="#L129"> 129</a> if __name__ == &quot;__main__&quot;:</span>
+<span class="line" id="L130"><a href="#L130"> 130</a>     t0 = time.time()</span>
+<span class="line" id="L131"><a href="#L131"> 131</a>     with Pool(args.workers) as pool:</span>
+<span class="line" id="L132"><a href="#L132"> 132</a>         res = [r for r in pool.imap_unordered(render, tiles, chunksize=2) if r]</span>
+<span class="line" id="L133"><a href="#L133"> 133</a>     json.dump(dict(res=RES, tile=20.0, px=TP, tiles=sorted(res, key=lambda t: t[&quot;id&quot;]),</span>
+<span class="line" id="L134"><a href="#L134"> 134</a>                    args=dict(source=&quot;平台表格 + &quot; + (&quot;平台原始标定（calib_raw_platform.json）&quot; if args.calib == &quot;raw&quot; else &quot;8829 的内外参（sn_common CAM_INTR/FRONT/REAR）&quot;)</span>
+<span class="line" id="L135"><a href="#L135"> 135</a>                              + (&quot;，照片时刻按 3 Hz 取帧时钟改，位置/航向按该时刻在表格轨迹上插值&quot; if args.time == &quot;clock&quot; else &quot;，无任何修正&quot;))), open(f&quot;{OD}/index.json&quot;, &quot;w&quot;))</span>
+<span class="line" id="L136"><a href="#L136"> 136</a>     print(f&quot;done {len(res)} tiles, road {sum(t[&#x27;cov&#x27;] for t in res) * 400:.0f} m2 [{time.time()-t0:.0f}s]&quot;)</span></pre></html>

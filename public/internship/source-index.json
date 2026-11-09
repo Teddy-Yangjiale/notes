@@ -1,0 +1,405 @@
+{
+  "8820": [
+    {
+      "name": "s03_ortho.py",
+      "path": "/home/yjl/crack/viewer3d/build/s03_ortho.py",
+      "url": "/notes/internship/code/8820-s03_ortho.py.html",
+      "sha256": "c88830d081757b6b493b8949096343283f2b57d2fecd652488dbb52da8ee08a2",
+      "lines": 115
+    },
+    {
+      "name": "s04_register.py",
+      "path": "/home/yjl/crack/viewer3d/build/s04_register.py",
+      "url": "/notes/internship/code/8820-s04_register.py.html",
+      "sha256": "c33fa585c1cb8a9c6f9bece979abdc1ca030e5bbc1c79de1cf2ccd688d726d5c",
+      "lines": 308
+    },
+    {
+      "name": "s05_site.py",
+      "path": "/home/yjl/crack/viewer3d/build/s05_site.py",
+      "url": "/notes/internship/code/8820-s05_site.py.html",
+      "sha256": "f8a0354dc912ea894dde4d50add705f20d9427a74bc516943154952f94449657",
+      "lines": 133
+    }
+  ],
+  "8821": [
+    {
+      "name": "t03d_hmm24.py",
+      "path": "/home/yjl/crack/viewer3d/build/t03d_hmm24.py",
+      "url": "/notes/internship/code/8821-t03d_hmm24.py.html",
+      "sha256": "d328d845b534f2654ba7c7f397178a7657469bb11315fdf30309a9a4608a934c",
+      "lines": 172
+    },
+    {
+      "name": "t03f_pose24.py",
+      "path": "/home/yjl/crack/viewer3d/build/t03f_pose24.py",
+      "url": "/notes/internship/code/8821-t03f_pose24.py.html",
+      "sha256": "ec72240224283d055ff8c3eb9a815605bc40b90c60750fb79c43ea8dc528cbad",
+      "lines": 206
+    },
+    {
+      "name": "run_v2.sh",
+      "path": "/home/yjl/crack/viewer3d/build/run_v2.sh",
+      "url": "/notes/internship/code/8821-run_v2.sh.html",
+      "sha256": "1fabb59650523607fe5b083b26224083bc98079d8c7125a990e5ee99479bf4a2",
+      "lines": 24
+    }
+  ],
+  "8822": [
+    {
+      "name": "u01_run24.py",
+      "path": "/home/yjl/crack/viewer3d/build/u01_run24.py",
+      "url": "/notes/internship/code/8822-u01_run24.py.html",
+      "sha256": "f72702f96952524f53e9eb911d137a6c254e06146689958be5a902a4675929d8",
+      "lines": 388
+    },
+    {
+      "name": "u02_site.py",
+      "path": "/home/yjl/crack/viewer3d/build/u02_site.py",
+      "url": "/notes/internship/code/8822-u02_site.py.html",
+      "sha256": "532c429e50bb3351f64ee781f713cf96ca48e2937555c8a92006498103ca21cc",
+      "lines": 177
+    },
+    {
+      "name": "u09_pairs.py",
+      "path": "/home/yjl/crack/viewer3d/build/u09_pairs.py",
+      "url": "/notes/internship/code/8822-u09_pairs.py.html",
+      "sha256": "fb2b784cea4ea8cae3725735a9acfe2d13f81a042a3778850d777f4eaddd7493",
+      "lines": 70
+    }
+  ],
+  "8823": [
+    {
+      "name": "k01_kitti.py",
+      "path": "/home/yjl/crack/viewer3d/build/k01_kitti.py",
+      "url": "/notes/internship/code/8823-k01_kitti.py.html",
+      "sha256": "b5b746f5fea4abd8f20aea1b9f4735e8b1ed04968d388e80dabca8195db4ba23",
+      "lines": 328
+    },
+    {
+      "name": "k02_rot.py",
+      "path": "/home/yjl/crack/viewer3d/build/k02_rot.py",
+      "url": "/notes/internship/code/8823-k02_rot.py.html",
+      "sha256": "18ac25d82e149b950dac9e02328669a0e2f5c357ae6ceb6b3a468f8c1364d7ee",
+      "lines": 62
+    },
+    {
+      "name": "k03_site.py",
+      "path": "/home/yjl/crack/viewer3d/build/k03_site.py",
+      "url": "/notes/internship/code/8823-k03_site.py.html",
+      "sha256": "af9c42b016d135a9228d7a816453389056cdd0b78e62258855d7d34c5570d697",
+      "lines": 110
+    }
+  ],
+  "8824": [
+    {
+      "name": "geom.py",
+      "path": "/home/yjl/asset8824/a/geom.py",
+      "url": "/notes/internship/code/8824-geom.py.html",
+      "sha256": "99f584b61b6950b1fc2a01451703b4e88fb1e2f17767a9169c92fc2deb3b0dc2",
+      "lines": 131
+    },
+    {
+      "name": "a1_locate.py",
+      "path": "/home/yjl/asset8824/run/a1_locate.py",
+      "url": "/notes/internship/code/8824-a1_locate.py.html",
+      "sha256": "2bb0f77de3eb134ababbb5e8823422a44eef2228c07927b51f3d76bb146690e7",
+      "lines": 132
+    },
+    {
+      "name": "a2_verify.py",
+      "path": "/home/yjl/asset8824/run/a2_verify.py",
+      "url": "/notes/internship/code/8824-a2_verify.py.html",
+      "sha256": "e23eb2c35a5121077c6c2aea00768a25554fa94fab1efc1badbc144fdfd4e8d7",
+      "lines": 118
+    },
+    {
+      "name": "README.md",
+      "path": "/home/yjl/asset8824/README.md",
+      "url": "/notes/internship/code/8824-README.md.html",
+      "sha256": "63e0e132bc15cba880bd4683aca1a5e09d9d2fccb1dbb078f7dde125c43654c3",
+      "lines": 113
+    }
+  ],
+  "8825": [
+    {
+      "name": "serve.py",
+      "path": "/home/yjl/crack/show8821/serve.py",
+      "url": "/notes/internship/code/8825-serve.py.html",
+      "sha256": "3000fbc6aa456898b9d9e5c9e2382b8eb478109aaf79878525c207e8f92c0ae1",
+      "lines": 73
+    },
+    {
+      "name": "index.html",
+      "path": "/home/yjl/crack/show8821/site/index.html",
+      "url": "/notes/internship/code/8825-index.html.html",
+      "sha256": "205456a3fa2c238ba1354e530ab986a99cf4ea82990c0ab25c1c0deb9335d80e",
+      "lines": 334
+    }
+  ],
+  "8826": [
+    {
+      "name": "t01a_vo.py",
+      "path": "/home/yjl/crack/viewer8826/build/t01a_vo.py",
+      "url": "/notes/internship/code/8826-t01a_vo.py.html",
+      "sha256": "5be5aed4c823b278d5d49a5dc84ba1659f6d2bf699366bb882e0166646fc1aac",
+      "lines": 175
+    },
+    {
+      "name": "t01f_track.py",
+      "path": "/home/yjl/crack/viewer8826/build/t01f_track.py",
+      "url": "/notes/internship/code/8826-t01f_track.py.html",
+      "sha256": "df406f4f1fd2efdc3d00b8dd8571160712095a6ec93f8cf160048eeab7ebc5fe",
+      "lines": 171
+    },
+    {
+      "name": "t04_cloud.py",
+      "path": "/home/yjl/crack/viewer8826/build/t04_cloud.py",
+      "url": "/notes/internship/code/8826-t04_cloud.py.html",
+      "sha256": "3e98a6f5756fe35dd64169ae6c9ca11f7ed0ceb28e01222a5fd1958995f38b72",
+      "lines": 217
+    },
+    {
+      "name": "g11_ba.py",
+      "path": "D:\\Downloads\\8820起\\.codex-work\\gaussian-audit\\upstream\\g11_ba.py",
+      "url": "/notes/internship/code/8826-g11_ba.py.html",
+      "sha256": "3c4a5e96e0274436bd058629f71d14ccef1d88636a99943d76b9e0fb6c729136",
+      "lines": 222,
+      "snapshot": "2026-11-07 existing audit snapshot"
+    }
+  ],
+  "8827": [
+    {
+      "name": "e00_frames.py",
+      "path": "/home/yjl/crack/city8827/build/e00_frames.py",
+      "url": "/notes/internship/code/8827-e00_frames.py.html",
+      "sha256": "8447fe380ea1bed7caf05efafbeb592e4e18ed19d06eff5d509e4a5d3d1cc403",
+      "lines": 20
+    },
+    {
+      "name": "e01_masks.py",
+      "path": "/home/yjl/crack/city8827/build/e01_masks.py",
+      "url": "/notes/internship/code/8827-e01_masks.py.html",
+      "sha256": "b2b806bc1973b9480668af9f1f9b20a151ea28c7a9bc023b0b1df613bda7d6bc",
+      "lines": 35
+    },
+    {
+      "name": "e02_poses.py",
+      "path": "/home/yjl/crack/city8827/build/e02_poses.py",
+      "url": "/notes/internship/code/8827-e02_poses.py.html",
+      "sha256": "617bf7b6690eba0671497998013ed317026b19be1db69f8e35e0c84cb35101ca",
+      "lines": 40
+    },
+    {
+      "name": "e03_depth.py",
+      "path": "/home/yjl/crack/city8827/build/e03_depth.py",
+      "url": "/notes/internship/code/8827-e03_depth.py.html",
+      "sha256": "f7cd4c496e2720653df4605b8ab888372db575f4068f90be2ebb29db88bddc83",
+      "lines": 58
+    },
+    {
+      "name": "e04_train.py",
+      "path": "/home/yjl/crack/city8827/build/e04_train.py",
+      "url": "/notes/internship/code/8827-e04_train.py.html",
+      "sha256": "e0626560d43da5aea650a96b29de88007d46c58d49c2b81240b62ee2de495f9f",
+      "lines": 152
+    },
+    {
+      "name": "e05_export.py",
+      "path": "/home/yjl/crack/city8827/build/e05_export.py",
+      "url": "/notes/internship/code/8827-e05_export.py.html",
+      "sha256": "fd01d82ec9653622528bf5fc548de28f029be2adb2e0eaa367cb7fe35968d92d",
+      "lines": 48
+    },
+    {
+      "name": "p01_nodes.py",
+      "path": "/home/yjl/crack/city8827/build/p01_nodes.py",
+      "url": "/notes/internship/code/8827-p01_nodes.py.html",
+      "sha256": "81fdda9fe8ebbc0c5dcb9a068e7eb449290a816969206e3b48b2c685ef18be20",
+      "lines": 53
+    }
+  ],
+  "8828": [
+    {
+      "name": "README.md",
+      "path": "/home/yjl/crack/viewer1012/README.md",
+      "url": "/notes/internship/code/8828-README.md.html",
+      "sha256": "1d1a8e68e451e644a32d8adb4612e7e7f5940e2757ee382445cb4fe64d321954",
+      "lines": 92
+    },
+    {
+      "name": "t01e_1012.py",
+      "path": "/home/yjl/crack/viewer1012/build/t01e_1012.py",
+      "url": "/notes/internship/code/8828-t01e_1012.py.html",
+      "sha256": "dd8df02f4463d979ae3098359674a2f4105692a27e2c07675446bf125830d4a7",
+      "lines": 51
+    },
+    {
+      "name": "t01f_track.py",
+      "path": "/home/yjl/crack/viewer1012/build/t01f_track.py",
+      "url": "/notes/internship/code/8828-t01f_track.py.html",
+      "sha256": "8b5da711b8f1d1df410141680b31e9845e3e9e58bbbca0ed5ada714e6b2bcee3",
+      "lines": 200
+    }
+  ],
+  "8829": [
+    {
+      "name": "p13_joint.py",
+      "path": "/home/yjl/crack/snap1012/build/p13_joint.py",
+      "url": "/notes/internship/code/8829-p13_joint.py.html",
+      "sha256": "99e4be33b57188724d582b257b9ee919cd75e93aa0a44527a227a25287c82e2a",
+      "lines": 619
+    },
+    {
+      "name": "p14_render.py",
+      "path": "/home/yjl/crack/snap1012/build/p14_render.py",
+      "url": "/notes/internship/code/8829-p14_render.py.html",
+      "sha256": "b09198ddfae4bb792bcc07debf1ba62cbe5a816ebb74c86f4bb710411803e41d",
+      "lines": 425
+    },
+    {
+      "name": "prepare_clean_inputs.py",
+      "path": "/home/yjl/crack/snap1012/build/prepare_clean_inputs.py",
+      "url": "/notes/internship/code/8829-prepare_clean_inputs.py.html",
+      "sha256": "b103f91134d9559fa85099e473f7333187c88072bbf576f0367c46d9b89cd294",
+      "lines": 64
+    },
+    {
+      "name": "run_clean_pipeline.py",
+      "path": "/home/yjl/crack/snap1012/build/run_clean_pipeline.py",
+      "url": "/notes/internship/code/8829-run_clean_pipeline.py.html",
+      "sha256": "9f9edc1a7a8ba89776b0f9cf2dfa069bc5e8166c6fba8cfaa87206580b2473e3",
+      "lines": 168
+    }
+  ],
+  "8830": [
+    {
+      "name": "server.py",
+      "path": "/home/yjl/crack/annot_tool/server.py",
+      "url": "/notes/internship/code/8830-server.py.html",
+      "sha256": "f4612f62d38aa45f18d243123a1f2f6fd19a1be13b41c9190732e70886fbabf1",
+      "lines": 421
+    },
+    {
+      "name": "build_verify_queue.py",
+      "path": "/home/yjl/crack/annot_tool/build_verify_queue.py",
+      "url": "/notes/internship/code/8830-build_verify_queue.py.html",
+      "sha256": "f49636e12cb7570580cd16197b8058d5c8806373f2b0e6c57857bf74c03fa3ca",
+      "lines": 91
+    }
+  ],
+  "8831": [
+    {
+      "name": "sn_raw.py",
+      "path": "/home/yjl/crack/snap1012/build/sn_raw.py",
+      "url": "/notes/internship/code/8831-sn_raw.py.html",
+      "sha256": "4c5bcc848bc7500946b1ac1bd6ee5769b82fe437e4137880aecc035441ee6135",
+      "lines": 71
+    },
+    {
+      "name": "p22_rawortho.py",
+      "path": "/home/yjl/crack/snap1012/build/p22_rawortho.py",
+      "url": "/notes/internship/code/8831-p22_rawortho.py.html",
+      "sha256": "4a50c8f1bcd527042ac67bea20cde339ad389599008715ef157cef79ae0794eb",
+      "lines": 136
+    },
+    {
+      "name": "p11_raw.py",
+      "path": "/home/yjl/crack/snap1012/build/p11_raw.py",
+      "url": "/notes/internship/code/8831-p11_raw.py.html",
+      "sha256": "775b8bc3dc562a46c51357889ab1d0a6d5c0eece25fb0ab158c7f7d70f81594c",
+      "lines": 204
+    }
+  ],
+  "8832": [
+    {
+      "name": "viewer.js",
+      "path": "/home/yjl/crack/radix8832/site/radix-compare/viewer.js",
+      "url": "/notes/internship/code/8832-viewer.js.html",
+      "sha256": "bb6cd82a1ee7e70f275419a352d299bcbaa99c01688adea0eb55f0a69d833909",
+      "lines": 14
+    },
+    {
+      "name": "compare.js",
+      "path": "/home/yjl/crack/radix8832/site/radix-compare/compare.js",
+      "url": "/notes/internship/code/8832-compare.js.html",
+      "sha256": "8601a93fbada27a9dc0fac2c9975c8cbbdf674090293d95182626999c41e8afa",
+      "lines": 22
+    },
+    {
+      "name": "config.json",
+      "path": "/home/yjl/crack/radix8832/site/radix-compare/config.json",
+      "url": "/notes/internship/code/8832-config.json.html",
+      "sha256": "a2b5f7245e65ace5440bcee20acae3dab67946bcad5c4ebd7ee6a081d0593f96",
+      "lines": 1
+    }
+  ],
+  "8833": [
+    {
+      "name": "app.js",
+      "path": "D:\\Downloads\\8820起\\.codex-work\\recon8833\\app.js",
+      "url": "/notes/internship/code/8833-app.js.html",
+      "sha256": "e2283f11ec37d49a432a03c572f73bf199e22c36cc4c1a8cef6e08354534182c",
+      "lines": 17,
+      "snapshot": "2026-11-08 local deployment source"
+    },
+    {
+      "name": "serve.py",
+      "path": "D:\\Downloads\\8820起\\.codex-work\\recon8833\\serve.py",
+      "url": "/notes/internship/code/8833-serve.py.html",
+      "sha256": "fd95aef27e483a5a3d07ec516a0e33d49ac25884b4b9406b397e759e047cc067",
+      "lines": 73,
+      "snapshot": "2026-11-08 local deployment source"
+    }
+  ],
+  "models": [
+    {
+      "name": "abot_pi3.py",
+      "path": "D:\\Downloads\\8820起\\.codex-work\\pipeline-code-audit-20261107\\abot_pi3.py",
+      "url": "/notes/internship/code/models-abot_pi3.py.html",
+      "sha256": "33c6dc28d633a77b5f9e09e082aeb10b30744476c867b7576ba1fecca95b51ed",
+      "lines": 730,
+      "snapshot": "2026-11-07 model audit snapshot"
+    },
+    {
+      "name": "abot_config.json",
+      "path": "D:\\Downloads\\8820起\\.codex-work\\pipeline-code-audit-20261107\\abot_config.json",
+      "url": "/notes/internship/code/models-abot_config.json.html",
+      "sha256": "60c93dd56512411b0e3578d0ee2cff7c8c3af4c8fdc08bed4b32fe79bb71c195",
+      "lines": 10,
+      "snapshot": "2026-11-07 model audit snapshot"
+    },
+    {
+      "name": "abot_preprocessing.py",
+      "path": "D:\\Downloads\\8820起\\.codex-work\\pipeline-code-audit-20261107\\abot_preprocessing.py",
+      "url": "/notes/internship/code/models-abot_preprocessing.py.html",
+      "sha256": "2bd9a67916be7cdd11806d77c1d433b497ebedda9aa37c9f8da79677ed671b40",
+      "lines": 117,
+      "snapshot": "2026-11-07 model audit snapshot"
+    },
+    {
+      "name": "da3_model.py",
+      "path": "D:\\Downloads\\8820起\\.codex-work\\pipeline-code-audit-20261107\\da3_model.py",
+      "url": "/notes/internship/code/models-da3_model.py.html",
+      "sha256": "c7d5f88962e05c021cf7dab505840c8892e5e9d6880fb2901d20f4120ca173b3",
+      "lines": 442,
+      "snapshot": "2026-11-07 model audit snapshot"
+    },
+    {
+      "name": "da3_nested_config.yaml",
+      "path": "D:\\Downloads\\8820起\\.codex-work\\pipeline-code-audit-20261107\\da3_nested_config.yaml",
+      "url": "/notes/internship/code/models-da3_nested_config.yaml.html",
+      "sha256": "1146a67071cec57f658284a748dd3aab5f3bb49d0c8317b8321d3d4464cbe673",
+      "lines": 10,
+      "snapshot": "2026-11-07 model audit snapshot"
+    },
+    {
+      "name": "sam3_processor.py",
+      "path": "D:\\Downloads\\8820起\\.codex-work\\pipeline-code-audit-20261107\\sam3_processor.py",
+      "url": "/notes/internship/code/models-sam3_processor.py.html",
+      "sha256": "d8738a0efb6138b01c0dc5deceffd29de9e675860a9a1ed3822b08766373333b",
+      "lines": 223,
+      "snapshot": "2026-11-07 model audit snapshot"
+    }
+  ]
+}

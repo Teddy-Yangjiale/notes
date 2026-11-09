@@ -1,0 +1,35 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>e01_masks.py</title><style>body{margin:24px;font:15px system-ui;background:#faf8f3;color:#243342}pre{overflow:auto;line-height:1.6;background:white;padding:16px}.line{display:block}.line:target{background:#fff1a8}a{color:#58728a}header{overflow-wrap:anywhere}</style><header><a href="/notes/series/internship/">返回实习专栏</a><h1>e01_masks.py</h1><p>只读快照：2026-11-09 · /home/yjl/crack/city8827/build/e01_masks.py</p><p>SHA-256: b2b806bc1973b9480668af9f1f9b20a151ea28c7a9bc023b0b1df613bda7d6bc</p></header><pre><span class="line" id="L1"><a href="#L1">   1</a> # -*- coding: utf-8 -*-</span>
+<span class="line" id="L2"><a href="#L2">   2</a> &quot;&quot;&quot;e01: SAM 3 逐帧分割 (perception 环境, 用一张空闲的 5080): 0 其他 / 1 路面 / 2 动态物 (车辆、行人、自行车、摩托车) / 3 天空。</span>
+<span class="line" id="L3"><a href="#L3">   3</a> 与 t00_seg.py 同一套调用, 多了行人和天空两类提示 (行人要去掉; 天空处不准有高斯)。</span>
+<span class="line" id="L4"><a href="#L4">   4</a> 输入 work/frames/&lt;帧号&gt;.jpg (1080p 去畸变), 送进模型前缩到 960x540 (模型内部是 1008 px); 输出 work/masks/&lt;帧号&gt;.png, 与输入同尺寸 (最近邻放大)。</span>
+<span class="line" id="L5"><a href="#L5">   5</a> 用法: CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=&lt;卡&gt; e01_masks.py [起帧 止帧]&quot;&quot;&quot;</span>
+<span class="line" id="L6"><a href="#L6">   6</a> import sys, os, glob, time</span>
+<span class="line" id="L7"><a href="#L7">   7</a> import numpy as np, cv2</span>
+<span class="line" id="L8"><a href="#L8">   8</a> sys.path.insert(0, os.path.expanduser(&quot;~/3dgs&quot;))</span>
+<span class="line" id="L9"><a href="#L9">   9</a> from roadgs.perception.sam3 import Sam3ImagePredictor</span>
+<span class="line" id="L10"><a href="#L10">  10</a> HERE = os.path.dirname(os.path.abspath(__file__)); WORK = os.path.dirname(HERE) + &quot;/work&quot;; os.makedirs(WORK + &quot;/masks&quot;, exist_ok=True)</span>
+<span class="line" id="L11"><a href="#L11">  11</a> PROMPTS = [(&quot;road&quot;, 1), (&quot;sky&quot;, 3), (&quot;vehicle&quot;, 2), (&quot;car&quot;, 2), (&quot;truck&quot;, 2), (&quot;bus&quot;, 2), (&quot;person&quot;, 2), (&quot;pedestrian&quot;, 2), (&quot;bicycle&quot;, 2), (&quot;motorcycle&quot;, 2)]</span>
+<span class="line" id="L12"><a href="#L12">  12</a> pred = Sam3ImagePredictor(device=&quot;cuda:0&quot;, config={&quot;model_confidence_threshold&quot;: 0.4})</span>
+<span class="line" id="L13"><a href="#L13">  13</a> def union(res, shape):</span>
+<span class="line" id="L14"><a href="#L14">  14</a>     m = np.zeros(shape, bool)</span>
+<span class="line" id="L15"><a href="#L15">  15</a>     for i in range(len(res[&quot;scores&quot;])):</span>
+<span class="line" id="L16"><a href="#L16">  16</a>         x = np.asarray(res[&quot;masks&quot;][i].detach().float().cpu()); x = (x if x.ndim == 2 else x[0]) &gt; 0</span>
+<span class="line" id="L17"><a href="#L17">  17</a>         if x.shape != shape: x = cv2.resize(x.astype(np.uint8), (shape[1], shape[0]), interpolation=cv2.INTER_NEAREST) &gt; 0</span>
+<span class="line" id="L18"><a href="#L18">  18</a>         m |= x</span>
+<span class="line" id="L19"><a href="#L19">  19</a>     return m</span>
+<span class="line" id="L20"><a href="#L20">  20</a> files = sorted(glob.glob(WORK + &quot;/frames/*.jpg&quot;))</span>
+<span class="line" id="L21"><a href="#L21">  21</a> if len(sys.argv) &gt; 2: a, b = int(sys.argv[1]), int(sys.argv[2]); files = [f for f in files if a &lt;= int(os.path.basename(f)[:6]) &lt;= b]</span>
+<span class="line" id="L22"><a href="#L22">  22</a> t0 = time.time(); done = 0; stat = np.zeros(4)</span>
+<span class="line" id="L23"><a href="#L23">  23</a> for fpath in files:</span>
+<span class="line" id="L24"><a href="#L24">  24</a>     dst = WORK + &quot;/masks/&quot; + os.path.basename(fpath)[:-4] + &quot;.png&quot;</span>
+<span class="line" id="L25"><a href="#L25">  25</a>     if os.path.exists(dst): continue</span>
+<span class="line" id="L26"><a href="#L26">  26</a>     img = cv2.imread(fpath); H, W = img.shape[:2]; small = cv2.resize(img, (W // 2, H // 2), interpolation=cv2.INTER_AREA); h, w = small.shape[:2]</span>
+<span class="line" id="L27"><a href="#L27">  27</a>     pred.set_image(cv2.cvtColor(small, cv2.COLOR_BGR2RGB)); lab = np.zeros((h, w), np.uint8)</span>
+<span class="line" id="L28"><a href="#L28">  28</a>     for p, v in PROMPTS:</span>
+<span class="line" id="L29"><a href="#L29">  29</a>         m = union(pred._processor.set_text_prompt(state=pred._state, prompt=p), (h, w))</span>
+<span class="line" id="L30"><a href="#L30">  30</a>         if v == 2: lab[m] = 2                                                    # 动态物压过一切</span>
+<span class="line" id="L31"><a href="#L31">  31</a>         else: lab[m &amp; (lab == 0)] = v</span>
+<span class="line" id="L32"><a href="#L32">  32</a>     lab = cv2.resize(lab, (W, H), interpolation=cv2.INTER_NEAREST)</span>
+<span class="line" id="L33"><a href="#L33">  33</a>     cv2.imwrite(dst + &quot;.tmp.png&quot;, lab, [cv2.IMWRITE_PNG_COMPRESSION, 6]); os.replace(dst + &quot;.tmp.png&quot;, dst); done += 1; stat += np.bincount(lab.ravel(), minlength=4)[:4] / lab.size</span>
+<span class="line" id="L34"><a href="#L34">  34</a>     if done % 40 == 0: print(&quot;  %d / %d (%.2f s/帧)&quot; % (done, len(files), (time.time() - t0) / done), flush=True)</span>
+<span class="line" id="L35"><a href="#L35">  35</a> print(&quot;完成 %d 帧, 用时 %.0fs; 平均占比 其他 %.1f%% 路面 %.1f%% 动态物 %.1f%% 天空 %.1f%%&quot; % (done, time.time() - t0, *(100 * stat / max(done, 1))))</span></pre></html>

@@ -1,0 +1,152 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>e04_train.py</title><style>body{margin:24px;font:15px system-ui;background:#faf8f3;color:#243342}pre{overflow:auto;line-height:1.6;background:white;padding:16px}.line{display:block}.line:target{background:#fff1a8}a{color:#58728a}header{overflow-wrap:anywhere}</style><header><a href="/notes/series/internship/">返回实习专栏</a><h1>e04_train.py</h1><p>只读快照：2026-11-09 · /home/yjl/crack/city8827/build/e04_train.py</p><p>SHA-256: e0626560d43da5aea650a96b29de88007d46c58d49c2b81240b62ee2de495f9f</p></header><pre><span class="line" id="L1"><a href="#L1">   1</a> # -*- coding: utf-8 -*-</span>
+<span class="line" id="L2"><a href="#L2">   2</a> &quot;&quot;&quot;e04: 一段路的三维高斯训练 (gsplat 1.5.3, 环境 ~/3dgs/.venvs/gaussian)。</span>
+<span class="line" id="L3"><a href="#L3">   3</a> 输入 (全部在 work/, 由 e00~e03 生成): 1080p 去畸变帧、SAM 3 掩膜 (0 其他 / 1 路面 / 2 动态物 / 3 天空)、六自由度位姿、DA3 稠密深度。</span>
+<span class="line" id="L4"><a href="#L4">   4</a> 初始化: 8826 的点云 (车辆已剔) 在相机附近的点 + DA3 深度反投影的远景点 (&gt;60 m, 钉到 &lt;=400 m)。</span>
+<span class="line" id="L5"><a href="#L5">   5</a> 模型: 各向异性高斯 + 三阶球谐 + 每帧曝光增益/偏置; 天空是一张可优化的等距柱状贴图, 按视线方向采样, 与高斯的 alpha 合成。</span>
+<span class="line" id="L6"><a href="#L6">   6</a> 损失: L1 + SSIM (动态物、引擎盖以外的像素); 逆深度 L1 (DA3 深度; 路面像素改用平面几何深度); 天空处 alpha-&gt;0、非天空处 alpha-&gt;1; 形状/尺寸正则。</span>
+<span class="line" id="L7"><a href="#L7">   7</a> 用法: CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=&lt;空闲的 5080&gt; e04_train.py --name v1 [--iters 20000] [--cap 3000000] [--f0 800 --f1 1013] [--hold 8]</span>
+<span class="line" id="L8"><a href="#L8">   8</a> 输出: work/gs/&lt;name&gt;/{params.npz, sky.png, meta.json, log.txt, sheet_hold.jpg, sheet_novel.jpg}&quot;&quot;&quot;</span>
+<span class="line" id="L9"><a href="#L9">   9</a> import os, sys, json, math, time, argparse, glob</span>
+<span class="line" id="L10"><a href="#L10">  10</a> import numpy as np, torch, torch.nn.functional as F</span>
+<span class="line" id="L11"><a href="#L11">  11</a> sys.path.append(glob.glob(os.path.expanduser(&quot;~/3dgs/.venvs/geometry/lib/python3.12/site-packages&quot;))[0])     # gaussian 环境没有 cv2/scipy: 只追加到本进程 sys.path 末尾 (与 8826 的 g02 同法)</span>
+<span class="line" id="L12"><a href="#L12">  12</a> import cv2</span>
+<span class="line" id="L13"><a href="#L13">  13</a> from scipy.spatial import cKDTree</span>
+<span class="line" id="L14"><a href="#L14">  14</a> sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))</span>
+<span class="line" id="L15"><a href="#L15">  15</a> from cc_common import *</span>
+<span class="line" id="L16"><a href="#L16">  16</a> from gsplat import rasterization, MCMCStrategy</span>
+<span class="line" id="L17"><a href="#L17">  17</a> </span>
+<span class="line" id="L18"><a href="#L18">  18</a> ap = argparse.ArgumentParser()</span>
+<span class="line" id="L19"><a href="#L19">  19</a> ap.add_argument(&quot;--name&quot;, required=True); ap.add_argument(&quot;--iters&quot;, type=int, default=20000); ap.add_argument(&quot;--cap&quot;, type=int, default=3000000)</span>
+<span class="line" id="L20"><a href="#L20">  20</a> ap.add_argument(&quot;--f0&quot;, type=int, default=800); ap.add_argument(&quot;--f1&quot;, type=int, default=1013); ap.add_argument(&quot;--hold&quot;, type=int, default=8)</span>
+<span class="line" id="L21"><a href="#L21">  21</a> ap.add_argument(&quot;--sh&quot;, type=int, default=3); ap.add_argument(&quot;--w_depth&quot;, type=float, default=0.15); ap.add_argument(&quot;--w_sky&quot;, type=float, default=0.3); ap.add_argument(&quot;--w_shape&quot;, type=float, default=0.5)</span>
+<span class="line" id="L22"><a href="#L22">  22</a> ap.add_argument(&quot;--n_near&quot;, type=int, default=1500000); ap.add_argument(&quot;--n_far&quot;, type=int, default=300000); ap.add_argument(&quot;--seed&quot;, type=int, default=0); ap.add_argument(&quot;--down&quot;, type=int, default=1)</span>
+<span class="line" id="L23"><a href="#L23">  23</a> A = ap.parse_args(); torch.manual_seed(A.seed); np.random.seed(A.seed); dev = &quot;cuda&quot;; t00 = time.time()</span>
+<span class="line" id="L24"><a href="#L24">  24</a> OUT = &quot;%s/gs/%s&quot; % (WORK, A.name); os.makedirs(OUT, exist_ok=True); LOG = open(OUT + &quot;/log.txt&quot;, &quot;a&quot;)</span>
+<span class="line" id="L25"><a href="#L25">  25</a> def say(*a):</span>
+<span class="line" id="L26"><a href="#L26">  26</a>     s = &quot; &quot;.join(str(x) for x in a); print(&quot;[%5.0fs] %s&quot; % (time.time() - t00, s), flush=True); LOG.write(&quot;[%5.0fs] %s\n&quot; % (time.time() - t00, s)); LOG.flush()</span>
+<span class="line" id="L27"><a href="#L27">  27</a> </span>
+<span class="line" id="L28"><a href="#L28">  28</a> # ---------------------------------------------------------------- 数据</span>
+<span class="line" id="L29"><a href="#L29">  29</a> cam = json.load(open(WORK + &quot;/cam.json&quot;)); W, H = cam[&quot;w&quot;] // A.down, cam[&quot;h&quot;] // A.down; HOOD_ROW = 1032 // A.down</span>
+<span class="line" id="L30"><a href="#L30">  30</a> K = np.array([[cam[&quot;fx&quot;], 0, cam[&quot;cx&quot;]], [0, cam[&quot;fy&quot;], cam[&quot;cy&quot;]], [0, 0, 1]], np.float64) / np.array([[A.down], [A.down], [1]])</span>
+<span class="line" id="L31"><a href="#L31">  31</a> P = Poses(); frames = [f for f in P.frames if A.f0 &lt;= f &lt;= A.f1 and os.path.exists(&quot;%s/depth/%06d.npz&quot; % (WORK, f))]</span>
+<span class="line" id="L32"><a href="#L32">  32</a> hold = [f for i, f in enumerate(frames) if A.hold and i % A.hold == A.hold // 2]; train = [f for f in frames if f not in hold]</span>
+<span class="line" id="L33"><a href="#L33">  33</a> c2w_all = np.stack([P[f] for f in frames]); ORG = c2w_all[:, :3, 3].mean(0); ORG[2] = 0.0                    # 训练坐标 = 全局 ENU 减去这段的中心 (高度不减)</span>
+<span class="line" id="L34"><a href="#L34">  34</a> say(&quot;帧 %d~%d: 训练 %d 张, 留出 %d 张; 画面 %dx%d; 原点 E %.1f N %.1f&quot; % (frames[0], frames[-1], len(train), len(hold), W, H, ORG[0], ORG[1]))</span>
+<span class="line" id="L35"><a href="#L35">  35</a> def load_frame(f):</span>
+<span class="line" id="L36"><a href="#L36">  36</a>     img = cv2.imread(&quot;%s/frames/%06d.jpg&quot; % (WORK, f)); lab = cv2.imread(&quot;%s/masks/%06d.png&quot; % (WORK, f), cv2.IMREAD_GRAYSCALE)</span>
+<span class="line" id="L37"><a href="#L37">  37</a>     if A.down &gt; 1: img = cv2.resize(img, (W, H), interpolation=cv2.INTER_AREA); lab = cv2.resize(lab, (W, H), interpolation=cv2.INTER_NEAREST)</span>
+<span class="line" id="L38"><a href="#L38">  38</a>     dyn = cv2.dilate((lab == 2).astype(np.uint8), np.ones((2 * (9 // A.down) + 1,) * 2, np.uint8)) &gt; 0; sky = lab == 3; road = lab == 1</span>
+<span class="line" id="L39"><a href="#L39">  39</a>     z = np.load(&quot;%s/depth/%06d.npz&quot; % (WORK, f)); dep = cv2.resize(z[&quot;depth&quot;].astype(np.float32), (W, H), interpolation=cv2.INTER_LINEAR); conf = cv2.resize(z[&quot;conf&quot;].astype(np.float32), (W, H), interpolation=cv2.INTER_LINEAR)</span>
+<span class="line" id="L40"><a href="#L40">  40</a>     c2w = P[f].copy(); c2w[:3, 3] -= ORG</span>
+<span class="line" id="L41"><a href="#L41">  41</a>     # 路面像素: 平面几何深度 (z = 0 的路面), 比任何模型都准</span>
+<span class="line" id="L42"><a href="#L42">  42</a>     yy, xx = np.mgrid[0:H, 0:W]; rays = np.stack([(xx + 0.5 - K[0, 2]) / K[0, 0], (yy + 0.5 - K[1, 2]) / K[1, 1], np.ones_like(xx, np.float64)], -1); dw = rays @ c2w[:3, :3].T</span>
+<span class="line" id="L43"><a href="#L43">  43</a>     tz = dw[..., 2]; plane = np.where(tz &lt; -1e-3, -c2w[2, 3] / np.minimum(tz, -1e-3), 0.0); use_plane = road &amp; (tz &lt; -1e-3) &amp; (plane &lt; 80)</span>
+<span class="line" id="L44"><a href="#L44">  44</a>     dep = np.where(use_plane, plane, dep).astype(np.float32); wdep = np.where(use_plane, 1.0, np.clip(conf, 0, 1)).astype(np.float32)</span>
+<span class="line" id="L45"><a href="#L45">  45</a>     valid = (~dyn) &amp; (np.arange(H)[:, None] &lt; HOOD_ROW)                                                      # 参与颜色损失的像素</span>
+<span class="line" id="L46"><a href="#L46">  46</a>     wdep = np.where(valid &amp; ~sky &amp; (dep &gt; 0.5), wdep, 0.0).astype(np.float32)</span>
+<span class="line" id="L47"><a href="#L47">  47</a>     return dict(img=torch.from_numpy(img[..., ::-1].copy()), valid=torch.from_numpy(valid), sky=torch.from_numpy(sky), dep=torch.from_numpy(dep), wdep=torch.from_numpy(wdep), c2w=torch.from_numpy(c2w).float())</span>
+<span class="line" id="L48"><a href="#L48">  48</a> D = {f: load_frame(f) for f in frames}; say(&quot;数据读入 (%.1f GB)&quot; % (sum(v[&quot;img&quot;].numel() + v[&quot;dep&quot;].numel() * 4 + v[&quot;wdep&quot;].numel() * 4 for v in D.values()) / 1e9))</span>
+<span class="line" id="L49"><a href="#L49">  49</a> </span>
+<span class="line" id="L50"><a href="#L50">  50</a> # ---------------------------------------------------------------- 初始点</span>
+<span class="line" id="L51"><a href="#L51">  51</a> cl = Cloud(); cams = c2w_all[:, :3, 3]; ctree = cKDTree(cams[:, :2]); pts = []; cols = []</span>
+<span class="line" id="L52"><a href="#L52">  52</a> for xyz, rgb, fr, coarse in cl.near(cams[:, 0].mean(), cams[:, 1].mean(), r_fine=300, r_coarse=0):</span>
+<span class="line" id="L53"><a href="#L53">  53</a>     d = ctree.query(xyz[:, :2])[0]; m = (d &lt; 150) &amp; (xyz[:, 2] &gt; -0.3); pts.append(xyz[m] - ORG); cols.append(rgb[m])</span>
+<span class="line" id="L54"><a href="#L54">  54</a> pts = np.concatenate(pts); cols = np.concatenate(cols)</span>
+<span class="line" id="L55"><a href="#L55">  55</a> if len(pts) &gt; A.n_near: sel = np.random.choice(len(pts), A.n_near, replace=False); pts, cols = pts[sel], cols[sel]</span>
+<span class="line" id="L56"><a href="#L56">  56</a> near_n = len(pts); far_p = []; far_c = []</span>
+<span class="line" id="L57"><a href="#L57">  57</a> for f in train[::3]:</span>
+<span class="line" id="L58"><a href="#L58">  58</a>     d = D[f]; dep = d[&quot;dep&quot;].numpy(); sky = d[&quot;sky&quot;].numpy(); val = d[&quot;valid&quot;].numpy(); c2w = d[&quot;c2w&quot;].numpy()</span>
+<span class="line" id="L59"><a href="#L59">  59</a>     yy, xx = np.mgrid[0:H:6, 0:W:6]; z = dep[::6, ::6]; m = (z &gt; 60) &amp; (~sky[::6, ::6]) &amp; val[::6, ::6]</span>
+<span class="line" id="L60"><a href="#L60">  60</a>     if not m.any(): continue</span>
+<span class="line" id="L61"><a href="#L61">  61</a>     z = np.minimum(z[m], 400.0); rays = np.stack([(xx[m] + 0.5 - K[0, 2]) / K[0, 0], (yy[m] + 0.5 - K[1, 2]) / K[1, 1], np.ones(m.sum())], -1) * z[:, None]</span>
+<span class="line" id="L62"><a href="#L62">  62</a>     far_p.append(rays @ c2w[:3, :3].T + c2w[:3, 3]); far_c.append(d[&quot;img&quot;].numpy()[::6, ::6][m])</span>
+<span class="line" id="L63"><a href="#L63">  63</a> far_p = np.concatenate(far_p) if far_p else np.zeros((0, 3)); far_c = np.concatenate(far_c) if far_c else np.zeros((0, 3), np.uint8)</span>
+<span class="line" id="L64"><a href="#L64">  64</a> if len(far_p) &gt; A.n_far: sel = np.random.choice(len(far_p), A.n_far, replace=False); far_p, far_c = far_p[sel], far_c[sel]</span>
+<span class="line" id="L65"><a href="#L65">  65</a> pts = np.concatenate([pts, far_p]).astype(np.float32); cols = np.concatenate([cols, far_c]).astype(np.float32) / 255.0</span>
+<span class="line" id="L66"><a href="#L66">  66</a> say(&quot;初始点: 近景 %d (8826 点云) + 远景 %d (DA3 &gt;60 m) = %d&quot; % (near_n, len(far_p), len(pts)))</span>
+<span class="line" id="L67"><a href="#L67">  67</a> # 初始尺寸: 近景按最近邻距离, 远景按到相机距离的 0.6%</span>
+<span class="line" id="L68"><a href="#L68">  68</a> kd = cKDTree(pts[:near_n]); dnn = kd.query(pts[:near_n], k=4)[0][:, 1:].mean(1) if near_n &gt; 4 else np.full(near_n, 0.1)</span>
+<span class="line" id="L69"><a href="#L69">  69</a> dcam = np.linalg.norm(far_p - cams.mean(0) + ORG, axis=1) if len(far_p) else np.zeros(0)</span>
+<span class="line" id="L70"><a href="#L70">  70</a> init_scale = np.concatenate([np.clip(dnn, 0.03, 0.5), np.clip(0.006 * dcam, 0.3, 3.0)]).astype(np.float32)</span>
+<span class="line" id="L71"><a href="#L71">  71</a> C0 = 0.28209479177387814; n_sh = (A.sh + 1) ** 2</span>
+<span class="line" id="L72"><a href="#L72">  72</a> Pm = {</span>
+<span class="line" id="L73"><a href="#L73">  73</a>     &quot;means&quot;: torch.tensor(pts, device=dev), &quot;scales&quot;: torch.log(torch.tensor(init_scale, device=dev))[:, None].repeat(1, 3),</span>
+<span class="line" id="L74"><a href="#L74">  74</a>     &quot;quats&quot;: torch.tensor(np.c_[np.ones(len(pts)), np.zeros((len(pts), 3))], dtype=torch.float32, device=dev),</span>
+<span class="line" id="L75"><a href="#L75">  75</a>     &quot;opacities&quot;: torch.logit(torch.full((len(pts),), 0.5, device=dev)), &quot;sh0&quot;: torch.tensor((cols - 0.5) / C0, device=dev)[:, None, :], &quot;shN&quot;: torch.zeros((len(pts), n_sh - 1, 3), device=dev)}</span>
+<span class="line" id="L76"><a href="#L76">  76</a> Pm = {k: torch.nn.Parameter(v) for k, v in Pm.items()}</span>
+<span class="line" id="L77"><a href="#L77">  77</a> lr = {&quot;means&quot;: 1.6e-4 * 50.0, &quot;scales&quot;: 5e-3, &quot;quats&quot;: 1e-3, &quot;opacities&quot;: 5e-2, &quot;sh0&quot;: 2.5e-3, &quot;shN&quot;: 2.5e-3 / 20}</span>
+<span class="line" id="L78"><a href="#L78">  78</a> OPT = {k: torch.optim.Adam([Pm[k]], lr=lr[k], eps=1e-15) for k in Pm}</span>
+<span class="line" id="L79"><a href="#L79">  79</a> expo = torch.nn.Parameter(torch.zeros((len(frames), 6), device=dev)); OPT_E = torch.optim.Adam([expo], lr=1e-3); frow = {f: i for i, f in enumerate(frames)}</span>
+<span class="line" id="L80"><a href="#L80">  80</a> SKY_H, SKY_W = 192, 768; sky_tex = torch.nn.Parameter(torch.full((1, 3, SKY_H, SKY_W), 0.75, device=dev)); OPT_S = torch.optim.Adam([sky_tex], lr=5e-3)</span>
+<span class="line" id="L81"><a href="#L81">  81</a> sched = torch.optim.lr_scheduler.ExponentialLR(OPT[&quot;means&quot;], gamma=0.01 ** (1.0 / A.iters))</span>
+<span class="line" id="L82"><a href="#L82">  82</a> strategy = MCMCStrategy(cap_max=A.cap, noise_lr=5e4, refine_start_iter=500, refine_stop_iter=int(A.iters * 0.8), refine_every=100, min_opacity=0.005); strategy.check_sanity(Pm, OPT); st_state = strategy.initialize_state()</span>
+<span class="line" id="L83"><a href="#L83">  83</a> Kt = torch.tensor(K, dtype=torch.float32, device=dev)</span>
+<span class="line" id="L84"><a href="#L84">  84</a> yy_, xx_ = torch.meshgrid(torch.arange(H, device=dev) + 0.5, torch.arange(W, device=dev) + 0.5, indexing=&quot;ij&quot;); RAYS = torch.stack([(xx_ - Kt[0, 2]) / Kt[0, 0], (yy_ - Kt[1, 2]) / Kt[1, 1], torch.ones_like(xx_)], -1)</span>
+<span class="line" id="L85"><a href="#L85">  85</a> </span>
+<span class="line" id="L86"><a href="#L86">  86</a> def sky_color(c2w):</span>
+<span class="line" id="L87"><a href="#L87">  87</a>     &quot;&quot;&quot;每个像素的视线方向 (ENU) -&gt; 等距柱状贴图采样&quot;&quot;&quot;</span>
+<span class="line" id="L88"><a href="#L88">  88</a>     d = RAYS @ c2w[:3, :3].T; d = d / d.norm(dim=-1, keepdim=True); az = torch.atan2(d[..., 0], d[..., 1]) / math.pi; el = torch.asin(d[..., 2].clamp(-1, 1)) * 2 / math.pi   # [-1, 1]</span>
+<span class="line" id="L89"><a href="#L89">  89</a>     grid = torch.stack([az, -el], -1)[None]; return F.grid_sample(sky_tex, grid, mode=&quot;bilinear&quot;, padding_mode=&quot;border&quot;, align_corners=False)[0].permute(1, 2, 0)</span>
+<span class="line" id="L90"><a href="#L90">  90</a> def render(c2w, sh_deg, mode=&quot;RGB+ED&quot;):</span>
+<span class="line" id="L91"><a href="#L91">  91</a>     rgb_a, alpha, info = rasterization(Pm[&quot;means&quot;], Pm[&quot;quats&quot;], torch.exp(Pm[&quot;scales&quot;]), torch.sigmoid(Pm[&quot;opacities&quot;]), torch.cat([Pm[&quot;sh0&quot;], Pm[&quot;shN&quot;]], 1), torch.linalg.inv(c2w)[None], Kt[None], W, H,</span>
+<span class="line" id="L92"><a href="#L92">  92</a>                                        near_plane=0.2, far_plane=1500.0, sh_degree=sh_deg, packed=False, render_mode=mode, rasterize_mode=&quot;antialiased&quot;, absgrad=False)</span>
+<span class="line" id="L93"><a href="#L93">  93</a>     return rgb_a[0], alpha[0], info</span>
+<span class="line" id="L94"><a href="#L94">  94</a> def ssim(a, b):</span>
+<span class="line" id="L95"><a href="#L95">  95</a>     &quot;&quot;&quot;a, b: (3, H, W), 11x11 高斯窗&quot;&quot;&quot;</span>
+<span class="line" id="L96"><a href="#L96">  96</a>     g = torch.exp(-((torch.arange(11, device=dev) - 5.0) ** 2) / (2 * 1.5 ** 2)); g = (g / g.sum()); k = (g[:, None] * g[None, :])[None, None].repeat(3, 1, 1, 1)</span>
+<span class="line" id="L97"><a href="#L97">  97</a>     mu_a = F.conv2d(a[None], k, padding=5, groups=3); mu_b = F.conv2d(b[None], k, padding=5, groups=3)</span>
+<span class="line" id="L98"><a href="#L98">  98</a>     s_a = F.conv2d(a[None] ** 2, k, padding=5, groups=3) - mu_a ** 2; s_b = F.conv2d(b[None] ** 2, k, padding=5, groups=3) - mu_b ** 2; s_ab = F.conv2d(a[None] * b[None], k, padding=5, groups=3) - mu_a * mu_b</span>
+<span class="line" id="L99"><a href="#L99">  99</a>     c1, c2 = 0.01 ** 2, 0.03 ** 2; return (((2 * mu_a * mu_b + c1) * (2 * s_ab + c2)) / ((mu_a ** 2 + mu_b ** 2 + c1) * (s_a + s_b + c2)))[0]</span>
+<span class="line" id="L100"><a href="#L100"> 100</a> def psnr(a, b, m): return float(10 * torch.log10(1.0 / ((a - b) ** 2)[m].mean().clamp_min(1e-10)))</span>
+<span class="line" id="L101"><a href="#L101"> 101</a> </span>
+<span class="line" id="L102"><a href="#L102"> 102</a> # ---------------------------------------------------------------- 训练</span>
+<span class="line" id="L103"><a href="#L103"> 103</a> say(&quot;开始训练: %d 步, 上限 %d 高斯, 球谐 %d 阶, 抗锯齿光栅化&quot; % (A.iters, A.cap, A.sh))</span>
+<span class="line" id="L104"><a href="#L104"> 104</a> for step in range(A.iters):</span>
+<span class="line" id="L105"><a href="#L105"> 105</a>     f = train[np.random.randint(len(train))]; d = D[f]; c2w = d[&quot;c2w&quot;].to(dev); img = d[&quot;img&quot;].to(dev).float().permute(2, 0, 1) / 255.0; valid = d[&quot;valid&quot;].to(dev); sky = d[&quot;sky&quot;].to(dev); dep = d[&quot;dep&quot;].to(dev); wdep = d[&quot;wdep&quot;].to(dev)</span>
+<span class="line" id="L106"><a href="#L106"> 106</a>     sh_deg = min(A.sh, step // 1500); strategy.step_pre_backward(Pm, OPT, st_state, step, None)</span>
+<span class="line" id="L107"><a href="#L107"> 107</a>     out, alpha, info = render(c2w, sh_deg); rgb = out[..., :3]; edep = out[..., 3]</span>
+<span class="line" id="L108"><a href="#L108"> 108</a>     e = expo[frow[f]]; rgb = rgb * torch.exp(e[:3]) + e[3:]                                                   # 每帧曝光</span>
+<span class="line" id="L109"><a href="#L109"> 109</a>     comp = rgb + (1 - alpha) * sky_color(c2w); comp = comp.permute(2, 0, 1)</span>
+<span class="line" id="L110"><a href="#L110"> 110</a>     vm = valid[None].expand(3, -1, -1); l1 = (comp - img).abs()[vm].mean(); ls = 1 - ssim(comp * valid[None], img * valid[None]).mean()</span>
+<span class="line" id="L111"><a href="#L111"> 111</a>     inv_r = 1.0 / edep.clamp_min(0.3); inv_t = 1.0 / dep.clamp_min(0.3); ld = ((inv_r - inv_t).abs() * wdep).sum() / wdep.sum().clamp_min(1.0)</span>
+<span class="line" id="L112"><a href="#L112"> 112</a>     a = alpha[..., 0]; lsky = (a[sky &amp; valid] ** 2).mean() if (sky &amp; valid).any() else a.sum() * 0; lcov = ((1 - a)[valid &amp; ~sky]).mean() * 0.2</span>
+<span class="line" id="L113"><a href="#L113"> 113</a>     sc = torch.exp(Pm[&quot;scales&quot;]); smax, smin = sc.max(1).values, sc.min(1).values; lshape = F.relu(smax / smin.clamp_min(1e-4) - 8.0).mean() * 0.01 + F.relu(smax - 0.5).mean()</span>
+<span class="line" id="L114"><a href="#L114"> 114</a>     lreg = 0.01 * torch.sigmoid(Pm[&quot;opacities&quot;]).mean() + 0.01 * sc.mean()</span>
+<span class="line" id="L115"><a href="#L115"> 115</a>     loss = 0.8 * l1 + 0.2 * ls + A.w_depth * ld + A.w_sky * lsky + lcov + A.w_shape * lshape + lreg</span>
+<span class="line" id="L116"><a href="#L116"> 116</a>     loss.backward()</span>
+<span class="line" id="L117"><a href="#L117"> 117</a>     strategy.step_post_backward(Pm, OPT, st_state, step, info, lr=sched.get_last_lr()[0])</span>
+<span class="line" id="L118"><a href="#L118"> 118</a>     for o in OPT.values(): o.step(); o.zero_grad(set_to_none=True)</span>
+<span class="line" id="L119"><a href="#L119"> 119</a>     OPT_E.step(); OPT_E.zero_grad(set_to_none=True); OPT_S.step(); OPT_S.zero_grad(set_to_none=True); sched.step()</span>
+<span class="line" id="L120"><a href="#L120"> 120</a>     with torch.no_grad(): sky_tex.clamp_(0, 1)</span>
+<span class="line" id="L121"><a href="#L121"> 121</a>     if step % 500 == 0 or step == A.iters - 1:</span>
+<span class="line" id="L122"><a href="#L122"> 122</a>         say(&quot;step %5d  loss %.4f  l1 %.4f  ssim %.3f  depth %.4f  sky %.4f  高斯 %d  训练帧 PSNR %.2f&quot; % (step, loss.item(), l1.item(), 1 - ls.item(), ld.item(), lsky.item(), len(Pm[&quot;means&quot;]), psnr(comp, img, vm)))</span>
+<span class="line" id="L123"><a href="#L123"> 123</a>     if step % 4000 == 0 and step &gt; 0 or step == A.iters - 1:</span>
+<span class="line" id="L124"><a href="#L124"> 124</a>         with torch.no_grad():</span>
+<span class="line" id="L125"><a href="#L125"> 125</a>             ps = []</span>
+<span class="line" id="L126"><a href="#L126"> 126</a>             for f in hold:</span>
+<span class="line" id="L127"><a href="#L127"> 127</a>                 d = D[f]; c2w = d[&quot;c2w&quot;].to(dev); img = d[&quot;img&quot;].to(dev).float().permute(2, 0, 1) / 255.0; valid = d[&quot;valid&quot;].to(dev)</span>
+<span class="line" id="L128"><a href="#L128"> 128</a>                 out, alpha, _ = render(c2w, min(A.sh, step // 1500)); comp = (out[..., :3] + (1 - alpha) * sky_color(c2w)).permute(2, 0, 1); vm = valid[None].expand(3, -1, -1)</span>
+<span class="line" id="L129"><a href="#L129"> 129</a>                 x = comp[vm].reshape(3, -1); y = img[vm].reshape(3, -1); g_ = ((x * y).mean(1) - x.mean(1) * y.mean(1)) / (x.var(1) + 1e-6); b_ = y.mean(1) - g_ * x.mean(1)   # 每通道一次线性校色 (留出帧没有曝光参数)</span>
+<span class="line" id="L130"><a href="#L130"> 130</a>                 ps.append((psnr(comp, img, vm), psnr(comp * g_[:, None, None] + b_[:, None, None], img, vm), float(ssim(comp * valid[None], img * valid[None]).mean())))</span>
+<span class="line" id="L131"><a href="#L131"> 131</a>             ps = np.array(ps); say(&quot;留出 %d 帧: PSNR %.2f (校色后 %.2f)  SSIM %.3f&quot; % (len(hold), ps[:, 0].mean(), ps[:, 1].mean(), ps[:, 2].mean()))</span>
+<span class="line" id="L132"><a href="#L132"> 132</a> # ---------------------------------------------------------------- 保存与样张</span>
+<span class="line" id="L133"><a href="#L133"> 133</a> with torch.no_grad():</span>
+<span class="line" id="L134"><a href="#L134"> 134</a>     np.savez(OUT + &quot;/params.npz&quot;, means=(Pm[&quot;means&quot;].cpu().numpy() + ORG).astype(np.float32), scales=Pm[&quot;scales&quot;].cpu().numpy().astype(np.float32), quats=Pm[&quot;quats&quot;].cpu().numpy().astype(np.float32),</span>
+<span class="line" id="L135"><a href="#L135"> 135</a>              opacities=Pm[&quot;opacities&quot;].cpu().numpy().astype(np.float32), sh0=Pm[&quot;sh0&quot;].cpu().numpy().astype(np.float32), shN=Pm[&quot;shN&quot;].cpu().numpy().astype(np.float16), expo=expo.cpu().numpy(), frames=np.array(frames))</span>
+<span class="line" id="L136"><a href="#L136"> 136</a>     cv2.imwrite(OUT + &quot;/sky.png&quot;, (sky_tex[0].permute(1, 2, 0).cpu().numpy()[..., ::-1] * 255).round().astype(np.uint8))</span>
+<span class="line" id="L137"><a href="#L137"> 137</a>     def shot(c2w, with_sky=True):</span>
+<span class="line" id="L138"><a href="#L138"> 138</a>         out, alpha, _ = render(c2w, A.sh); comp = out[..., :3] + (1 - alpha) * sky_color(c2w) if with_sky else out[..., :3]; return (comp.clamp(0, 1).cpu().numpy()[..., ::-1] * 255).astype(np.uint8)</span>
+<span class="line" id="L139"><a href="#L139"> 139</a>     rows = []</span>
+<span class="line" id="L140"><a href="#L140"> 140</a>     for f in hold[:: max(1, len(hold) // 4)][:4]:</span>
+<span class="line" id="L141"><a href="#L141"> 141</a>         d = D[f]; rows.append(np.hstack([d[&quot;img&quot;].numpy()[..., ::-1], shot(d[&quot;c2w&quot;].to(dev))]))</span>
+<span class="line" id="L142"><a href="#L142"> 142</a>     cv2.imwrite(OUT + &quot;/sheet_hold.jpg&quot;, cv2.resize(np.vstack(rows), (1920, 540 * len(rows)), interpolation=cv2.INTER_AREA), [cv2.IMWRITE_JPEG_QUALITY, 90])</span>
+<span class="line" id="L143"><a href="#L143"> 143</a>     f = train[len(train) // 2]; c2w = D[f][&quot;c2w&quot;].to(dev); rows = []</span>
+<span class="line" id="L144"><a href="#L144"> 144</a>     def moved(dx=0, dy=0, dz=0, yaw=0):</span>
+<span class="line" id="L145"><a href="#L145"> 145</a>         M = c2w.clone(); Rz = torch.tensor([[math.cos(yaw), -math.sin(yaw), 0], [math.sin(yaw), math.cos(yaw), 0], [0, 0, 1.0]], device=dev)                 # 绕 ENU 的 z 轴 (航向)</span>
+<span class="line" id="L146"><a href="#L146"> 146</a>         M[:3, :3] = Rz @ M[:3, :3]; right = M[:3, 0]; fwd = M[:3, 2]; M[:3, 3] = M[:3, 3] + right * dx + fwd * dy + torch.tensor([0, 0, dz], device=dev); return M</span>
+<span class="line" id="L147"><a href="#L147"> 147</a>     for a_, b_ in ((dict(), dict(dx=-1.5)), (dict(dx=1.5), dict(dz=0.6)), (dict(yaw=math.radians(40)), dict(yaw=math.radians(-40))), (dict(dx=-2.5, dz=0.3), dict(dy=-8))):</span>
+<span class="line" id="L148"><a href="#L148"> 148</a>         rows.append(np.hstack([shot(moved(**a_)), shot(moved(**b_))]))</span>
+<span class="line" id="L149"><a href="#L149"> 149</a>     cv2.imwrite(OUT + &quot;/sheet_novel.jpg&quot;, cv2.resize(np.vstack(rows), (1920, 540 * len(rows)), interpolation=cv2.INTER_AREA), [cv2.IMWRITE_JPEG_QUALITY, 90])</span>
+<span class="line" id="L150"><a href="#L150"> 150</a> json.dump(dict(name=A.name, iters=A.iters, cap=A.cap, sh=A.sh, n=int(len(Pm[&quot;means&quot;])), frames=[frames[0], frames[-1]], train=len(train), hold=hold, origin=ORG.tolist(), w=W, h=H, hold_psnr=float(ps[:, 0].mean()), hold_psnr_cc=float(ps[:, 1].mean()), hold_ssim=float(ps[:, 2].mean()),</span>
+<span class="line" id="L151"><a href="#L151"> 151</a>                sky=[SKY_W, SKY_H], sec=round(time.time() - t00), args=vars(A)), open(OUT + &quot;/meta.json&quot;, &quot;w&quot;), indent=1)</span>
+<span class="line" id="L152"><a href="#L152"> 152</a> say(&quot;完成: %d 个高斯, 用时 %.0f 分钟; 留出 PSNR %.2f (校色后 %.2f)&quot; % (len(Pm[&quot;means&quot;]), (time.time() - t00) / 60, ps[:, 0].mean(), ps[:, 1].mean()))</span></pre></html>

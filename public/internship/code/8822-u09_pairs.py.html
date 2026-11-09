@@ -1,0 +1,70 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>u09_pairs.py</title><style>body{margin:24px;font:15px system-ui;background:#faf8f3;color:#243342}pre{overflow:auto;line-height:1.6;background:white;padding:16px}.line{display:block}.line:target{background:#fff1a8}a{color:#58728a}header{overflow-wrap:anywhere}</style><header><a href="/notes/series/internship/">返回实习专栏</a><h1>u09_pairs.py</h1><p>只读快照：2026-11-09 · /home/yjl/crack/viewer3d/build/u09_pairs.py</p><p>SHA-256: fb2b784cea4ea8cae3725735a9acfe2d13f81a042a3778850d777f4eaddd7493</p></header><pre><span class="line" id="L1"><a href="#L1">   1</a> # -*- coding: utf-8 -*-</span>
+<span class="line" id="L2"><a href="#L2">   2</a> &quot;&quot;&quot;u09: 独立检验 (当趟轨迹版, 做法同 qa_pairs.py): 相邻两张病害俯视图**自身**重叠处的图像位移, 与它们按 u01 轨迹摆出来的位置差 是否一致。</span>
+<span class="line" id="L3"><a href="#L3">   3</a> </span>
+<span class="line" id="L4"><a href="#L4">   4</a> 这一检验不经过正射图: 两张俯视图拍到同一块路面时, 直接拿两张图互相配 (2 cm/px), 得到它们之间真实的相对位移;</span>
+<span class="line" id="L5"><a href="#L5">   5</a> 再看按最终地图位置算出来的相对位移差多少。差得小, 说明每张各自贴到地图上的位置是自洽的。</span>
+<span class="line" id="L6"><a href="#L6">   6</a> 只对间距 &lt; 2.6 m (重叠 &gt; 0.9 m) 的相邻对做。</span>
+<span class="line" id="L7"><a href="#L7">   7</a> &quot;&quot;&quot;</span>
+<span class="line" id="L8"><a href="#L8">   8</a> import sys, numpy as np, cv2</span>
+<span class="line" id="L9"><a href="#L9">   9</a> from multiprocessing import Pool</span>
+<span class="line" id="L10"><a href="#L10">  10</a> from common import *</span>
+<span class="line" id="L11"><a href="#L11">  11</a> import omatch, s24, t03g_rear24 as T</span>
+<span class="line" id="L12"><a href="#L12">  12</a> Z = np.load(WORK + &quot;/run24.npz&quot;, allow_pickle=True); P = Z[&quot;tile&quot;]; cls = Z[&quot;tile_q&quot;]; names = [str(v) for v in Z[&quot;tile_name&quot;]]; ts = Z[&quot;tile_ts&quot;]</span>
+<span class="line" id="L13"><a href="#L13">  13</a> </span>
+<span class="line" id="L14"><a href="#L14">  14</a> def rel(i, j):</span>
+<span class="line" id="L15"><a href="#L15">  15</a>     &quot;&quot;&quot;j 的图块中心在 i 的图块坐标系里的位置 (右, 上) 与转角&quot;&quot;&quot;</span>
+<span class="line" id="L16"><a href="#L16">  16</a>     a = P[i, 2]; rt = np.array([np.cos(a), -np.sin(a)]); fw = np.array([np.sin(a), np.cos(a)])</span>
+<span class="line" id="L17"><a href="#L17">  17</a>     d = P[j, :2] - P[i, :2]</span>
+<span class="line" id="L18"><a href="#L18">  18</a>     return float(d @ rt), float(d @ fw), float(np.degrees((P[j, 2] - P[i, 2] + np.pi) % (2 * np.pi) - np.pi))</span>
+<span class="line" id="L19"><a href="#L19">  19</a> </span>
+<span class="line" id="L20"><a href="#L20">  20</a> def one(args):</span>
+<span class="line" id="L21"><a href="#L21">  21</a>     i, j = args</span>
+<span class="line" id="L22"><a href="#L22">  22</a>     fa, ma, _ = T.tile_feature(names[i]); fb, mb, _ = T.tile_feature(names[j])</span>
+<span class="line" id="L23"><a href="#L23">  23</a>     if fa is None or fb is None: return None</span>
+<span class="line" id="L24"><a href="#L24">  24</a>     px, py, dth = rel(i, j)                         # 地图给的: B 的中心相对 A 的中心 (右, 上)</span>
+<span class="line" id="L25"><a href="#L25">  25</a>     if abs(dth) &gt; 3.0: return None</span>
+<span class="line" id="L26"><a href="#L26">  26</a>     # B 在 A 的&quot;下方&quot;(更靠近车) d 米: B 的上部与 A 的下部重叠。模板 = A 的下部 (去掉边缘), 在 B 里找。</span>
+<span class="line" id="L27"><a href="#L27">  27</a>     d = -py                                          # 车前进量 (m)</span>
+<span class="line" id="L28"><a href="#L28">  28</a>     k = int(round(d / T.RES))</span>
+<span class="line" id="L29"><a href="#L29">  29</a>     if k &lt; 10 or k &gt; T.TH - 45: return None</span>
+<span class="line" id="L30"><a href="#L30">  30</a>     tpl = fa[k + 4:T.TH - 4, 12:T.TW - 12]; tm = ma[k + 4:T.TH - 4, 12:T.TW - 12]</span>
+<span class="line" id="L31"><a href="#L31">  31</a>     if tm.sum() &lt; 2500 or float((np.abs(tpl) &gt; 0.3).sum()) &lt; 150: return None</span>
+<span class="line" id="L32"><a href="#L32">  32</a>     pad = 40</span>
+<span class="line" id="L33"><a href="#L33">  33</a>     big = cv2.copyMakeBorder(fb, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=0); bigm = cv2.copyMakeBorder(mb.astype(np.float32), pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=0)</span>
+<span class="line" id="L34"><a href="#L34">  34</a>     num = cv2.matchTemplate(big, tpl, cv2.TM_CCORR); en = cv2.matchTemplate(big * big, tm.astype(np.float32), cv2.TM_CCORR)</span>
+<span class="line" id="L35"><a href="#L35">  35</a>     cov = cv2.matchTemplate(bigm, tm.astype(np.float32), cv2.TM_CCORR) / tm.sum()</span>
+<span class="line" id="L36"><a href="#L36">  36</a>     sc = num / np.sqrt(np.maximum(en, 1e-6) * (float((tpl * tpl).sum()) + 1e-6)); sc[cov &lt; 0.6] = -1</span>
+<span class="line" id="L37"><a href="#L37">  37</a>     # 模板左上角在 A 里是 (12, k+4); 若两张完全按地图位置, 它在 B 里应落在 (12 - px/res, 4 + (k + py/res)) = (12 - px/res, 4)</span>
+<span class="line" id="L38"><a href="#L38">  38</a>     x0 = int(round(12 - px / T.RES)) + pad; y0 = 4 + pad</span>
+<span class="line" id="L39"><a href="#L39">  39</a>     r = 30</span>
+<span class="line" id="L40"><a href="#L40">  40</a>     sub = sc[max(0, y0 - r):y0 + r + 1, max(0, x0 - r):x0 + r + 1]</span>
+<span class="line" id="L41"><a href="#L41">  41</a>     if sub.size == 0 or sub.max() &lt; 0.3: return None</span>
+<span class="line" id="L42"><a href="#L42">  42</a>     iy, ix = np.unravel_index(int(np.argmax(sub)), sub.shape)</span>
+<span class="line" id="L43"><a href="#L43">  43</a>     if iy in (0, sub.shape[0] - 1) or ix in (0, sub.shape[1] - 1): return None</span>
+<span class="line" id="L44"><a href="#L44">  44</a>     ey = (iy - min(r, y0)) * T.RES; ex = (ix - min(r, x0)) * T.RES</span>
+<span class="line" id="L45"><a href="#L45">  45</a>     col = sub[:, ix]; ky = int(0.4 / T.RES)</span>
+<span class="line" id="L46"><a href="#L46">  46</a>     lon_sharp = float(col[iy] - max(col[max(0, iy - ky)], col[min(len(col) - 1, iy + ky)]))</span>
+<span class="line" id="L47"><a href="#L47">  47</a>     return (i, j, float(sub.max()), ex, ey, lon_sharp, d)</span>
+<span class="line" id="L48"><a href="#L48">  48</a> </span>
+<span class="line" id="L49"><a href="#L49">  49</a> if __name__ == &quot;__main__&quot;:</span>
+<span class="line" id="L50"><a href="#L50">  50</a>     pairs = []</span>
+<span class="line" id="L51"><a href="#L51">  51</a>     for i in range(len(names) - 1):</span>
+<span class="line" id="L52"><a href="#L52">  52</a>         j = i + 1</span>
+<span class="line" id="L53"><a href="#L53">  53</a>         if cls[i] &lt; 0 or cls[j] &lt; 0 or ts[j] - ts[i] &gt; 3.0: continue</span>
+<span class="line" id="L54"><a href="#L54">  54</a>         px, py, dth = rel(i, j)</span>
+<span class="line" id="L55"><a href="#L55">  55</a>         if 0.3 &lt; -py &lt; 2.6 and abs(px) &lt; 0.8: pairs.append((i, j))</span>
+<span class="line" id="L56"><a href="#L56">  56</a>     with Pool(48) as pool: res = [r for r in pool.map(one, pairs, chunksize=8) if r]</span>
+<span class="line" id="L57"><a href="#L57">  57</a>     R = np.array(res)</span>
+<span class="line" id="L58"><a href="#L58">  58</a>     print(&quot;相邻且重叠的俯视图对 %d 对, 其中两张图之间能直接配上的 %d 对&quot; % (len(pairs), len(R)))</span>
+<span class="line" id="L59"><a href="#L59">  59</a>     ci, cj = cls[R[:, 0].astype(int)], cls[R[:, 1].astype(int)]</span>
+<span class="line" id="L60"><a href="#L60">  60</a>     def show(tag, m):</span>
+<span class="line" id="L61"><a href="#L61">  61</a>         if m.sum() &lt; 5: print(&quot;   %s: 样本不足 (%d)&quot; % (tag, m.sum())); return</span>
+<span class="line" id="L62"><a href="#L62">  62</a>         lat = np.abs(R[m, 3]); lon = np.abs(R[m &amp; (R[:, 5] &gt; 0.08), 4])</span>
+<span class="line" id="L63"><a href="#L63">  63</a>         print(&quot;   %s: %d 对; 横向不一致 中位 %.1f cm, p90 %.1f cm; 沿路不一致 (图像沿路成峰的 %d 对) 中位 %.1f cm, p90 %.1f cm&quot;</span>
+<span class="line" id="L64"><a href="#L64">  64</a>               % (tag, m.sum(), 100 * np.median(lat), 100 * np.percentile(lat, 90), len(lon), 100 * np.median(lon) if len(lon) else np.nan, 100 * np.percentile(lon, 90) if len(lon) else np.nan))</span>
+<span class="line" id="L65"><a href="#L65">  65</a>     show(&quot;全部&quot;, np.ones(len(R), bool))</span>
+<span class="line" id="L66"><a href="#L66">  66</a>     show(&quot;两张都有自己的图像配准 (&gt;= 2 级)&quot;, (ci &gt;= 2) &amp; (cj &gt;= 2))</span>
+<span class="line" id="L67"><a href="#L67">  67</a>     show(&quot;其中两张都定了沿路 (3 级)&quot;, (ci == 3) &amp; (cj == 3))</span>
+<span class="line" id="L68"><a href="#L68">  68</a>     show(&quot;至少一张由轨迹推得 (1 级), 没有 0 级&quot;, (np.minimum(ci, cj) == 1))</span>
+<span class="line" id="L69"><a href="#L69">  69</a>     show(&quot;至少一张只有定位 (0 级)&quot;, (np.minimum(ci, cj) == 0))</span>
+<span class="line" id="L70"><a href="#L70">  70</a>     np.save(WORK + &quot;/u09_pairs.npy&quot;, R)</span></pre></html>

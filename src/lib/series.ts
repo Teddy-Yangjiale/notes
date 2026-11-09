@@ -22,6 +22,15 @@ export interface Series {
 
 export const SERIES: Series[] = [
   {
+    id: 'internship',
+    title: '实习专栏 · 道路场景算法与实现',
+    badge: '实习',
+    description:
+      '从一张行车照片讲到道路定位、资产三角化与高斯重建。逐端口拆解真实代码：先说明问题与假设，再推导公式、追踪中间文件，最后对照真实照片和结果检查。',
+    color: 'clay',
+    weight: -1,
+  },
+  {
     id: 'sta5007',
     title: 'STA-5007 · 高级自然语言处理',
     badge: 'STA-5007',

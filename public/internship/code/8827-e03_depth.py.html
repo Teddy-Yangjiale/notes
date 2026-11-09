@@ -1,0 +1,58 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>e03_depth.py</title><style>body{margin:24px;font:15px system-ui;background:#faf8f3;color:#243342}pre{overflow:auto;line-height:1.6;background:white;padding:16px}.line{display:block}.line:target{background:#fff1a8}a{color:#58728a}header{overflow-wrap:anywhere}</style><header><a href="/notes/series/internship/">返回实习专栏</a><h1>e03_depth.py</h1><p>只读快照：2026-11-09 · /home/yjl/crack/city8827/build/e03_depth.py</p><p>SHA-256: f7cd4c496e2720653df4605b8ab888372db575f4068f90be2ebb29db88bddc83</p></header><pre><span class="line" id="L1"><a href="#L1">   1</a> # -*- coding: utf-8 -*-</span>
+<span class="line" id="L2"><a href="#L2">   2</a> &quot;&quot;&quot;e03: Depth Anything 3 (DA3NESTED-GIANT-LARGE, 非商用权重, 只作内部演示) 按 **给定位姿** 的模式逐组推理, 得到与位姿同一米制尺度的稠密深度。</span>
+<span class="line" id="L3"><a href="#L3">   3</a> 每组 CH 张连续帧, 相邻组错开 ST 张; 一帧落在多组时取它最靠近组中心的那一组。输入是 1080p 去畸变帧 (work/frames) 和 e02 的六自由度位姿。</span>
+<span class="line" id="L4"><a href="#L4">   4</a> 输出 work/depth/&lt;帧号&gt;.npz: depth (float16, 处理分辨率), conf (float16), K (处理分辨率下的内参), 以及 work/depth_check.json (路面像素上 DA3 深度 / 平面几何深度 的比值: 应接近 1)。</span>
+<span class="line" id="L5"><a href="#L5">   5</a> 用法: CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=&lt;空闲的 5080&gt; ~/crack/along_track/.venv/bin/python e03_depth.py [每组张数=8] [错开=4] [处理宽度=756] [起帧 止帧]&quot;&quot;&quot;</span>
+<span class="line" id="L6"><a href="#L6">   6</a> import sys, os, json, time, glob</span>
+<span class="line" id="L7"><a href="#L7">   7</a> import numpy as np, cv2</span>
+<span class="line" id="L8"><a href="#L8">   8</a> sys.path.insert(0, os.path.expanduser(&quot;~/crack/city8827/pydeps&quot;)); sys.path.insert(0, os.path.expanduser(&quot;~/crack/along_track&quot;)); sys.path.insert(0, os.path.expanduser(&quot;~/crack/along_track/third_party/Depth-Anything-3/src&quot;))</span>
+<span class="line" id="L9"><a href="#L9">   9</a> import at_stub; at_stub.stub(&quot;moviepy&quot;, &quot;open3d&quot;, &quot;gradio&quot;, &quot;fastapi&quot;, &quot;uvicorn&quot;, &quot;typer&quot;, &quot;pillow_heif&quot;, &quot;e3nn&quot;, &quot;gsplat&quot;, &quot;pre_commit&quot;)   # 不桩 xformers (桩了 DINOv2 以为它可用而崩); evo 要真的, 装在 ../pydeps (DA3 的位姿对齐要用)</span>
+<span class="line" id="L10"><a href="#L10">  10</a> import torch</span>
+<span class="line" id="L11"><a href="#L11">  11</a> from depth_anything_3.api import DepthAnything3</span>
+<span class="line" id="L12"><a href="#L12">  12</a> HERE = os.path.dirname(os.path.abspath(__file__)); WORK = os.path.dirname(HERE) + &quot;/work&quot;; os.makedirs(WORK + &quot;/depth&quot;, exist_ok=True)</span>
+<span class="line" id="L13"><a href="#L13">  13</a> ALIGN = os.environ.get(&quot;E03_ALIGN&quot;, &quot;0&quot;) != &quot;0&quot;; CH = int(sys.argv[1]) if len(sys.argv) &gt; 1 else 8; ST = int(sys.argv[2]) if len(sys.argv) &gt; 2 else 4; RES = int(sys.argv[3]) if len(sys.argv) &gt; 3 else 756</span>
+<span class="line" id="L14"><a href="#L14">  14</a> cam = json.load(open(WORK + &quot;/cam.json&quot;)); K = np.array([[cam[&quot;fx&quot;], 0, cam[&quot;cx&quot;]], [0, cam[&quot;fy&quot;], cam[&quot;cy&quot;]], [0, 0, 1]], np.float64)</span>
+<span class="line" id="L15"><a href="#L15">  15</a> z = np.load(WORK + &quot;/poses.npz&quot;); frames = [int(f) for f in z[&quot;frames&quot;]]; c2w = z[&quot;c2w&quot;]</span>
+<span class="line" id="L16"><a href="#L16">  16</a> if len(sys.argv) &gt; 5: a_, b_ = int(sys.argv[4]), int(sys.argv[5]); sel = [i for i, f in enumerate(frames) if a_ &lt;= f &lt;= b_]; frames = [frames[i] for i in sel]; c2w = c2w[sel]</span>
+<span class="line" id="L17"><a href="#L17">  17</a> w2c = np.linalg.inv(c2w)</span>
+<span class="line" id="L18"><a href="#L18">  18</a> model = DepthAnything3.from_pretrained(os.path.expanduser(&quot;~/crack/along_track/weights/da3nested&quot;)).to(&quot;cuda&quot;).eval()</span>
+<span class="line" id="L19"><a href="#L19">  19</a> groups = []; s = 0</span>
+<span class="line" id="L20"><a href="#L20">  20</a> while True:</span>
+<span class="line" id="L21"><a href="#L21">  21</a>     g = list(range(s, min(s + CH, len(frames)))); groups.append(g)</span>
+<span class="line" id="L22"><a href="#L22">  22</a>     if g[-1] == len(frames) - 1: break</span>
+<span class="line" id="L23"><a href="#L23">  23</a>     s += ST</span>
+<span class="line" id="L24"><a href="#L24">  24</a> best = {}                                                                       # 帧 -&gt; (离组中心的距离, 组号)</span>
+<span class="line" id="L25"><a href="#L25">  25</a> for gi, g in enumerate(groups):</span>
+<span class="line" id="L26"><a href="#L26">  26</a>     for j, i in enumerate(g):</span>
+<span class="line" id="L27"><a href="#L27">  27</a>         d = abs(j - (len(g) - 1) / 2)</span>
+<span class="line" id="L28"><a href="#L28">  28</a>         if i not in best or d &lt; best[i][0]: best[i] = (d, gi)</span>
+<span class="line" id="L29"><a href="#L29">  29</a> t0 = time.time(); chk = {}; shown = False</span>
+<span class="line" id="L30"><a href="#L30">  30</a> for gi, g in enumerate(groups):</span>
+<span class="line" id="L31"><a href="#L31">  31</a>     need = [i for i in g if best[i][1] == gi and not os.path.exists(&quot;%s/depth/%06d.npz&quot; % (WORK, frames[i]))]</span>
+<span class="line" id="L32"><a href="#L32">  32</a>     if not need: continue</span>
+<span class="line" id="L33"><a href="#L33">  33</a>     imgs = [&quot;%s/frames/%06d.jpg&quot; % (WORK, frames[i]) for i in g]</span>
+<span class="line" id="L34"><a href="#L34">  34</a>     with torch.no_grad():</span>
+<span class="line" id="L35"><a href="#L35">  35</a>         try: pred = model.inference(imgs, extrinsics=w2c[g].astype(np.float32), intrinsics=np.repeat(K[None].astype(np.float32), len(g), 0), align_to_input_ext_scale=ALIGN, process_res=RES)</span>
+<span class="line" id="L36"><a href="#L36">  36</a>         except torch.cuda.OutOfMemoryError:</span>
+<span class="line" id="L37"><a href="#L37">  37</a>             torch.cuda.empty_cache(); print(&quot;  组 %d 在 %d px 下显存不够, 退到 504 px&quot; % (gi, RES), flush=True)</span>
+<span class="line" id="L38"><a href="#L38">  38</a>             pred = model.inference(imgs, extrinsics=w2c[g].astype(np.float32), intrinsics=np.repeat(K[None].astype(np.float32), len(g), 0), align_to_input_ext_scale=ALIGN, process_res=504)</span>
+<span class="line" id="L39"><a href="#L39">  39</a>     if not shown: print(&quot;  预测字段:&quot;, [k for k in dir(pred) if not k.startswith(&quot;_&quot;)][:30], &quot;depth&quot;, np.asarray(pred.depth).shape, flush=True); shown = True</span>
+<span class="line" id="L40"><a href="#L40">  40</a>     D = np.asarray(pred.depth, np.float32); Cf = np.asarray(pred.conf, np.float32) if getattr(pred, &quot;conf&quot;, None) is not None else np.ones_like(D); Kp = np.asarray(pred.intrinsics, np.float32)</span>
+<span class="line" id="L41"><a href="#L41">  41</a>     ratios = {}</span>
+<span class="line" id="L42"><a href="#L42">  42</a>     for j, i in enumerate(g):</span>
+<span class="line" id="L43"><a href="#L43">  43</a>         if i not in need: continue</span>
+<span class="line" id="L44"><a href="#L44">  44</a>         f = frames[i]; h, w = D[j].shape</span>
+<span class="line" id="L45"><a href="#L45">  45</a>         # 路面像素上的核对: 平面几何 (z = 0 的路面) 给出的深度</span>
+<span class="line" id="L46"><a href="#L46">  46</a>         m = cv2.imread(&quot;%s/masks/%06d.png&quot; % (WORK, f), cv2.IMREAD_GRAYSCALE); m = cv2.resize(m, (w, h), interpolation=cv2.INTER_NEAREST)</span>
+<span class="line" id="L47"><a href="#L47">  47</a>         yy, xx = np.mgrid[0:h, 0:w]; Ki = np.linalg.inv(Kp[j]); rays = np.stack([xx, yy, np.ones_like(xx)], -1).reshape(-1, 3) @ Ki.T; Rw = c2w[i][:3, :3]; cz = c2w[i][2, 3]</span>
+<span class="line" id="L48"><a href="#L48">  48</a>         dw = rays @ Rw.T; tz = dw[:, 2]; ok = (m.ravel() == 1) &amp; (tz &lt; -1e-3); t = -cz / np.where(tz &lt; -1e-3, tz, -1e-3); dep_plane = (t * rays[:, 2]).reshape(h, w)   # 相机系 z (针孔深度)</span>
+<span class="line" id="L49"><a href="#L49">  49</a>         r = D[j].ravel()[ok] / dep_plane.ravel()[ok]; chk[f] = dict(ratio_med=float(np.median(r)), ratio_q=[float(np.percentile(r, 10)), float(np.percentile(r, 90))], n=int(ok.sum()), group=gi, res=[int(w), int(h)])</span>
+<span class="line" id="L50"><a href="#L50">  50</a>         ratios[j] = chk[f][&quot;ratio_med&quot;] if chk[f][&quot;n&quot;] &gt; 2000 else None</span>
+<span class="line" id="L51"><a href="#L51">  51</a>     good = [v for v in ratios.values() if v]; gfix = 1.0 / float(np.median(good)) if good else 1.0         # 同一组是同一个尺度: 按组改正</span>
+<span class="line" id="L52"><a href="#L52">  52</a>     for j, i in enumerate(g):</span>
+<span class="line" id="L53"><a href="#L53">  53</a>         if i not in need: continue</span>
+<span class="line" id="L54"><a href="#L54">  54</a>         f = frames[i]; chk[f][&quot;applied&quot;] = gfix</span>
+<span class="line" id="L55"><a href="#L55">  55</a>         np.savez_compressed(&quot;%s/depth/%06d.npz&quot; % (WORK, f), depth=(D[j] * gfix).astype(np.float16), conf=Cf[j].astype(np.float16), K=Kp[j])</span>
+<span class="line" id="L56"><a href="#L56">  56</a>     print(&quot;  组 %d / %d (帧 %d~%d): 写出 %d 张, 路面深度比 %.3f [%.0fs]&quot; % (gi + 1, len(groups), frames[g[0]], frames[g[-1]], len(need), np.median([chk[frames[i]][&quot;ratio_med&quot;] for i in need]), time.time() - t0), flush=True)</span>
+<span class="line" id="L57"><a href="#L57">  57</a> json.dump(chk, open(WORK + &quot;/depth_check.json&quot;, &quot;w&quot;), indent=0)</span>
+<span class="line" id="L58"><a href="#L58">  58</a> rm = [v[&quot;ratio_med&quot;] for v in chk.values()]; print(&quot;完成: %d 帧; 路面像素 DA3/平面 深度比 中位 %.3f, 四分位 %.3f~%.3f [%.0fs]&quot; % (len(chk), np.median(rm), np.percentile(rm, 25), np.percentile(rm, 75), time.time() - t0))</span></pre></html>

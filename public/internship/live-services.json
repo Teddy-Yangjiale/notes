@@ -1,0 +1,83 @@
+{
+  "checked": "2026-11-09",
+  "services": [
+    {
+      "port": 8821,
+      "status": 200,
+      "title": "路面病害三维展示 · 0924 × 0903",
+      "sha256": "3ceb7bd0a8a458b477ffd473504cbf54974898a10e0330fe4a56e757294540d4"
+    },
+    {
+      "port": 8822,
+      "status": 200,
+      "title": "路面病害巡查 · 站点浏览",
+      "sha256": "791fcb0e5770d3e4c6db244fb7b51091423c1f731eba40d904b1d340e1e5ba94"
+    },
+    {
+      "port": 8823,
+      "status": 200,
+      "title": "KITTI 真值验证 · 站点浏览",
+      "sha256": "3809396934629955169194d69c5dddbd13c60dae823d8dbfcac818b507f97263"
+    },
+    {
+      "port": 8824,
+      "status": 200,
+      "title": "路面资产盘点 · 0907",
+      "sha256": "872360410710077abcf9b1b272186ac3a1aa2cece61885defca6b899240fccef"
+    },
+    {
+      "port": 8825,
+      "status": 200,
+      "title": "行车录像重建路面病害三维地图 · 8821 项目展示",
+      "sha256": "205456a3fa2c238ba1354e530ab986a99cf4ea82990c0ab25c1c0deb9335d80e"
+    },
+    {
+      "port": 8826,
+      "status": 200,
+      "title": "8826 · 路面病害三维展示",
+      "sha256": "ae76363ade29cba28f64f1902fd57f82f9c002a8c3626b7d411abfbab43673ef"
+    },
+    {
+      "port": 8827,
+      "status": 200,
+      "title": "城市街景漫游 · 0903 前摄全线",
+      "sha256": "acbafae60afa1667a5e9ae9576446182ce200c36ede749b42695624e39188188"
+    },
+    {
+      "port": 8828,
+      "status": 200,
+      "title": "8828 · 1012 底图 · 路面病害三维展示",
+      "sha256": "1bf7323fe301d2e774161d65533ef46ab6fec3951990a0d569e959849d820c97"
+    },
+    {
+      "port": 8829,
+      "status": 200,
+      "title": "8829 · 路面重建最新成果",
+      "sha256": "5f8879fbc76360d5c4bba3590e6b413966ae12ce7cbacb78d7f88d7b87782b3d"
+    },
+    {
+      "port": 8830,
+      "status": 200,
+      "title": "路面病害标注",
+      "sha256": "d46d0270a5bfd9c3ea79a99926adb21fbb364a2a91e5e848e3f47dc03b8803e1"
+    },
+    {
+      "port": 8831,
+      "status": 200,
+      "title": "8831 · 朴素版（只用原始数据）",
+      "sha256": "9df8b13242b2f07f52e7db24ab52937cf5a4e1f49aec373bd9c3dde24d98b0ed"
+    },
+    {
+      "port": 8832,
+      "status": 200,
+      "title": "3540 · Gaussian Lab",
+      "sha256": "c1a6c6975d94b6a300d38f8e7fecaa9b40ae1ee70fb021f171268300b138dc33"
+    },
+    {
+      "port": 8833,
+      "status": 200,
+      "title": "单前摄三维重建 · 算法与实现",
+      "sha256": "743aa0b66a8a3f4311e2a732a0805e56f67d8282f7f0ecee1f9a2c38c4c3a0b1"
+    }
+  ]
+}

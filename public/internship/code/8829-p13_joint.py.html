@@ -1,0 +1,619 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>p13_joint.py</title><style>body{margin:24px;font:15px system-ui;background:#faf8f3;color:#243342}pre{overflow:auto;line-height:1.6;background:white;padding:16px}.line{display:block}.line:target{background:#fff1a8}a{color:#58728a}header{overflow-wrap:anywhere}</style><header><a href="/notes/series/internship/">返回实习专栏</a><h1>p13_joint.py</h1><p>只读快照：2026-11-09 · /home/yjl/crack/snap1012/build/p13_joint.py</p><p>SHA-256: 99e4be33b57188724d582b257b9ee919cd75e93aa0a44527a227a25287c82e2a</p></header><pre><span class="line" id="L1"><a href="#L1">   1</a> # -*- coding: utf-8 -*-</span>
+<span class="line" id="L2"><a href="#L2">   2</a> &quot;&quot;&quot;P13 路面联合优化（RoGS 思路的纹理空间版 + 位姿/曝光/影子）：</span>
+<span class="line" id="L3"><a href="#L3">   3</a> 在 4 cm 路面纹理网格上，同时求</span>
+<span class="line" id="L4"><a href="#L4">   4</a>   - 路面高度场 z(E,N)（0.25 m 控制网格，双线性；平滑 + 弱先验到逐帧车体平面）——RoGS 的&quot;每个面元学高度 + 平滑&quot;</span>
+<span class="line" id="L5"><a href="#L5">   5</a>   - 每张前摄的小位姿修正（旋转 ω、平移 δ，相机系）；后摄 = 前摄 × 标定相对位姿，再加自身的水平平移 + 偏航修正（同步误差）</span>
+<span class="line" id="L6"><a href="#L6">   6</a>   - 光度：观测 I = a_i,c · T · V_cam(u,v) · exp(s_i,c · M_shadow(u,v)) + b_i,c</span>
+<span class="line" id="L7"><a href="#L7">   7</a>       a = 每张每通道增益，b = 每张每通道加性项（眩光雾），V = 每路相机 9×5 暗角网格，s = 后摄本车影子区的逐张增益（影子&quot;提亮&quot;还原）</span>
+<span class="line" id="L8"><a href="#L8">   8</a>   - 纹理 T：每轮按当前参数闭式求加权平均（不求导），再对其余参数做若干步 Adam；交替。</span>
+<span class="line" id="L9"><a href="#L9">   9</a> 损失：Charbonnier(pred_T − T)，像素权重 (3/d)^2 × 羽化。</span>
+<span class="line" id="L10"><a href="#L10">  10</a> 与 RoGS 的区别：RoGS 前向光栅化面元、在图像空间算损失、位姿/逐张曝光不优化；这里在纹理空间做逆向取样（路面是高度场、无遮挡），</span>
+<span class="line" id="L11"><a href="#L11">  11</a> 加位姿、逐张曝光和影子增益（我们 4 m 间距、照片曝光各异、后摄有本车影子）。</span>
+<span class="line" id="L12"><a href="#L12">  12</a> 输入：work/&lt;tag&gt;/&lt;model&gt;_poses.npz、work/seg、rear_shift.npz（后摄初值）。</span>
+<span class="line" id="L13"><a href="#L13">  13</a> 输出：work/&lt;tag&gt;/joint_&lt;name&gt;.npz（全部参数）、log。</span>
+<span class="line" id="L14"><a href="#L14">  14</a> 用法: CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=2 ~/crack/along_track/.venv/bin/python p13_joint.py &lt;tag&gt; &lt;name&gt; [--iters 30] [--no_pose] [--no_height] [--no_shadow] [--no_expo]</span>
+<span class="line" id="L15"><a href="#L15">  15</a> &quot;&quot;&quot;</span>
+<span class="line" id="L16"><a href="#L16">  16</a> import argparse</span>
+<span class="line" id="L17"><a href="#L17">  17</a> import json</span>
+<span class="line" id="L18"><a href="#L18">  18</a> import math</span>
+<span class="line" id="L19"><a href="#L19">  19</a> import os</span>
+<span class="line" id="L20"><a href="#L20">  20</a> import sys</span>
+<span class="line" id="L21"><a href="#L21">  21</a> import time</span>
+<span class="line" id="L22"><a href="#L22">  22</a> </span>
+<span class="line" id="L23"><a href="#L23">  23</a> import cv2</span>
+<span class="line" id="L24"><a href="#L24">  24</a> import numpy as np</span>
+<span class="line" id="L25"><a href="#L25">  25</a> import torch</span>
+<span class="line" id="L26"><a href="#L26">  26</a> import torch.nn.functional as Fnn</span>
+<span class="line" id="L27"><a href="#L27">  27</a> from scipy.spatial import cKDTree</span>
+<span class="line" id="L28"><a href="#L28">  28</a> </span>
+<span class="line" id="L29"><a href="#L29">  29</a> sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))</span>
+<span class="line" id="L30"><a href="#L30">  30</a> from sn_common import *  # noqa</span>
+<span class="line" id="L31"><a href="#L31">  31</a> from sn_marks import mark_bin</span>
+<span class="line" id="L32"><a href="#L32">  32</a> </span>
+<span class="line" id="L33"><a href="#L33">  33</a> ap = argparse.ArgumentParser()</span>
+<span class="line" id="L34"><a href="#L34">  34</a> ap.add_argument(&quot;tag&quot;); ap.add_argument(&quot;name&quot;)</span>
+<span class="line" id="L35"><a href="#L35">  35</a> ap.add_argument(&quot;--model&quot;, default=&quot;aligned&quot;)</span>
+<span class="line" id="L36"><a href="#L36">  36</a> ap.add_argument(&quot;--iters&quot;, type=int, default=30)</span>
+<span class="line" id="L37"><a href="#L37">  37</a> ap.add_argument(&quot;--steps&quot;, type=int, default=15, help=&quot;每轮对参数的 Adam 步数&quot;)</span>
+<span class="line" id="L38"><a href="#L38">  38</a> ap.add_argument(&quot;--res&quot;, type=float, default=0.04)</span>
+<span class="line" id="L39"><a href="#L39">  39</a> ap.add_argument(&quot;--hres&quot;, type=float, default=0.25)</span>
+<span class="line" id="L40"><a href="#L40">  40</a> ap.add_argument(&quot;--no_pose&quot;, action=&quot;store_true&quot;); ap.add_argument(&quot;--no_height&quot;, action=&quot;store_true&quot;)</span>
+<span class="line" id="L41"><a href="#L41">  41</a> ap.add_argument(&quot;--no_shadow&quot;, action=&quot;store_true&quot;); ap.add_argument(&quot;--no_expo&quot;, action=&quot;store_true&quot;)</span>
+<span class="line" id="L42"><a href="#L42">  42</a> ap.add_argument(&quot;--lam_smooth&quot;, type=float, default=30.0)</span>
+<span class="line" id="L43"><a href="#L43">  43</a> ap.add_argument(&quot;--lam_z0&quot;, type=float, default=0.5)</span>
+<span class="line" id="L44"><a href="#L44">  44</a> ap.add_argument(&quot;--frange&quot;, default=&quot;4.5,14&quot;); ap.add_argument(&quot;--rrange&quot;, default=&quot;1.2,10&quot;)</span>
+<span class="line" id="L45"><a href="#L45">  45</a> ap.add_argument(&quot;--latcam&quot;, default=&quot;7,5&quot;)</span>
+<span class="line" id="L46"><a href="#L46">  46</a> ap.add_argument(&quot;--blur&quot;, type=float, default=1.0, help=&quot;图像取样前的高斯模糊 σ（像素），对齐初期更稳&quot;)</span>
+<span class="line" id="L47"><a href="#L47">  47</a> ap.add_argument(&quot;--sub&quot;, type=float, default=0.3, help=&quot;每步梯度用的取样比例&quot;)</span>
+<span class="line" id="L48"><a href="#L48">  48</a> ap.add_argument(&quot;--vig_reg&quot;, type=float, default=0.0, help=&quot;暗角网格正则权重（0 = 旧行为）&quot;)</span>
+<span class="line" id="L49"><a href="#L49">  49</a> ap.add_argument(&quot;--info_prior&quot;, action=&quot;store_true&quot;, help=&quot;高度先验/平滑按观测强度分区：观测弱的格子强拉回初值&quot;)</span>
+<span class="line" id="L50"><a href="#L50">  50</a> ap.add_argument(&quot;--nonrigid&quot;, default=&quot;&quot;, help=&quot;每张照片画面空间的低阶平滑形变网格，如 4x3（列x行）；空 = 不用&quot;)</span>
+<span class="line" id="L51"><a href="#L51">  51</a> ap.add_argument(&quot;--lam_nr&quot;, type=float, default=1.0, help=&quot;非刚性形变的幅度+平滑正则权重（单位像素²）&quot;)</span>
+<span class="line" id="L52"><a href="#L52">  52</a> ap.add_argument(&quot;--no_tick_check&quot;, action=&quot;store_true&quot;, help=&quot;不做时钟格点检查（默认：与同次前摄不在同一拍的后摄不用——刚性组挂不上，差车速×0.333 s）&quot;)</span>
+<span class="line" id="L53"><a href="#L53">  53</a> ap.add_argument(&quot;--sv_prior&quot;, default=&quot;&quot;, help=&quot;SurfaceView 式物理先验 &#x27;σh_m,σpitch_deg[,σroll_deg]&#x27;：每站车体原点离路面的高差、车头方向与路面的夹角（横滚可选；路面横坡分辨不出时别开）收向 0&quot;)</span>
+<span class="line" id="L54"><a href="#L54">  54</a> ap.add_argument(&quot;--zbase&quot;, default=&quot;vplane&quot;, choices=[&quot;vplane&quot;, &quot;contact&quot;], help=&quot;高度基础：vplane = 每处取最近一张前摄的车体平面（旧）；contact = 各站车轮着地点（只用位置）的局部加权平面，横坡分辨不出时取 0（调研 §11.0）&quot;)</span>
+<span class="line" id="L55"><a href="#L55">  55</a> ap.add_argument(&quot;--zb_sigma&quot;, type=float, default=8.0, help=&quot;contact：局部平面的高斯半径（m）&quot;)</span>
+<span class="line" id="L56"><a href="#L56">  56</a> ap.add_argument(&quot;--zb_prior&quot;, default=&quot;zero&quot;, choices=[&quot;zero&quot;, &quot;roll&quot;], help=&quot;contact：坡度先验。zero = 收向 0；roll = 纵坡取 5 m 平滑剖面的坡度、横坡取 10 m 平滑车身横滚（直路上站点共线时横坡退回车身横滚；路口站点铺开时由位置决定，调研 §12）&quot;)</span>
+<span class="line" id="L57"><a href="#L57">  57</a> ap.add_argument(&quot;--zb_ridge&quot;, type=float, default=1.0, help=&quot;contact：坡度的岭正则（m²，相对权重和）——站点共线的方向上坡度收向 0&quot;)</span>
+<span class="line" id="L58"><a href="#L58">  58</a> ap.add_argument(&quot;--freeze_geom&quot;, action=&quot;store_true&quot;, help=&quot;几何全部冻结（位姿/高度/后摄/形变/外参），只优化曝光类参数&quot;)</span>
+<span class="line" id="L59"><a href="#L59">  59</a> ap.add_argument(&quot;--data&quot;, default=&quot;rgb&quot;, choices=[&quot;rgb&quot;, &quot;marks&quot;], help=&quot;marks = 用白色标线概率图对齐（不看沥青纹理和颜色）&quot;)</span>
+<span class="line" id="L60"><a href="#L60">  60</a> ap.add_argument(&quot;--lr_rot&quot;, type=float, default=2e-5, help=&quot;每张照片转角的学习率（rad/步）&quot;)</span>
+<span class="line" id="L61"><a href="#L61">  61</a> ap.add_argument(&quot;--rot_world&quot;, action=&quot;store_true&quot;, help=&quot;旧约定：转角绕世界原点（试验段离原点约 1.3 km，转 1e-4 rad 相机就平移 13 cm）；默认绕相机中心&quot;)</span>
+<span class="line" id="L62"><a href="#L62">  62</a> ap.add_argument(&quot;--rot_reg&quot;, type=float, default=1e3, help=&quot;转角幅度正则系数&quot;)</span>
+<span class="line" id="L63"><a href="#L63">  63</a> ap.add_argument(&quot;--mark_v&quot;, type=int, default=2, help=&quot;标线检测版本（sn_marks.py）：1 = 41 px 中值；2 = 大窗口背景 + 影子增益 + 去碎块&quot;)</span>
+<span class="line" id="L64"><a href="#L64">  64</a> ap.add_argument(&quot;--mark_blur&quot;, type=float, default=4.0, help=&quot;标线概率图的高斯模糊 σ（像素）——收敛范围&quot;)</span>
+<span class="line" id="L65"><a href="#L65">  65</a> ap.add_argument(&quot;--init_profile&quot;, action=&quot;store_true&quot;, help=&quot;高度初值用平滑的车轨剖面（沿路 5 m）+ 平滑横坡（10 m），不用逐帧车体平面&quot;)</span>
+<span class="line" id="L66"><a href="#L66">  66</a> ap.add_argument(&quot;--glare_grid&quot;, action=&quot;store_true&quot;, help=&quot;每张照片的加性项改为画面上 3×3 的平滑场（三通道）——空间变化的眩光雾&quot;)</span>
+<span class="line" id="L67"><a href="#L67">  67</a> ap.add_argument(&quot;--rear_ext&quot;, action=&quot;store_true&quot;, help=&quot;所有后摄共用的外参修正（3 旋转 + 3 平移，后摄相机系）&quot;)</span>
+<span class="line" id="L68"><a href="#L68">  68</a> ap.add_argument(&quot;--opt_frange&quot;, default=&quot;&quot;, help=&quot;优化时前摄用的地面距离（如 4.5,10）；空 = 同 --frange&quot;)</span>
+<span class="line" id="L69"><a href="#L69">  69</a> ap.add_argument(&quot;--rear_d_prior&quot;, type=float, default=1.0, help=&quot;每张后摄单独平移的先验权重&quot;)</span>
+<span class="line" id="L70"><a href="#L70">  70</a> ap.add_argument(&quot;--no_rinit&quot;, action=&quot;store_true&quot;, help=&quot;后摄初值不用 p09 的逐张平移（纯按标定挂在前摄上）&quot;)</span>
+<span class="line" id="L71"><a href="#L71">  71</a> ap.add_argument(&quot;--rinit_file&quot;, default=&quot;rear_shift&quot;, help=&quot;后摄逐张平移初值文件名（work/&lt;tag&gt;/&lt;name&gt;.npz）&quot;)</span>
+<span class="line" id="L72"><a href="#L72">  72</a> ap.add_argument(&quot;--rolling&quot;, action=&quot;store_true&quot;, help=&quot;卷帘快门：每路相机一个逐行读出时间（整帧，秒），按车速向量修正每个像素的拍摄位置&quot;)</span>
+<span class="line" id="L73"><a href="#L73">  73</a> ap.add_argument(&quot;--init&quot;, default=&quot;&quot;, help=&quot;从已有 joint_&lt;name&gt;.npz 的参数接着来（只读位姿/高度/曝光）&quot;)</span>
+<span class="line" id="L74"><a href="#L74">  74</a> args = ap.parse_args()</span>
+<span class="line" id="L75"><a href="#L75">  75</a> if args.init:   # 评估/续跑时：高度网格大小、形变网格设置跟随参数文件</span>
+<span class="line" id="L76"><a href="#L76">  76</a>     _J0 = np.load(f&quot;{WORK}/{args.tag}/joint_{args.init}.npz&quot;)</span>
+<span class="line" id="L77"><a href="#L77">  77</a>     args.hres = float(_J0[&quot;grid&quot;][2])</span>
+<span class="line" id="L78"><a href="#L78">  78</a>     if &quot;nonrigid&quot; in _J0.files and str(_J0[&quot;nonrigid&quot;]):</span>
+<span class="line" id="L79"><a href="#L79">  79</a>         args.nonrigid = str(_J0[&quot;nonrigid&quot;])</span>
+<span class="line" id="L80"><a href="#L80">  80</a>     if &quot;rear_ext&quot; in _J0.files and bool(_J0[&quot;rear_ext&quot;]):</span>
+<span class="line" id="L81"><a href="#L81">  81</a>         args.rear_ext = True</span>
+<span class="line" id="L82"><a href="#L82">  82</a>     if &quot;no_rinit&quot; in _J0.files and bool(_J0[&quot;no_rinit&quot;]):</span>
+<span class="line" id="L83"><a href="#L83">  83</a>         args.no_rinit = True</span>
+<span class="line" id="L84"><a href="#L84">  84</a>     if &quot;rinit_file&quot; in _J0.files:</span>
+<span class="line" id="L85"><a href="#L85">  85</a>         args.rinit_file = str(_J0[&quot;rinit_file&quot;])</span>
+<span class="line" id="L86"><a href="#L86">  86</a>     if &quot;glare_grid&quot; in _J0.files and bool(_J0[&quot;glare_grid&quot;]):</span>
+<span class="line" id="L87"><a href="#L87">  87</a>         args.glare_grid = True</span>
+<span class="line" id="L88"><a href="#L88">  88</a>     if &quot;init_profile&quot; in _J0.files and bool(_J0[&quot;init_profile&quot;]):</span>
+<span class="line" id="L89"><a href="#L89">  89</a>         args.init_profile = True</span>
+<span class="line" id="L90"><a href="#L90">  90</a>     if &quot;zbase&quot; in _J0.files:</span>
+<span class="line" id="L91"><a href="#L91">  91</a>         args.zbase = str(_J0[&quot;zbase&quot;]); args.zb_sigma = float(_J0[&quot;zb_sigma&quot;]); args.zb_ridge = float(_J0[&quot;zb_ridge&quot;])</span>
+<span class="line" id="L92"><a href="#L92">  92</a>         if &quot;zb_prior&quot; in _J0.files:</span>
+<span class="line" id="L93"><a href="#L93">  93</a>             args.zb_prior = str(_J0[&quot;zb_prior&quot;])</span>
+<span class="line" id="L94"><a href="#L94">  94</a> dev = &quot;cuda&quot;</span>
+<span class="line" id="L95"><a href="#L95">  95</a> OUT = f&quot;{WORK}/{args.tag}&quot;</span>
+<span class="line" id="L96"><a href="#L96">  96</a> LOG = open(f&quot;{OUT}/joint_{args.name}.log&quot;, &quot;w&quot;)</span>
+<span class="line" id="L97"><a href="#L97">  97</a> </span>
+<span class="line" id="L98"><a href="#L98">  98</a> </span>
+<span class="line" id="L99"><a href="#L99">  99</a> def log(*a):</span>
+<span class="line" id="L100"><a href="#L100"> 100</a>     s = &quot; &quot;.join(str(x) for x in a); print(s, flush=True); LOG.write(s + &quot;\n&quot;); LOG.flush()</span>
+<span class="line" id="L101"><a href="#L101"> 101</a> </span>
+<span class="line" id="L102"><a href="#L102"> 102</a> </span>
+<span class="line" id="L103"><a href="#L103"> 103</a> log(time.strftime(&quot;%F %T&quot;), vars(args))</span>
+<span class="line" id="L104"><a href="#L104"> 104</a> C = load_csv(); Q = np.load(WORK + &quot;/q01_photo.npz&quot;, allow_pickle=True); D4 = np.load(WORK + &quot;/q04_dups.npz&quot;)</span>
+<span class="line" id="L105"><a href="#L105"> 105</a> K = K_scaled(); fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]; k1, k2, p1, p2 = DIST[:4]</span>
+<span class="line" id="L106"><a href="#L106"> 106</a> R_vf, t_vf = cam_in_vehicle(&quot;front&quot;); R_vr, t_vr = cam_in_vehicle(&quot;rear&quot;)</span>
+<span class="line" id="L107"><a href="#L107"> 107</a> R_rf = R_vr.T @ R_vf; t_rf = R_vr.T @ (t_vf - t_vr)</span>
+<span class="line" id="L108"><a href="#L108"> 108</a> Z = np.load(f&quot;{OUT}/{args.model}_poses.npz&quot;)</span>
+<span class="line" id="L109"><a href="#L109"> 109</a> fr = sorted([(int(str(n)[7:12]), T) for n, T in zip(Z[&quot;names&quot;], Z[&quot;w2c&quot;]) if str(n).startswith(&quot;front/&quot;) and C[&quot;image_keep&quot;][int(str(n)[7:12])]], key=lambda x: C[&quot;t&quot;][x[0]])</span>
+<span class="line" id="L110"><a href="#L110"> 110</a> rshift = {}</span>
+<span class="line" id="L111"><a href="#L111"> 111</a> if not args.no_rinit:</span>
+<span class="line" id="L112"><a href="#L112"> 112</a>     RS = np.load(f&quot;{OUT}/{args.rinit_file}.npz&quot;); rshift = {int(r): (e, n) for r, e, n in zip(RS[&quot;row&quot;], RS[&quot;dE&quot;], RS[&quot;dN&quot;])}</span>
+<span class="line" id="L113"><a href="#L113"> 113</a> rr = np.where((C[&quot;ch&quot;] == 1) &amp; C[&quot;image_keep&quot;] &amp; (Q[&quot;ok&quot;] == 1) &amp; ~D4[&quot;dup&quot;] &amp; ~D4[&quot;minority&quot;])[0]; rt = C[&quot;t&quot;][rr]</span>
+<span class="line" id="L114"><a href="#L114"> 114</a> # 图像列表：(row, ch, front_index)</span>
+<span class="line" id="L115"><a href="#L115"> 115</a> _stp = os.path.join(os.path.dirname(WORK), &quot;research/out/r02c_stale.npy&quot;)   # 逐行陈旧量（调研 §6：照片取 3.003 Hz 时钟上最近的一拍）</span>
+<span class="line" id="L116"><a href="#L116"> 116</a> STALE = np.load(_stp) if (os.path.exists(_stp) and not args.no_tick_check) else None</span>
+<span class="line" id="L117"><a href="#L117"> 117</a> off_tick = []</span>
+<span class="line" id="L118"><a href="#L118"> 118</a> views = []</span>
+<span class="line" id="L119"><a href="#L119"> 119</a> for fi, (r, T) in enumerate(fr):</span>
+<span class="line" id="L120"><a href="#L120"> 120</a>     views.append((r, 2, fi))</span>
+<span class="line" id="L121"><a href="#L121"> 121</a> for fi, (r, T) in enumerate(fr):</span>
+<span class="line" id="L122"><a href="#L122"> 122</a>     if D4[&quot;minority&quot;][r]:</span>
+<span class="line" id="L123"><a href="#L123"> 123</a>         continue</span>
+<span class="line" id="L124"><a href="#L124"> 124</a>     if not len(rr):</span>
+<span class="line" id="L125"><a href="#L125"> 125</a>         continue</span>
+<span class="line" id="L126"><a href="#L126"> 126</a>     j = np.argmin(np.abs(rt - C[&quot;t&quot;][r]))</span>
+<span class="line" id="L127"><a href="#L127"> 127</a>     if abs(rt[j] - C[&quot;t&quot;][r]) &lt; 0.02:</span>
+<span class="line" id="L128"><a href="#L128"> 128</a>         rj = int(rr[j])</span>
+<span class="line" id="L129"><a href="#L129"> 129</a>         if STALE is not None and abs((C[&quot;t&quot;][rj] - STALE[rj]) - (C[&quot;t&quot;][r] - STALE[r])) &gt; 0.1:</span>
+<span class="line" id="L130"><a href="#L130"> 130</a>             off_tick.append(rj); continue</span>
+<span class="line" id="L131"><a href="#L131"> 131</a>         views.append((rj, 1, fi))</span>
+<span class="line" id="L132"><a href="#L132"> 132</a> NF = len(fr); NV = len(views)</span>
+<span class="line" id="L133"><a href="#L133"> 133</a> if off_tick:</span>
+<span class="line" id="L134"><a href="#L134"> 134</a>     log(f&quot;tick check: {len(off_tick)} rear photos not on their front&#x27;s clock tick, skipped: {off_tick}&quot;)</span>
+<span class="line" id="L135"><a href="#L135"> 135</a> # 车速向量（世界系，m/s）：前后相邻前摄的相机中心差 / CSV 时刻差（少数拨时刻不可靠，用车速字段的模长兜底）</span>
+<span class="line" id="L136"><a href="#L136"> 136</a> _Cc = np.array([-T[:3, :3].T @ T[:3, 3] for _, T in fr]); _tt = np.array([C[&quot;t&quot;][r] for r, _ in fr])</span>
+<span class="line" id="L137"><a href="#L137"> 137</a> VEL = np.zeros((NF, 3))</span>
+<span class="line" id="L138"><a href="#L138"> 138</a> for i in range(NF):</span>
+<span class="line" id="L139"><a href="#L139"> 139</a>     a_, b_ = max(0, i - 1), min(NF - 1, i + 1)</span>
+<span class="line" id="L140"><a href="#L140"> 140</a>     d_ = _Cc[b_] - _Cc[a_]; dt_ = _tt[b_] - _tt[a_]</span>
+<span class="line" id="L141"><a href="#L141"> 141</a>     sp = C[&quot;speed&quot;][fr[i][0]] / 3.6</span>
+<span class="line" id="L142"><a href="#L142"> 142</a>     if np.linalg.norm(d_) &gt; 0.3:</span>
+<span class="line" id="L143"><a href="#L143"> 143</a>         u_ = d_ / np.linalg.norm(d_)</span>
+<span class="line" id="L144"><a href="#L144"> 144</a>         v_ = d_ / dt_ if dt_ &gt; 0.05 else u_ * sp</span>
+<span class="line" id="L145"><a href="#L145"> 145</a>         if abs(np.linalg.norm(v_) - sp) &gt; 0.4 * max(sp, 1.0):</span>
+<span class="line" id="L146"><a href="#L146"> 146</a>             v_ = u_ * sp</span>
+<span class="line" id="L147"><a href="#L147"> 147</a>         VEL[i] = v_</span>
+<span class="line" id="L148"><a href="#L148"> 148</a> log(f&quot;front {NF}, views {NV} (rear {NV - NF})&quot;)</span>
+<span class="line" id="L149"><a href="#L149"> 149</a> W0 = np.stack([T for _, T in fr])                            # 前摄 world→cam 初值</span>
+<span class="line" id="L150"><a href="#L150"> 150</a> # 逐帧车体平面 → 高度初值</span>
+<span class="line" id="L151"><a href="#L151"> 151</a> Pk, Nk = [], []</span>
+<span class="line" id="L152"><a href="#L152"> 152</a> for _, T in fr:</span>
+<span class="line" id="L153"><a href="#L153"> 153</a>     Rvw = R_vf @ T[:3, :3]; tvw = R_vf @ T[:3, 3] + t_vf; Pk.append(-Rvw.T @ tvw); Nk.append(Rvw.T @ np.array([0, 0, 1.0]))</span>
+<span class="line" id="L154"><a href="#L154"> 154</a> Pk = np.array(Pk); Nk = np.array(Nk); ptree = cKDTree(Pk[:, :2])</span>
+<span class="line" id="L155"><a href="#L155"> 155</a> FW = np.array([(R_vf @ T[:3, :3]).T @ np.array([0, 1.0, 0]) for _, T in fr])</span>
+<span class="line" id="L156"><a href="#L156"> 156</a> </span>
+<span class="line" id="L157"><a href="#L157"> 157</a> # ---- 纹理网格（轨迹两侧 9 m）----</span>
+<span class="line" id="L158"><a href="#L158"> 158</a> dense = []</span>
+<span class="line" id="L159"><a href="#L159"> 159</a> for a, b in zip(Pk[:-1, :2], Pk[1:, :2]):</span>
+<span class="line" id="L160"><a href="#L160"> 160</a>     m = max(1, int(np.linalg.norm(b - a) / 0.5)); dense.append(a[None] + (b - a)[None] * (np.arange(m)[:, None] / m))</span>
+<span class="line" id="L161"><a href="#L161"> 161</a> dense = np.vstack(dense + [Pk[-1:, :2]]); dtree = cKDTree(dense)</span>
+<span class="line" id="L162"><a href="#L162"> 162</a> E0, N1 = np.floor(dense[:, 0].min() - 12), np.ceil(dense[:, 1].max() + 12)</span>
+<span class="line" id="L163"><a href="#L163"> 163</a> E1, N0 = np.ceil(dense[:, 0].max() + 12), np.floor(dense[:, 1].min() - 12)</span>
+<span class="line" id="L164"><a href="#L164"> 164</a> RES = args.res; WX = int((E1 - E0) / RES); HY = int((N1 - N0) / RES)</span>
+<span class="line" id="L165"><a href="#L165"> 165</a> # 粗栅格判断走廊，再细化</span>
+<span class="line" id="L166"><a href="#L166"> 166</a> cs = 0.5; cw_, ch_ = int((E1 - E0) / cs), int((N1 - N0) / cs)</span>
+<span class="line" id="L167"><a href="#L167"> 167</a> ce, cn = np.meshgrid(E0 + (np.arange(cw_) + 0.5) * cs, N1 - (np.arange(ch_) + 0.5) * cs)</span>
+<span class="line" id="L168"><a href="#L168"> 168</a> cd = dtree.query(np.c_[ce.ravel(), cn.ravel()])[0].reshape(ch_, cw_)</span>
+<span class="line" id="L169"><a href="#L169"> 169</a> corr = cd &lt;= 9.5</span>
+<span class="line" id="L170"><a href="#L170"> 170</a> f = int(round(cs / RES))</span>
+<span class="line" id="L171"><a href="#L171"> 171</a> corr_f = np.repeat(np.repeat(corr, f, 0), f, 1)[:HY, :WX]</span>
+<span class="line" id="L172"><a href="#L172"> 172</a> iy, ix = np.nonzero(corr_f)</span>
+<span class="line" id="L173"><a href="#L173"> 173</a> TE = E0 + (ix + 0.5) * RES; TN = N1 - (iy + 0.5) * RES</span>
+<span class="line" id="L174"><a href="#L174"> 174</a> NT = len(TE)</span>
+<span class="line" id="L175"><a href="#L175"> 175</a> IDX = -np.ones((HY, WX), np.int64); IDX[iy, ix] = np.arange(NT)</span>
+<span class="line" id="L176"><a href="#L176"> 176</a> log(f&quot;texture grid {WX}x{HY} @ {RES} m, active texels {NT}&quot;)</span>
+<span class="line" id="L177"><a href="#L177"> 177</a> _, kk = ptree.query(np.c_[TE, TN]); pp, nn = Pk[kk], Nk[kk]</span>
+<span class="line" id="L178"><a href="#L178"> 178</a> Zinit = pp[:, 2] - (nn[:, 0] * (TE - pp[:, 0]) + nn[:, 1] * (TN - pp[:, 1])) / nn[:, 2]</span>
+<span class="line" id="L179"><a href="#L179"> 179</a> if args.init_profile:</span>
+<span class="line" id="L180"><a href="#L180"> 180</a>     # 车轨剖面：天线地面点高度沿里程 5 m 高斯平滑；横坡：车体上向在&quot;右&quot;方向的分量沿里程 10 m 平滑；纵坡 = 平滑剖面的导数</span>
+<span class="line" id="L181"><a href="#L181"> 181</a>     s_tr = np.r_[0, np.cumsum(np.linalg.norm(np.diff(Pk[:, :2], axis=0), axis=1))]</span>
+<span class="line" id="L182"><a href="#L182"> 182</a>     def _sm(x, sig):</span>
+<span class="line" id="L183"><a href="#L183"> 183</a>         return np.array([(np.exp(-0.5 * ((s_tr - si) / sig) ** 2) * x).sum() / np.exp(-0.5 * ((s_tr - si) / sig) ** 2).sum() for si in s_tr])</span>
+<span class="line" id="L184"><a href="#L184"> 184</a>     zs_tr = _sm(Pk[:, 2], 5.0)</span>
+<span class="line" id="L185"><a href="#L185"> 185</a>     f2_ = FW[:, :2] / np.linalg.norm(FW[:, :2], axis=1, keepdims=True); r2_ = np.c_[f2_[:, 1], -f2_[:, 0]]</span>
+<span class="line" id="L186"><a href="#L186"> 186</a>     lat_slope = _sm(-(Nk[:, 0] * r2_[:, 0] + Nk[:, 1] * r2_[:, 1]) / Nk[:, 2], 10.0)</span>
+<span class="line" id="L187"><a href="#L187"> 187</a>     grade = np.gradient(zs_tr, s_tr + 1e-6 * np.arange(len(s_tr)))</span>
+<span class="line" id="L188"><a href="#L188"> 188</a>     def _prof(E, N):</span>
+<span class="line" id="L189"><a href="#L189"> 189</a>         _, k_ = ptree.query(np.c_[E, N]); d_ = np.c_[E, N] - Pk[k_, :2]</span>
+<span class="line" id="L190"><a href="#L190"> 190</a>         return zs_tr[k_] + (d_ * r2_[k_]).sum(1) * lat_slope[k_] + (d_ * f2_[k_]).sum(1) * grade[k_]</span>
+<span class="line" id="L191"><a href="#L191"> 191</a>     log(f&quot;init_profile: jitter removed std {np.std(Pk[:, 2] - zs_tr)*100:.1f} cm, lateral slope p10/50/90 {np.round(np.percentile(lat_slope, [10, 50, 90])*100, 2).tolist()} %&quot;)</span>
+<span class="line" id="L192"><a href="#L192"> 192</a>     Zinit = _prof(TE, TN)</span>
+<span class="line" id="L193"><a href="#L193"> 193</a> # 高度控制网格</span>
+<span class="line" id="L194"><a href="#L194"> 194</a> HR = args.hres; GW = int((E1 - E0) / HR) + 2; GH = int((N1 - N0) / HR) + 2</span>
+<span class="line" id="L195"><a href="#L195"> 195</a> ge, gn = np.meshgrid(E0 + np.arange(GW) * HR, N1 - np.arange(GH) * HR)</span>
+<span class="line" id="L196"><a href="#L196"> 196</a> _, kg = ptree.query(np.c_[ge.ravel(), gn.ravel()]); pg, ng = Pk[kg], Nk[kg]</span>
+<span class="line" id="L197"><a href="#L197"> 197</a> Zg0 = (pg[:, 2] - (ng[:, 0] * (ge.ravel() - pg[:, 0]) + ng[:, 1] * (gn.ravel() - pg[:, 1])) / ng[:, 2]).reshape(GH, GW)</span>
+<span class="line" id="L198"><a href="#L198"> 198</a> if args.init_profile:</span>
+<span class="line" id="L199"><a href="#L199"> 199</a>     Zg0 = _prof(ge.ravel(), gn.ravel()).reshape(GH, GW)</span>
+<span class="line" id="L200"><a href="#L200"> 200</a> gnear = (dtree.query(np.c_[ge.ravel(), gn.ravel()])[0].reshape(GH, GW) &lt;= 11)</span>
+<span class="line" id="L201"><a href="#L201"> 201</a> if args.zbase == &quot;contact&quot;:</span>
+<span class="line" id="L202"><a href="#L202"> 202</a>     # 车轮着地点（每站前摄换算到车体原点的地面点，只用位置）→ 每个高度格子做高斯加权局部平面，坡度加岭正则</span>
+<span class="line" id="L203"><a href="#L203"> 203</a>     Zold = Zg0.copy()</span>
+<span class="line" id="L204"><a href="#L204"> 204</a>     if args.zb_prior == &quot;roll&quot;:</span>
+<span class="line" id="L205"><a href="#L205"> 205</a>         s_c = np.r_[0, np.cumsum(np.linalg.norm(np.diff(Pk[:, :2], axis=0), axis=1))]</span>
+<span class="line" id="L206"><a href="#L206"> 206</a>         def _smc(x, sig):</span>
+<span class="line" id="L207"><a href="#L207"> 207</a>             return np.array([(np.exp(-0.5 * ((s_c - si) / sig) ** 2) * x).sum() / np.exp(-0.5 * ((s_c - si) / sig) ** 2).sum() for si in s_c])</span>
+<span class="line" id="L208"><a href="#L208"> 208</a>         f2c = FW[:, :2] / np.linalg.norm(FW[:, :2], axis=1, keepdims=True); r2c = np.c_[f2c[:, 1], -f2c[:, 0]]</span>
+<span class="line" id="L209"><a href="#L209"> 209</a>         zsc = _smc(Pk[:, 2], 5.0); grc = np.gradient(zsc, s_c + 1e-6 * np.arange(len(s_c)))</span>
+<span class="line" id="L210"><a href="#L210"> 210</a>         lsc = _smc(-(Nk[:, 0] * r2c[:, 0] + Nk[:, 1] * r2c[:, 1]) / Nk[:, 2], 10.0)</span>
+<span class="line" id="L211"><a href="#L211"> 211</a>         G0c = grc[:, None] * f2c + lsc[:, None] * r2c          # 每站的先验坡度（东、北分量）</span>
+<span class="line" id="L212"><a href="#L212"> 212</a>     def _cplane(Q):</span>
+<span class="line" id="L213"><a href="#L213"> 213</a>         out = np.empty(len(Q))</span>
+<span class="line" id="L214"><a href="#L214"> 214</a>         for i_, q_ in enumerate(Q):</span>
+<span class="line" id="L215"><a href="#L215"> 215</a>             ids = ptree.query_ball_point(q_, 3 * args.zb_sigma)</span>
+<span class="line" id="L216"><a href="#L216"> 216</a>             if len(ids) &lt; 3:</span>
+<span class="line" id="L217"><a href="#L217"> 217</a>                 ids = list(ptree.query(q_, k=3)[1])</span>
+<span class="line" id="L218"><a href="#L218"> 218</a>             d_ = Pk[ids, :2] - q_; w_ = np.exp(-0.5 * (d_ ** 2).sum(1) / args.zb_sigma ** 2) + 1e-12</span>
+<span class="line" id="L219"><a href="#L219"> 219</a>             A_ = np.c_[np.ones(len(ids)), d_]; M_ = A_.T @ (A_ * w_[:, None])</span>
+<span class="line" id="L220"><a href="#L220"> 220</a>             M_[1, 1] += args.zb_ridge * w_.sum(); M_[2, 2] += args.zb_ridge * w_.sum()</span>
+<span class="line" id="L221"><a href="#L221"> 221</a>             rhs_ = A_.T @ (w_ * Pk[ids, 2])</span>
+<span class="line" id="L222"><a href="#L222"> 222</a>             if args.zb_prior == &quot;roll&quot;:</span>
+<span class="line" id="L223"><a href="#L223"> 223</a>                 g0_ = (G0c[ids] * w_[:, None]).sum(0) / w_.sum()</span>
+<span class="line" id="L224"><a href="#L224"> 224</a>                 rhs_[1:] += args.zb_ridge * w_.sum() * g0_</span>
+<span class="line" id="L225"><a href="#L225"> 225</a>             out[i_] = np.linalg.solve(M_, rhs_)[0]</span>
+<span class="line" id="L226"><a href="#L226"> 226</a>         return out</span>
+<span class="line" id="L227"><a href="#L227"> 227</a>     Zg0 = _cplane(np.c_[ge.ravel(), gn.ravel()]).reshape(GH, GW)</span>
+<span class="line" id="L228"><a href="#L228"> 228</a>     fx_ = (TE - E0) / HR; fy_ = (N1 - TN) / HR; x0_ = np.clip(np.floor(fx_).astype(int), 0, GW - 2); y0_ = np.clip(np.floor(fy_).astype(int), 0, GH - 2)</span>
+<span class="line" id="L229"><a href="#L229"> 229</a>     ax_ = fx_ - x0_; ay_ = fy_ - y0_</span>
+<span class="line" id="L230"><a href="#L230"> 230</a>     Zinit = (Zg0[y0_, x0_] * (1 - ax_) * (1 - ay_) + Zg0[y0_, x0_ + 1] * ax_ * (1 - ay_) + Zg0[y0_ + 1, x0_] * (1 - ax_) * ay_ + Zg0[y0_ + 1, x0_ + 1] * ax_ * ay_)</span>
+<span class="line" id="L231"><a href="#L231"> 231</a>     dd_ = (Zg0 - Zold)[gnear]</span>
+<span class="line" id="L232"><a href="#L232"> 232</a>     log(f&quot;zbase contact (sigma {args.zb_sigma} m, prior {args.zb_prior}, ridge {args.zb_ridge}): vs nearest vehicle plane p5/50/95 {np.round(np.percentile(dd_, [5, 50, 95]) * 100, 1).tolist()} cm&quot;)</span>
+<span class="line" id="L233"><a href="#L233"> 233</a> </span>
+<span class="line" id="L234"><a href="#L234"> 234</a> # ---- 每张照片的取样集合（初始位姿下）----</span>
+<span class="line" id="L235"><a href="#L235"> 235</a> FR_ = tuple(map(float, args.frange.split(&quot;,&quot;))); RR_ = tuple(map(float, args.rrange.split(&quot;,&quot;))); LC = tuple(map(float, args.latcam.split(&quot;,&quot;)))</span>
+<span class="line" id="L236"><a href="#L236"> 236</a> BOT = {2: 700, 1: 690}</span>
+<span class="line" id="L237"><a href="#L237"> 237</a> BOTV = BOT</span>
+<span class="line" id="L238"><a href="#L238"> 238</a> </span>
+<span class="line" id="L239"><a href="#L239"> 239</a> </span>
+<span class="line" id="L240"><a href="#L240"> 240</a> def w2c_np(v):</span>
+<span class="line" id="L241"><a href="#L241"> 241</a>     r, ch, fi = v</span>
+<span class="line" id="L242"><a href="#L242"> 242</a>     T = W0[fi]</span>
+<span class="line" id="L243"><a href="#L243"> 243</a>     if ch == 2:</span>
+<span class="line" id="L244"><a href="#L244"> 244</a>         return T[:3, :3], T[:3, 3]</span>
+<span class="line" id="L245"><a href="#L245"> 245</a>     R = R_rf @ T[:3, :3]; t = R_rf @ T[:3, 3] + t_rf</span>
+<span class="line" id="L246"><a href="#L246"> 246</a>     d = rshift.get(r, (0.0, 0.0)); t = t - R @ np.array([d[0], d[1], 0.0])     # X 先减去后摄平移</span>
+<span class="line" id="L247"><a href="#L247"> 247</a>     return R, t</span>
+<span class="line" id="L248"><a href="#L248"> 248</a> </span>
+<span class="line" id="L249"><a href="#L249"> 249</a> </span>
+<span class="line" id="L250"><a href="#L250"> 250</a> def proj_np(Xc):</span>
+<span class="line" id="L251"><a href="#L251"> 251</a>     &quot;&quot;&quot;相机系点 → 像素（OPENCV 畸变，与 torch 版 project 一致；不依赖 cv2.projectPoints 的版本差异）&quot;&quot;&quot;</span>
+<span class="line" id="L252"><a href="#L252"> 252</a>     x = Xc[:, 0] / Xc[:, 2]; y = Xc[:, 1] / Xc[:, 2]; r2 = x * x + y * y; rad = 1 + k1 * r2 + k2 * r2 * r2</span>
+<span class="line" id="L253"><a href="#L253"> 253</a>     xd = x * rad + 2 * p1 * x * y + p2 * (r2 + 2 * x * x); yd = y * rad + p1 * (r2 + 2 * y * y) + 2 * p2 * x * y</span>
+<span class="line" id="L254"><a href="#L254"> 254</a>     return np.c_[fx * xd + cx, fy * yd + cy]</span>
+<span class="line" id="L255"><a href="#L255"> 255</a> </span>
+<span class="line" id="L256"><a href="#L256"> 256</a> </span>
+<span class="line" id="L257"><a href="#L257"> 257</a> imgs, masks, shadows = [], [], []</span>
+<span class="line" id="L258"><a href="#L258"> 258</a> samp = []          # (texel idx, weight)</span>
+<span class="line" id="L259"><a href="#L259"> 259</a> samp_d = []        # 每个取样点离相机的水平地面距离（--opt_frange 用）</span>
+<span class="line" id="L260"><a href="#L260"> 260</a> for vi, v in enumerate(views):</span>
+<span class="line" id="L261"><a href="#L261"> 261</a>     r, ch, fi = v</span>
+<span class="line" id="L262"><a href="#L262"> 262</a>     R, t = w2c_np(v); Cc = -R.T @ t</span>
+<span class="line" id="L263"><a href="#L263"> 263</a>     ctr = Cc[:2]; rng = FR_ if ch == 2 else RR_</span>
+<span class="line" id="L264"><a href="#L264"> 264</a>     m = np.abs(TE - ctr[0]) &lt; rng[1] + 1</span>
+<span class="line" id="L265"><a href="#L265"> 265</a>     m &amp;= np.abs(TN - ctr[1]) &lt; rng[1] + 1</span>
+<span class="line" id="L266"><a href="#L266"> 266</a>     ii = np.nonzero(m)[0]</span>
+<span class="line" id="L267"><a href="#L267"> 267</a>     X = np.c_[TE[ii], TN[ii], Zinit[ii]]; Xc = X @ R.T + t</span>
+<span class="line" id="L268"><a href="#L268"> 268</a>     gd = np.linalg.norm(X[:, :2] - ctr, axis=1)</span>
+<span class="line" id="L269"><a href="#L269"> 269</a>     ax = R.T @ np.array([0, 0, 1.0]); ax2 = ax[:2] / max(np.linalg.norm(ax[:2]), 1e-9)</span>
+<span class="line" id="L270"><a href="#L270"> 270</a>     latd = np.abs((X[:, 0] - ctr[0]) * ax2[1] - (X[:, 1] - ctr[1]) * ax2[0])</span>
+<span class="line" id="L271"><a href="#L271"> 271</a>     ok = (Xc[:, 2] &gt; 0.5) &amp; (gd &gt; rng[0]) &amp; (gd &lt; rng[1]) &amp; (latd &lt; LC[0 if ch == 2 else 1])</span>
+<span class="line" id="L272"><a href="#L272"> 272</a>     ii = ii[ok]; Xc = Xc[ok]; dd = np.linalg.norm(Xc, axis=1)</span>
+<span class="line" id="L273"><a href="#L273"> 273</a>     uv = proj_np(Xc)</span>
+<span class="line" id="L274"><a href="#L274"> 274</a>     inb = (uv[:, 0] &gt; 2) &amp; (uv[:, 0] &lt; IMG_W - 3) &amp; (uv[:, 1] &gt; OSD_ROWS + 4) &amp; (uv[:, 1] &lt; BOT[ch] - 2)</span>
+<span class="line" id="L275"><a href="#L275"> 275</a>     lab = cv2.resize(cv2.imread(f&quot;{WORK}/seg/ch{ch}/r{r:05d}.png&quot;, 0), (IMG_W, IMG_H), interpolation=cv2.INTER_NEAREST)</span>
+<span class="line" id="L276"><a href="#L276"> 276</a>     good = (lab == 1) | ((lab == 3) &amp; (not args.no_shadow or args.data == &quot;marks&quot;))</span>
+<span class="line" id="L277"><a href="#L277"> 277</a>     good = cv2.erode(good.astype(np.uint8), np.ones((5, 5), np.uint8)) &gt; 0</span>
+<span class="line" id="L278"><a href="#L278"> 278</a>     u_i = np.clip(np.round(uv[:, 0]).astype(int), 0, IMG_W - 1); v_i = np.clip(np.round(uv[:, 1]).astype(int), 0, IMG_H - 1)</span>
+<span class="line" id="L279"><a href="#L279"> 279</a>     sel = inb &amp; good[v_i, u_i]</span>
+<span class="line" id="L280"><a href="#L280"> 280</a>     ii, dd = ii[sel], dd[sel]</span>
+<span class="line" id="L281"><a href="#L281"> 281</a>     w = (3.0 / dd) ** 2</span>
+<span class="line" id="L282"><a href="#L282"> 282</a>     samp.append((torch.tensor(ii, device=dev), torch.tensor(w, dtype=torch.float32, device=dev)))</span>
+<span class="line" id="L283"><a href="#L283"> 283</a>     samp_d.append(torch.tensor(np.linalg.norm(np.c_[TE[ii], TN[ii]] - ctr, axis=1), dtype=torch.float32, device=dev))</span>
+<span class="line" id="L284"><a href="#L284"> 284</a>     im = cv2.imread(photo_path(r, ch)).astype(np.float32)</span>
+<span class="line" id="L285"><a href="#L285"> 285</a>     if args.data == &quot;marks&quot;:</span>
+<span class="line" id="L286"><a href="#L286"> 286</a>         # 白色标线二值图（sn_marks.mark_bin），再高斯模糊 σ=mark_blur</span>
+<span class="line" id="L287"><a href="#L287"> 287</a>         pm = mark_bin(im, lab, OSD_ROWS, BOT[ch], v=args.mark_v).astype(np.float32)</span>
+<span class="line" id="L288"><a href="#L288"> 288</a>         pm = cv2.GaussianBlur(pm, (0, 0), args.mark_blur) * 255.0</span>
+<span class="line" id="L289"><a href="#L289"> 289</a>         im = np.repeat(pm[:, :, None], 3, 2)</span>
+<span class="line" id="L290"><a href="#L290"> 290</a>     elif args.blur &gt; 0:</span>
+<span class="line" id="L291"><a href="#L291"> 291</a>         im = cv2.GaussianBlur(im, (0, 0), args.blur)</span>
+<span class="line" id="L292"><a href="#L292"> 292</a>     imgs.append(torch.tensor(im[:, :, ::-1].copy(), device=dev).permute(2, 0, 1).half())   # RGB（marks 模式下三通道相同）</span>
+<span class="line" id="L293"><a href="#L293"> 293</a>     sm = cv2.GaussianBlur(((lab == 3) &amp; (ch == 1)).astype(np.float32), (0, 0), 6.0)       # 软影子掩膜（半影）</span>
+<span class="line" id="L294"><a href="#L294"> 294</a>     shadows.append(torch.tensor(sm, device=dev).half()[None])</span>
+<span class="line" id="L295"><a href="#L295"> 295</a> log(&quot;samples per view p50&quot;, int(np.median([len(s[0]) for s in samp])), &quot;total&quot;, sum(len(s[0]) for s in samp))</span>
+<span class="line" id="L296"><a href="#L296"> 296</a> # 每个高度格子的观测强度：Σ 权重 × (相机高 / 距离)（近处、俯视的观测对高度更敏感）</span>
+<span class="line" id="L297"><a href="#L297"> 297</a> INFO = np.zeros(GH * GW)</span>
+<span class="line" id="L298"><a href="#L298"> 298</a> cell_of = (np.round((N1 - TN) / HR).astype(int).clip(0, GH - 1) * GW + np.round((TE - E0) / HR).astype(int).clip(0, GW - 1))</span>
+<span class="line" id="L299"><a href="#L299"> 299</a> for vi, (ii, w) in enumerate(samp):</span>
+<span class="line" id="L300"><a href="#L300"> 300</a>     r_, ch_, fi_ = views[vi]</span>
+<span class="line" id="L301"><a href="#L301"> 301</a>     ii_ = ii.cpu().numpy(); w_ = w.cpu().numpy()</span>
+<span class="line" id="L302"><a href="#L302"> 302</a>     hcam = 1.5 if ch_ == 2 else 1.2</span>
+<span class="line" id="L303"><a href="#L303"> 303</a>     d_ = 3.0 / np.sqrt(np.maximum(w_, 1e-12))            # w = (3/d)^2 → d</span>
+<span class="line" id="L304"><a href="#L304"> 304</a>     np.add.at(INFO, cell_of[ii_], w_ * hcam / d_)</span>
+<span class="line" id="L305"><a href="#L305"> 305</a> INFO = INFO.reshape(GH, GW)</span>
+<span class="line" id="L306"><a href="#L306"> 306</a> med_info = np.median(INFO[INFO &gt; 0])</span>
+<span class="line" id="L307"><a href="#L307"> 307</a> PRIOR_W = np.clip(med_info / np.maximum(INFO, 1e-9), 0.2, 50.0)</span>
+<span class="line" id="L308"><a href="#L308"> 308</a> log(&quot;info: cells observed&quot;, int((INFO &gt; 0).sum()), &quot;median&quot;, round(float(med_info), 2), &quot;prior weight p10/50/90&quot;,</span>
+<span class="line" id="L309"><a href="#L309"> 309</a>     np.round(np.percentile(PRIOR_W[INFO &gt; 0], [10, 50, 90]), 2).tolist())</span>
+<span class="line" id="L310"><a href="#L310"> 310</a> </span>
+<span class="line" id="L311"><a href="#L311"> 311</a> # ---- 参数 ----</span>
+<span class="line" id="L312"><a href="#L312"> 312</a> tE = torch.tensor(TE, device=dev, dtype=torch.float64); tN = torch.tensor(TN, device=dev, dtype=torch.float64)</span>
+<span class="line" id="L313"><a href="#L313"> 313</a> gx_n = torch.tensor(((TE - E0) / HR) / (GW - 1) * 2 - 1, device=dev, dtype=torch.float32)</span>
+<span class="line" id="L314"><a href="#L314"> 314</a> gy_n = torch.tensor(((N1 - TN) / HR) / (GH - 1) * 2 - 1, device=dev, dtype=torch.float32)</span>
+<span class="line" id="L315"><a href="#L315"> 315</a> GRID_T = torch.stack([gx_n, gy_n], -1)[None, :, None, :]           # 1×NT×1×2</span>
+<span class="line" id="L316"><a href="#L316"> 316</a> Zg0_t = torch.tensor(Zg0, device=dev, dtype=torch.float32)</span>
+<span class="line" id="L317"><a href="#L317"> 317</a> dZ = torch.zeros((GH, GW), device=dev, requires_grad=True)</span>
+<span class="line" id="L318"><a href="#L318"> 318</a> omega = torch.zeros((NF, 3), device=dev, dtype=torch.float64, requires_grad=True)</span>
+<span class="line" id="L319"><a href="#L319"> 319</a> delta = torch.zeros((NF, 3), device=dev, dtype=torch.float64, requires_grad=True)</span>
+<span class="line" id="L320"><a href="#L320"> 320</a> rear_d = torch.zeros((NV, 3), device=dev, dtype=torch.float64, requires_grad=True)   # 后摄：dE, dN, dyaw（在初值之上）</span>
+<span class="line" id="L321"><a href="#L321"> 321</a> loga = torch.zeros((NV, 3), device=dev, requires_grad=True)</span>
+<span class="line" id="L322"><a href="#L322"> 322</a> bb = torch.zeros((NV, 3), device=dev, requires_grad=True)</span>
+<span class="line" id="L323"><a href="#L323"> 323</a> bgrid = torch.zeros((NV, 3, 3, 3), device=dev, requires_grad=True)               # 每张照片 3×3 的加性场（10 灰度为单位），叠加在 bb 上</span>
+<span class="line" id="L324"><a href="#L324"> 324</a> vig = torch.zeros((2, 1, 5, 9), device=dev, requires_grad=True)                     # 0 前、1 后（log 暗角）</span>
+<span class="line" id="L325"><a href="#L325"> 325</a> shad = torch.zeros((NV, 3), device=dev, requires_grad=True)</span>
+<span class="line" id="L326"><a href="#L326"> 326</a> rs = torch.zeros(2, device=dev, dtype=torch.float64, requires_grad=True)        # 0 前摄、1 后摄：整帧读出时间（秒）</span>
+<span class="line" id="L327"><a href="#L327"> 327</a> NRX, NRY = (int(x) for x in args.nonrigid.split(&quot;x&quot;)) if args.nonrigid else (2, 2)</span>
+<span class="line" id="L328"><a href="#L328"> 328</a> nrg = torch.zeros((NV, 2, NRY, NRX), device=dev, requires_grad=True)             # 每张照片的像素位移控制点（u、v，像素）</span>
+<span class="line" id="L329"><a href="#L329"> 329</a> rext_w = torch.zeros(3, device=dev, dtype=torch.float64, requires_grad=True)       # 后摄外参修正：旋转（后摄相机系，弧度）</span>
+<span class="line" id="L330"><a href="#L330"> 330</a> rext_t = torch.zeros(3, device=dev, dtype=torch.float64, requires_grad=True)       # 后摄外参修正：平移（后摄相机系，米）</span>
+<span class="line" id="L331"><a href="#L331"> 331</a> VEL_t = torch.tensor(VEL, device=dev, dtype=torch.float64)</span>
+<span class="line" id="L332"><a href="#L332"> 332</a> W0_t = torch.tensor(W0, device=dev, dtype=torch.float64)</span>
+<span class="line" id="L333"><a href="#L333"> 333</a> R_rf_t = torch.tensor(R_rf, device=dev, dtype=torch.float64); t_rf_t = torch.tensor(t_rf, device=dev, dtype=torch.float64)</span>
+<span class="line" id="L334"><a href="#L334"> 334</a> rinit = torch.tensor([rshift.get(r, (0.0, 0.0)) + (0.0,) if ch == 1 else (0.0, 0.0, 0.0) for r, ch, fi in views], device=dev, dtype=torch.float64)</span>
+<span class="line" id="L335"><a href="#L335"> 335</a> </span>
+<span class="line" id="L336"><a href="#L336"> 336</a> </span>
+<span class="line" id="L337"><a href="#L337"> 337</a> def so3(w):</span>
+<span class="line" id="L338"><a href="#L338"> 338</a>     th = torch.linalg.norm(w) + 1e-12; kx = w / th</span>
+<span class="line" id="L339"><a href="#L339"> 339</a>     Kx = torch.zeros((3, 3), dtype=w.dtype, device=w.device)</span>
+<span class="line" id="L340"><a href="#L340"> 340</a>     Kx[0, 1], Kx[0, 2], Kx[1, 0], Kx[1, 2], Kx[2, 0], Kx[2, 1] = -kx[2], kx[1], kx[2], -kx[0], -kx[1], kx[0]</span>
+<span class="line" id="L341"><a href="#L341"> 341</a>     return torch.eye(3, dtype=w.dtype, device=w.device) + torch.sin(th) * Kx + (1 - torch.cos(th)) * Kx @ Kx</span>
+<span class="line" id="L342"><a href="#L342"> 342</a> </span>
+<span class="line" id="L343"><a href="#L343"> 343</a> </span>
+<span class="line" id="L344"><a href="#L344"> 344</a> R_vf_t = torch.tensor(R_vf, device=dev, dtype=torch.float64); t_vf_t = torch.tensor(t_vf, device=dev, dtype=torch.float64)</span>
+<span class="line" id="L345"><a href="#L345"> 345</a> </span>
+<span class="line" id="L346"><a href="#L346"> 346</a> </span>
+<span class="line" id="L347"><a href="#L347"> 347</a> def so3_b(w):   # 批量 Rodrigues：N×3 → N×3×3</span>
+<span class="line" id="L348"><a href="#L348"> 348</a>     th = torch.linalg.norm(w, dim=1, keepdim=True) + 1e-12; k = w / th</span>
+<span class="line" id="L349"><a href="#L349"> 349</a>     Kx = torch.zeros((len(w), 3, 3), dtype=w.dtype, device=w.device)</span>
+<span class="line" id="L350"><a href="#L350"> 350</a>     Kx[:, 0, 1], Kx[:, 0, 2], Kx[:, 1, 0], Kx[:, 1, 2], Kx[:, 2, 0], Kx[:, 2, 1] = -k[:, 2], k[:, 1], k[:, 2], -k[:, 0], -k[:, 1], k[:, 0]</span>
+<span class="line" id="L351"><a href="#L351"> 351</a>     st = torch.sin(th)[:, :, None]; ct = torch.cos(th)[:, :, None]</span>
+<span class="line" id="L352"><a href="#L352"> 352</a>     return torch.eye(3, dtype=w.dtype, device=w.device)[None] + st * Kx + (1 - ct) * Kx @ Kx</span>
+<span class="line" id="L353"><a href="#L353"> 353</a> </span>
+<span class="line" id="L354"><a href="#L354"> 354</a> </span>
+<span class="line" id="L355"><a href="#L355"> 355</a> def zs_at(E, N):   # 路面高度（高度网格双线性）</span>
+<span class="line" id="L356"><a href="#L356"> 356</a>     g = torch.stack([(((E - E0) / HR) / (GW - 1) * 2 - 1), (((N1 - N) / HR) / (GH - 1) * 2 - 1)], -1).float()[None, :, None, :]</span>
+<span class="line" id="L357"><a href="#L357"> 357</a>     return Fnn.grid_sample((Zg0_t + dZ)[None, None], g, mode=&quot;bilinear&quot;, align_corners=True)[0, 0, :, 0].double()</span>
+<span class="line" id="L358"><a href="#L358"> 358</a> </span>
+<span class="line" id="L359"><a href="#L359"> 359</a> </span>
+<span class="line" id="L360"><a href="#L360"> 360</a> def sv_terms():</span>
+<span class="line" id="L361"><a href="#L361"> 361</a>     &quot;&quot;&quot;每站：车体原点离路面高差、车头方向与路面法向的点积（≈ 相对路面的俯仰 rad）、车右方向与法向的点积（≈ 横滚）&quot;&quot;&quot;</span>
+<span class="line" id="L362"><a href="#L362"> 362</a>     S_ = so3_b(omega); Rf = S_ @ W0_t[:, :3, :3]</span>
+<span class="line" id="L363"><a href="#L363"> 363</a>     tf = (W0_t[:, :3, 3] if args.rot_world else (S_ @ W0_t[:, :3, 3:])[..., 0]) + delta</span>
+<span class="line" id="L364"><a href="#L364"> 364</a>     Rv = R_vf_t[None] @ Rf; tv = (R_vf_t[None] @ tf[..., None])[..., 0] + t_vf_t[None]</span>
+<span class="line" id="L365"><a href="#L365"> 365</a>     RvT = Rv.transpose(1, 2); p0 = -(RvT @ tv[..., None])[..., 0]</span>
+<span class="line" id="L366"><a href="#L366"> 366</a>     fw = RvT[:, :, 1]; rt = RvT[:, :, 0]</span>
+<span class="line" id="L367"><a href="#L367"> 367</a>     zc = zs_at(p0[:, 0], p0[:, 1]); h = 0.5</span>
+<span class="line" id="L368"><a href="#L368"> 368</a>     gE = (zs_at(p0[:, 0] + h, p0[:, 1]) - zs_at(p0[:, 0] - h, p0[:, 1])) / (2 * h)</span>
+<span class="line" id="L369"><a href="#L369"> 369</a>     gN = (zs_at(p0[:, 0], p0[:, 1] + h) - zs_at(p0[:, 0], p0[:, 1] - h)) / (2 * h)</span>
+<span class="line" id="L370"><a href="#L370"> 370</a>     ns = torch.stack([-gE, -gN, torch.ones_like(gE)], -1); ns = ns / torch.linalg.norm(ns, dim=1, keepdim=True)</span>
+<span class="line" id="L371"><a href="#L371"> 371</a>     return p0[:, 2] - zc, (fw * ns).sum(1), (rt * ns).sum(1)</span>
+<span class="line" id="L372"><a href="#L372"> 372</a> </span>
+<span class="line" id="L373"><a href="#L373"> 373</a> </span>
+<span class="line" id="L374"><a href="#L374"> 374</a> def heights(ii):</span>
+<span class="line" id="L375"><a href="#L375"> 375</a>     zg = (Zg0_t + dZ)[None, None]</span>
+<span class="line" id="L376"><a href="#L376"> 376</a>     z = Fnn.grid_sample(zg, GRID_T[:, ii], mode=&quot;bilinear&quot;, align_corners=True)[0, 0, :, 0]</span>
+<span class="line" id="L377"><a href="#L377"> 377</a>     return z.double()</span>
+<span class="line" id="L378"><a href="#L378"> 378</a> </span>
+<span class="line" id="L379"><a href="#L379"> 379</a> </span>
+<span class="line" id="L380"><a href="#L380"> 380</a> def project(vi, ii):</span>
+<span class="line" id="L381"><a href="#L381"> 381</a>     r, ch, fi = views[vi]</span>
+<span class="line" id="L382"><a href="#L382"> 382</a>     S_ = so3(omega[fi]); Rf = S_ @ W0_t[fi, :3, :3]</span>
+<span class="line" id="L383"><a href="#L383"> 383</a>     tf = (W0_t[fi, :3, 3] if args.rot_world else S_ @ W0_t[fi, :3, 3]) + delta[fi]   # 绕相机中心：t&#x27; = S·t，相机位置不随转角动</span>
+<span class="line" id="L384"><a href="#L384"> 384</a>     X = torch.stack([tE[ii], tN[ii], heights(ii)], -1)</span>
+<span class="line" id="L385"><a href="#L385"> 385</a>     if ch == 2:</span>
+<span class="line" id="L386"><a href="#L386"> 386</a>         R, t = Rf, tf; Xw = X</span>
+<span class="line" id="L387"><a href="#L387"> 387</a>     else:</span>
+<span class="line" id="L388"><a href="#L388"> 388</a>         R = R_rf_t @ Rf; t = R_rf_t @ tf + t_rf_t</span>
+<span class="line" id="L389"><a href="#L389"> 389</a>         if args.rear_ext:</span>
+<span class="line" id="L390"><a href="#L390"> 390</a>             Rx_ = so3(rext_w); R = Rx_ @ R; t = Rx_ @ t + rext_t</span>
+<span class="line" id="L391"><a href="#L391"> 391</a>         d = rinit[vi] + rear_d[vi]</span>
+<span class="line" id="L392"><a href="#L392"> 392</a>         # 后摄修正：绕相机中心的偏航 + 水平平移（作用在世界点上）</span>
+<span class="line" id="L393"><a href="#L393"> 393</a>         Cc = -R.T @ t</span>
+<span class="line" id="L394"><a href="#L394"> 394</a>         cyw, syw = torch.cos(d[2]), torch.sin(d[2])</span>
+<span class="line" id="L395"><a href="#L395"> 395</a>         Xw = X.clone()</span>
+<span class="line" id="L396"><a href="#L396"> 396</a>         x0 = X[:, 0] - d[0] - Cc[0]; y0 = X[:, 1] - d[1] - Cc[1]</span>
+<span class="line" id="L397"><a href="#L397"> 397</a>         Xw = torch.stack([cyw * x0 + syw * y0 + Cc[0], -syw * x0 + cyw * y0 + Cc[1], X[:, 2]], -1)</span>
+<span class="line" id="L398"><a href="#L398"> 398</a>     Xc = Xw @ R.T + t</span>
+<span class="line" id="L399"><a href="#L399"> 399</a>     if args.rolling:</span>
+<span class="line" id="L400"><a href="#L400"> 400</a>         # 先按名义位姿求像素行 → 该行相对画面中心行的拍摄时刻差 τ → 世界点相对相机平移 −v·τ，再投一次</span>
+<span class="line" id="L401"><a href="#L401"> 401</a>         yr = (Xc[:, 1] / Xc[:, 2]) * fy + cy</span>
+<span class="line" id="L402"><a href="#L402"> 402</a>         tau = (yr - IMG_H / 2) / IMG_H * rs[0 if ch == 2 else 1]</span>
+<span class="line" id="L403"><a href="#L403"> 403</a>         Xc = (Xw - tau[:, None] * VEL_t[fi][None]) @ R.T + t</span>
+<span class="line" id="L404"><a href="#L404"> 404</a>     x = Xc[:, 0] / Xc[:, 2]; y = Xc[:, 1] / Xc[:, 2]</span>
+<span class="line" id="L405"><a href="#L405"> 405</a>     r2 = x * x + y * y; rad = 1 + k1 * r2 + k2 * r2 * r2</span>
+<span class="line" id="L406"><a href="#L406"> 406</a>     xd = x * rad + 2 * p1 * x * y + p2 * (r2 + 2 * x * x); yd = y * rad + p1 * (r2 + 2 * y * y) + 2 * p2 * x * y</span>
+<span class="line" id="L407"><a href="#L407"> 407</a>     u = fx * xd + cx; v = fy * yd + cy</span>
+<span class="line" id="L408"><a href="#L408"> 408</a>     u = u.float(); v = v.float()</span>
+<span class="line" id="L409"><a href="#L409"> 409</a>     if args.nonrigid:</span>
+<span class="line" id="L410"><a href="#L410"> 410</a>         # 画面上（路面区：行 OSD..BOT）的双线性形变：控制点覆盖整幅宽、行从 0.3H 到 BOT</span>
+<span class="line" id="L411"><a href="#L411"> 411</a>         gu = (u / IMG_W) * 2 - 1; gv = ((v - 0.3 * IMG_H) / (BOTV[ch] - 0.3 * IMG_H)) * 2 - 1</span>
+<span class="line" id="L412"><a href="#L412"> 412</a>         d = Fnn.grid_sample(nrg[vi][None], torch.stack([gu, gv], -1)[None, :, None, :], mode=&quot;bilinear&quot;, padding_mode=&quot;border&quot;, align_corners=True)[0, :, :, 0]</span>
+<span class="line" id="L413"><a href="#L413"> 413</a>         u = u + d[0]; v = v + d[1]</span>
+<span class="line" id="L414"><a href="#L414"> 414</a>     return u, v</span>
+<span class="line" id="L415"><a href="#L415"> 415</a> </span>
+<span class="line" id="L416"><a href="#L416"> 416</a> </span>
+<span class="line" id="L417"><a href="#L417"> 417</a> def observe(vi, ii):</span>
+<span class="line" id="L418"><a href="#L418"> 418</a>     &quot;&quot;&quot;返回该照片对这些纹理点给出的&#x27;纹理估计&#x27; pred_T（去掉曝光/暗角/影子）、原始取样、有效&quot;&quot;&quot;</span>
+<span class="line" id="L419"><a href="#L419"> 419</a>     r, ch, fi = views[vi]</span>
+<span class="line" id="L420"><a href="#L420"> 420</a>     u, v = project(vi, ii)</span>
+<span class="line" id="L421"><a href="#L421"> 421</a>     g = torch.stack([(u + 0.5) / IMG_W * 2 - 1, (v + 0.5) / IMG_H * 2 - 1], -1)[None, :, None, :]</span>
+<span class="line" id="L422"><a href="#L422"> 422</a>     I = Fnn.grid_sample(imgs[vi][None].float(), g, mode=&quot;bilinear&quot;, align_corners=False)[0, :, :, 0].T     # N×3</span>
+<span class="line" id="L423"><a href="#L423"> 423</a>     V = torch.exp(Fnn.grid_sample(vig[0 if ch == 2 else 1][None], g, mode=&quot;bilinear&quot;, align_corners=True)[0, 0, :, 0])</span>
+<span class="line" id="L424"><a href="#L424"> 424</a>     S = Fnn.grid_sample(shadows[vi][None].float(), g, mode=&quot;bilinear&quot;, align_corners=False)[0, 0, :, 0]</span>
+<span class="line" id="L425"><a href="#L425"> 425</a>     gain = torch.exp(loga[vi])[None] * V[:, None] * torch.exp(shad[vi][None] * S[:, None])</span>
+<span class="line" id="L426"><a href="#L426"> 426</a>     add = bb[vi][None]</span>
+<span class="line" id="L427"><a href="#L427"> 427</a>     if args.glare_grid:</span>
+<span class="line" id="L428"><a href="#L428"> 428</a>         add = add + Fnn.grid_sample(bgrid[vi][None], g, mode=&quot;bilinear&quot;, padding_mode=&quot;border&quot;, align_corners=True)[0, :, :, 0].T</span>
+<span class="line" id="L429"><a href="#L429"> 429</a>     pred = (I - 10.0 * add) / gain       # bb 以 10 个灰度为单位</span>
+<span class="line" id="L430"><a href="#L430"> 430</a>     valid = (u &gt; 1) &amp; (u &lt; IMG_W - 2) &amp; (v &gt; OSD_ROWS + 3) &amp; (v &lt; IMG_H - 2)</span>
+<span class="line" id="L431"><a href="#L431"> 431</a>     return pred, valid</span>
+<span class="line" id="L432"><a href="#L432"> 432</a> </span>
+<span class="line" id="L433"><a href="#L433"> 433</a> </span>
+<span class="line" id="L434"><a href="#L434"> 434</a> def update_T():</span>
+<span class="line" id="L435"><a href="#L435"> 435</a>     with torch.no_grad():</span>
+<span class="line" id="L436"><a href="#L436"> 436</a>         acc = torch.zeros((NT, 3), device=dev); ws = torch.zeros(NT, device=dev)</span>
+<span class="line" id="L437"><a href="#L437"> 437</a>         for vi in range(NV):</span>
+<span class="line" id="L438"><a href="#L438"> 438</a>             ii, w = samp[vi]</span>
+<span class="line" id="L439"><a href="#L439"> 439</a>             pred, ok = observe(vi, ii)</span>
+<span class="line" id="L440"><a href="#L440"> 440</a>             ww = w * ok</span>
+<span class="line" id="L441"><a href="#L441"> 441</a>             acc.index_add_(0, ii, pred * ww[:, None]); ws.index_add_(0, ii, ww)</span>
+<span class="line" id="L442"><a href="#L442"> 442</a>         return acc / ws.clamp_min(1e-6)[:, None], ws</span>
+<span class="line" id="L443"><a href="#L443"> 443</a> </span>
+<span class="line" id="L444"><a href="#L444"> 444</a> </span>
+<span class="line" id="L445"><a href="#L445"> 445</a> if args.init:</span>
+<span class="line" id="L446"><a href="#L446"> 446</a>     J = np.load(f&quot;{OUT}/joint_{args.init}.npz&quot;)</span>
+<span class="line" id="L447"><a href="#L447"> 447</a>     with torch.no_grad():</span>
+<span class="line" id="L448"><a href="#L448"> 448</a>         tt = lambda k: torch.tensor(J[k], device=dev)</span>
+<span class="line" id="L449"><a href="#L449"> 449</a>         omega.copy_(tt(&quot;omega&quot;)); delta.copy_(tt(&quot;delta&quot;)); rear_d.copy_(tt(&quot;rear_d&quot;) - rinit)</span>
+<span class="line" id="L450"><a href="#L450"> 450</a>         rc_old = bool(J[&quot;rot_center&quot;]) if &quot;rot_center&quot; in J.files else False</span>
+<span class="line" id="L451"><a href="#L451"> 451</a>         if rc_old != (not args.rot_world):   # 约定不同：保持同一个相机位姿，换算平移量</span>
+<span class="line" id="L452"><a href="#L452"> 452</a>             for fi_ in range(NF):</span>
+<span class="line" id="L453"><a href="#L453"> 453</a>                 S_ = so3(omega[fi_]); t0_ = W0_t[fi_, :3, 3]</span>
+<span class="line" id="L454"><a href="#L454"> 454</a>                 tf_ = (S_ @ t0_ if rc_old else t0_) + delta[fi_]</span>
+<span class="line" id="L455"><a href="#L455"> 455</a>                 delta[fi_] = tf_ - (t0_ if args.rot_world else S_ @ t0_)</span>
+<span class="line" id="L456"><a href="#L456"> 456</a>             log(f&quot;init: rotation convention converted ({&#x27;center&#x27; if rc_old else &#x27;world&#x27;} -&gt; {&#x27;world&#x27; if args.rot_world else &#x27;center&#x27;})&quot;)</span>
+<span class="line" id="L457"><a href="#L457"> 457</a>         loga.copy_(tt(&quot;loga&quot;)); bb.copy_(tt(&quot;bb&quot;)); vig.copy_(tt(&quot;vig&quot;)); shad.copy_(tt(&quot;shad&quot;))</span>
+<span class="line" id="L458"><a href="#L458"> 458</a>         dZ.copy_(tt(&quot;Zg&quot;) - Zg0_t)</span>
+<span class="line" id="L459"><a href="#L459"> 459</a>         if &quot;rs&quot; in J.files: rs.copy_(tt(&quot;rs&quot;))</span>
+<span class="line" id="L460"><a href="#L460"> 460</a>         if &quot;rext_w&quot; in J.files: rext_w.copy_(tt(&quot;rext_w&quot;)); rext_t.copy_(tt(&quot;rext_t&quot;))</span>
+<span class="line" id="L461"><a href="#L461"> 461</a>         if &quot;bgrid&quot; in J.files: bgrid.copy_(tt(&quot;bgrid&quot;))</span>
+<span class="line" id="L462"><a href="#L462"> 462</a>         if &quot;nrg&quot; in J.files and J[&quot;nrg&quot;].shape == tuple(nrg.shape): nrg.copy_(tt(&quot;nrg&quot;))</span>
+<span class="line" id="L463"><a href="#L463"> 463</a>     log(&quot;init from&quot;, args.init)</span>
+<span class="line" id="L464"><a href="#L464"> 464</a> params = []</span>
+<span class="line" id="L465"><a href="#L465"> 465</a> if args.freeze_geom:</span>
+<span class="line" id="L466"><a href="#L466"> 466</a>     args.no_height = True; args.no_pose = True</span>
+<span class="line" id="L467"><a href="#L467"> 467</a> if not args.no_height: params.append({&quot;params&quot;: [dZ], &quot;lr&quot;: 2e-3})</span>
+<span class="line" id="L468"><a href="#L468"> 468</a> if not args.no_pose: params += [{&quot;params&quot;: [omega], &quot;lr&quot;: args.lr_rot}, {&quot;params&quot;: [delta], &quot;lr&quot;: 2e-3}, {&quot;params&quot;: [rear_d], &quot;lr&quot;: 2e-3}]</span>
+<span class="line" id="L469"><a href="#L469"> 469</a> if not args.no_expo: params += [{&quot;params&quot;: [loga, bb], &quot;lr&quot;: 3e-3}, {&quot;params&quot;: [vig], &quot;lr&quot;: 3e-3}]</span>
+<span class="line" id="L470"><a href="#L470"> 470</a> if not args.no_shadow: params.append({&quot;params&quot;: [shad], &quot;lr&quot;: 1e-2})</span>
+<span class="line" id="L471"><a href="#L471"> 471</a> if args.rolling: params.append({&quot;params&quot;: [rs], &quot;lr&quot;: 1e-3})</span>
+<span class="line" id="L472"><a href="#L472"> 472</a> if args.nonrigid and not args.freeze_geom: params.append({&quot;params&quot;: [nrg], &quot;lr&quot;: 0.05})</span>
+<span class="line" id="L473"><a href="#L473"> 473</a> if args.rear_ext and not args.freeze_geom: params += [{&quot;params&quot;: [rext_w], &quot;lr&quot;: 2e-5}, {&quot;params&quot;: [rext_t], &quot;lr&quot;: 1e-3}]</span>
+<span class="line" id="L474"><a href="#L474"> 474</a> if args.glare_grid: params.append({&quot;params&quot;: [bgrid], &quot;lr&quot;: 3e-3})</span>
+<span class="line" id="L475"><a href="#L475"> 475</a> opt = torch.optim.Adam(params)</span>
+<span class="line" id="L476"><a href="#L476"> 476</a> PRIOR_W_t = torch.tensor(PRIOR_W, device=dev, dtype=torch.float32); gnear_t = torch.tensor(gnear, device=dev)</span>
+<span class="line" id="L477"><a href="#L477"> 477</a> WTOT = float(sum(float(w.sum()) for _, w in samp))</span>
+<span class="line" id="L478"><a href="#L478"> 478</a> t0 = time.time()</span>
+<span class="line" id="L479"><a href="#L479"> 479</a> hist = []</span>
+<span class="line" id="L480"><a href="#L480"> 480</a> for it in range(args.iters):</span>
+<span class="line" id="L481"><a href="#L481"> 481</a>     T, ws = update_T()</span>
+<span class="line" id="L482"><a href="#L482"> 482</a>     for st in range(args.steps):</span>
+<span class="line" id="L483"><a href="#L483"> 483</a>         opt.zero_grad()</span>
+<span class="line" id="L484"><a href="#L484"> 484</a>         tot = 0.0</span>
+<span class="line" id="L485"><a href="#L485"> 485</a>         for vi in range(NV):                      # 逐张反传，免得整张计算图占满显存</span>
+<span class="line" id="L486"><a href="#L486"> 486</a>             ii, w = samp[vi]</span>
+<span class="line" id="L487"><a href="#L487"> 487</a>             if args.sub &lt; 1:</span>
+<span class="line" id="L488"><a href="#L488"> 488</a>                 ks = torch.rand(len(ii), device=dev) &lt; args.sub</span>
+<span class="line" id="L489"><a href="#L489"> 489</a>                 if args.opt_frange and views[vi][1] == 2:</span>
+<span class="line" id="L490"><a href="#L490"> 490</a>                     ks &amp;= samp_d[vi] &lt; float(args.opt_frange.split(&quot;,&quot;)[1])</span>
+<span class="line" id="L491"><a href="#L491"> 491</a>                 ii, w = ii[ks], w[ks] / args.sub</span>
+<span class="line" id="L492"><a href="#L492"> 492</a>             pred, ok = observe(vi, ii)</span>
+<span class="line" id="L493"><a href="#L493"> 493</a>             res = pred - T[ii]</span>
+<span class="line" id="L494"><a href="#L494"> 494</a>             l = ((torch.sqrt(res * res + 4.0) - 2.0).sum(1) * w * ok).sum() / WTOT</span>
+<span class="line" id="L495"><a href="#L495"> 495</a>             l.backward(); tot += float(l)</span>
+<span class="line" id="L496"><a href="#L496"> 496</a>         loss = torch.tensor(tot)</span>
+<span class="line" id="L497"><a href="#L497"> 497</a>         reg = torch.zeros((), device=dev)</span>
+<span class="line" id="L498"><a href="#L498"> 498</a>         if not args.no_height:</span>
+<span class="line" id="L499"><a href="#L499"> 499</a>             z = Zg0_t + dZ</span>
+<span class="line" id="L500"><a href="#L500"> 500</a>             lap = z[1:-1, 1:-1] * 4 - z[:-2, 1:-1] - z[2:, 1:-1] - z[1:-1, :-2] - z[1:-1, 2:]</span>
+<span class="line" id="L501"><a href="#L501"> 501</a>             if args.info_prior:</span>
+<span class="line" id="L502"><a href="#L502"> 502</a>                 PW = PRIOR_W_t</span>
+<span class="line" id="L503"><a href="#L503"> 503</a>                 reg = reg + args.lam_smooth * ((lap ** 2) * torch.sqrt(PW[1:-1, 1:-1]))[gnear_t[1:-1, 1:-1]].mean() + args.lam_z0 * ((dZ ** 2) * PW)[gnear_t].mean()</span>
+<span class="line" id="L504"><a href="#L504"> 504</a>             else:</span>
+<span class="line" id="L505"><a href="#L505"> 505</a>                 reg = reg + args.lam_smooth * (lap[gnear[1:-1, 1:-1]] ** 2).mean() + args.lam_z0 * (dZ[gnear] ** 2).mean()</span>
+<span class="line" id="L506"><a href="#L506"> 506</a>         if args.sv_prior and not args.no_pose:</span>
+<span class="line" id="L507"><a href="#L507"> 507</a>             sv_ = [float(x) for x in args.sv_prior.split(&quot;,&quot;)]</span>
+<span class="line" id="L508"><a href="#L508"> 508</a>             dh_, dp_, dr_ = sv_terms()</span>
+<span class="line" id="L509"><a href="#L509"> 509</a>             reg = reg + ((dh_ / sv_[0]) ** 2).mean() + ((dp_ / np.radians(sv_[1])) ** 2).mean()</span>
+<span class="line" id="L510"><a href="#L510"> 510</a>             if len(sv_) &gt; 2 and sv_[2] &gt; 0:</span>
+<span class="line" id="L511"><a href="#L511"> 511</a>                 reg = reg + ((dr_ / np.radians(sv_[2])) ** 2).mean()</span>
+<span class="line" id="L512"><a href="#L512"> 512</a>         if not args.no_pose:</span>
+<span class="line" id="L513"><a href="#L513"> 513</a>             reg = reg + args.rot_reg * (omega ** 2).mean() + 1.0 * (delta ** 2).mean() + args.rear_d_prior * (rear_d[:, :2] ** 2).mean() + 1e2 * args.rear_d_prior * (rear_d[:, 2] ** 2).mean()</span>
+<span class="line" id="L514"><a href="#L514"> 514</a>         if args.rear_ext:</span>
+<span class="line" id="L515"><a href="#L515"> 515</a>             reg = reg + 1e2 * (rext_w ** 2).sum() + 1.0 * (rext_t ** 2).sum()</span>
+<span class="line" id="L516"><a href="#L516"> 516</a>         if args.glare_grid:   # 加性场：幅度 + 平滑；眩光只会加亮 → 负值多罚</span>
+<span class="line" id="L517"><a href="#L517"> 517</a>             reg = reg + 0.05 * (bgrid ** 2).mean() + 0.2 * (((bgrid[..., 1:] - bgrid[..., :-1]) ** 2).mean() + ((bgrid[..., 1:, :] - bgrid[..., :-1, :]) ** 2).mean()) + 0.5 * ((-bgrid - bb[:, :, None, None]).clamp_min(0) ** 2).mean()</span>
+<span class="line" id="L518"><a href="#L518"> 518</a>         if args.nonrigid:   # 形变幅度（像素²）+ 相邻控制点差</span>
+<span class="line" id="L519"><a href="#L519"> 519</a>             reg = reg + args.lam_nr * 1e-2 * ((nrg ** 2).mean() + 4 * ((nrg[..., 1:] - nrg[..., :-1]) ** 2).mean() + 4 * ((nrg[..., 1:, :] - nrg[..., :-1, :]) ** 2).mean())</span>
+<span class="line" id="L520"><a href="#L520"> 520</a>         if not args.no_expo:</span>
+<span class="line" id="L521"><a href="#L521"> 521</a>             reg = reg + 10.0 * (loga[:NF].mean(0) ** 2).sum() + 0.1 * (bb ** 2).mean() + 1.0 * (vig[:, :, 2, 4] ** 2).sum()</span>
+<span class="line" id="L522"><a href="#L522"> 522</a>             if args.vig_reg &gt; 0:   # 暗角网格：幅度 + 相邻格差（没数据的边缘格不许外推得太离谱）</span>
+<span class="line" id="L523"><a href="#L523"> 523</a>                 reg = reg + args.vig_reg * ((vig ** 2).mean() + 10 * ((vig[..., 1:] - vig[..., :-1]) ** 2).mean() + 10 * ((vig[..., 1:, :] - vig[..., :-1, :]) ** 2).mean())</span>
+<span class="line" id="L524"><a href="#L524"> 524</a>         if reg.requires_grad:</span>
+<span class="line" id="L525"><a href="#L525"> 525</a>             reg.backward()</span>
+<span class="line" id="L526"><a href="#L526"> 526</a>         opt.step()</span>
+<span class="line" id="L527"><a href="#L527"> 527</a>     hist.append(float(loss))</span>
+<span class="line" id="L528"><a href="#L528"> 528</a>     if args.sv_prior:</span>
+<span class="line" id="L529"><a href="#L529"> 529</a>         with torch.no_grad():</span>
+<span class="line" id="L530"><a href="#L530"> 530</a>             _h, _p, _r = sv_terms()</span>
+<span class="line" id="L531"><a href="#L531"> 531</a>         log(f&quot;   sv: height off p50/p90 {np.percentile(_h.abs().cpu(), 50)*100:.1f}/{np.percentile(_h.abs().cpu(), 90)*100:.1f} cm  pitch p90 {np.degrees(np.percentile(_p.abs().cpu(), 90)):.2f}°  roll p90 {np.degrees(np.percentile(_r.abs().cpu(), 90)):.2f}°&quot;)</span>
+<span class="line" id="L532"><a href="#L532"> 532</a>     log(f&quot;iter {it:2d} loss {float(loss):.4f} reg {float(reg):.4f}  dZ |p50| {dZ.detach()[torch.tensor(gnear, device=dev)].abs().median():.3f} &quot;</span>
+<span class="line" id="L533"><a href="#L533"> 533</a>         f&quot;omega deg p90 {np.degrees(np.percentile(omega.detach().norm(dim=1).cpu(), 90)):.3f}  delta p90 {np.percentile(delta.detach().norm(dim=1).cpu(), 90):.3f} &quot;</span>
+<span class="line" id="L534"><a href="#L534"> 534</a>         f&quot;rear_d p90 {np.percentile(rear_d.detach()[NF:, :2].norm(dim=1).cpu(), 90) if NV &gt; NF else 0:.3f}  shad p50 {shad.detach()[NF:].median():.2f}  rs ms {np.round(rs.detach().cpu().numpy()*1e3, 1).tolist()}  nr px p90 {float(nrg.detach().abs().flatten().quantile(0.9)):.2f}  rext deg {np.round(np.degrees(rext_w.detach().cpu().numpy()), 3).tolist()} m {np.round(rext_t.detach().cpu().numpy(), 3).tolist()}  [{time.time()-t0:.0f}s]&quot;)</span>
+<span class="line" id="L535"><a href="#L535"> 535</a> T, ws = update_T()</span>
+<span class="line" id="L536"><a href="#L536"> 536</a> # ---- 评估：逐对照片投影后的残余错位（DIS 光流，米）----</span>
+<span class="line" id="L537"><a href="#L537"> 537</a> with torch.no_grad():</span>
+<span class="line" id="L538"><a href="#L538"> 538</a>     preds = []</span>
+<span class="line" id="L539"><a href="#L539"> 539</a>     for vi in range(NV):</span>
+<span class="line" id="L540"><a href="#L540"> 540</a>         ii, w = samp[vi]; pr, ok = observe(vi, ii)</span>
+<span class="line" id="L541"><a href="#L541"> 541</a>         g = (pr * torch.tensor([0.299, 0.587, 0.114], device=dev)).sum(1)</span>
+<span class="line" id="L542"><a href="#L542"> 542</a>         preds.append((ii[ok].cpu().numpy(), g[ok].cpu().numpy()))</span>
+<span class="line" id="L543"><a href="#L543"> 543</a> iyx = np.c_[iy, ix]</span>
+<span class="line" id="L544"><a href="#L544"> 544</a> dis = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_MEDIUM)</span>
+<span class="line" id="L545"><a href="#L545"> 545</a> pairs = []</span>
+<span class="line" id="L546"><a href="#L546"> 546</a> pair_rows = []</span>
+<span class="line" id="L547"><a href="#L547"> 547</a> order = sorted(range(NV), key=lambda v: (C[&quot;t&quot;][views[v][0]], views[v][1]))</span>
+<span class="line" id="L548"><a href="#L548"> 548</a> for a in range(NV):</span>
+<span class="line" id="L549"><a href="#L549"> 549</a>     for b in range(a + 1, NV):</span>
+<span class="line" id="L550"><a href="#L550"> 550</a>         ra, ca, fa = views[a]; rb, cb, fb = views[b]</span>
+<span class="line" id="L551"><a href="#L551"> 551</a>         if abs(fa - fb) &gt; 4: continue</span>
+<span class="line" id="L552"><a href="#L552"> 552</a>         kind = (&quot;ff&quot; if ca == 2 and cb == 2 else (&quot;rr&quot; if ca == 1 and cb == 1 else &quot;fr&quot;))</span>
+<span class="line" id="L553"><a href="#L553"> 553</a>         ia, ga = preds[a]; ib, gb = preds[b]</span>
+<span class="line" id="L554"><a href="#L554"> 554</a>         com, xa, xb = np.intersect1d(ia, ib, assume_unique=True, return_indices=True)</span>
+<span class="line" id="L555"><a href="#L555"> 555</a>         if len(com) &lt; 0.15 * min(len(ia), len(ib)) or len(com) &lt; 3000: continue</span>
+<span class="line" id="L556"><a href="#L556"> 556</a>         yx = iyx[com]; y0, x0 = yx.min(0); y1, x1 = yx.max(0) + 1</span>
+<span class="line" id="L557"><a href="#L557"> 557</a>         A = np.full((y1 - y0, x1 - x0), np.nan, np.float32); B = A.copy()</span>
+<span class="line" id="L558"><a href="#L558"> 558</a>         A[yx[:, 0] - y0, yx[:, 1] - x0] = ga[xa]; B[yx[:, 0] - y0, yx[:, 1] - x0] = gb[xb]</span>
+<span class="line" id="L559"><a href="#L559"> 559</a>         m = np.isfinite(A)</span>
+<span class="line" id="L560"><a href="#L560"> 560</a>         def hp(Z):</span>
+<span class="line" id="L561"><a href="#L561"> 561</a>             Z = np.where(m, Z, np.nanmean(Z)); h = Z - cv2.GaussianBlur(Z, (0, 0), 6); h[~m] = 0</span>
+<span class="line" id="L562"><a href="#L562"> 562</a>             return np.clip(h * 3 + 128, 0, 255).astype(np.uint8)</span>
+<span class="line" id="L563"><a href="#L563"> 563</a>         Ah, Bh = hp(A), hp(B)</span>
+<span class="line" id="L564"><a href="#L564"> 564</a>         flow = dis.calc(Ah, Bh, None)</span>
+<span class="line" id="L565"><a href="#L565"> 565</a>         gm = np.hypot(cv2.Sobel(Ah.astype(np.float32), cv2.CV_32F, 1, 0), cv2.Sobel(Ah.astype(np.float32), cv2.CV_32F, 0, 1))</span>
+<span class="line" id="L566"><a href="#L566"> 566</a>         mm = cv2.erode(m.astype(np.uint8), np.ones((9, 9), np.uint8)) &gt; 0</span>
+<span class="line" id="L567"><a href="#L567"> 567</a>         inner = mm.copy()</span>
+<span class="line" id="L568"><a href="#L568"> 568</a>         mm &amp;= gm &gt; np.percentile(gm[mm], 80) if mm.sum() &gt; 100 else mm</span>
+<span class="line" id="L569"><a href="#L569"> 569</a>         # 标线：两张图都比局部中值亮（白漆）的像素，外扩 3 像素（含边缘）</span>
+<span class="line" id="L570"><a href="#L570"> 570</a>         def paint(Z):</span>
+<span class="line" id="L571"><a href="#L571"> 571</a>             Zf = np.where(m, Z, np.nanmean(Z)).astype(np.float32)</span>
+<span class="line" id="L572"><a href="#L572"> 572</a>             med = cv2.medianBlur(np.clip(Zf, 0, 255).astype(np.uint8), 15).astype(np.float32)</span>
+<span class="line" id="L573"><a href="#L573"> 573</a>             return (Zf - med) &gt; 20</span>
+<span class="line" id="L574"><a href="#L574"> 574</a>         pm = cv2.dilate((paint(A) &amp; paint(B)).astype(np.uint8), np.ones((7, 7), np.uint8)) &gt; 0</span>
+<span class="line" id="L575"><a href="#L575"> 575</a>         pm &amp;= inner</span>
+<span class="line" id="L576"><a href="#L576"> 576</a>         if mm.sum() &lt; 300: continue</span>
+<span class="line" id="L577"><a href="#L577"> 577</a>         mag = np.hypot(flow[..., 0], flow[..., 1])</span>
+<span class="line" id="L578"><a href="#L578"> 578</a>         magm = float(np.median(mag[pm]) * RES) if pm.sum() &gt;= 150 else np.nan</span>
+<span class="line" id="L579"><a href="#L579"> 579</a>         # 前↔后：只看前摄 7 m 以内（远场沿路足迹 5–16 cm，和后摄近场比光流本身量不准）</span>
+<span class="line" id="L580"><a href="#L580"> 580</a>         magn = np.nan; near_al = near_lat = np.nan</span>
+<span class="line" id="L581"><a href="#L581"> 581</a>         if kind == &quot;fr&quot;:</span>
+<span class="line" id="L582"><a href="#L582"> 582</a>             fv = a if ca == 2 else b</span>
+<span class="line" id="L583"><a href="#L583"> 583</a>             ii_f = samp[fv][0].cpu().numpy(); dd_f = samp_d[fv].cpu().numpy()</span>
+<span class="line" id="L584"><a href="#L584"> 584</a>             dmap = dict(zip(ii_f.tolist(), dd_f.tolist()))</span>
+<span class="line" id="L585"><a href="#L585"> 585</a>             Dm = np.full(A.shape, 99.0, np.float32); Dm[yx[:, 0] - y0, yx[:, 1] - x0] = [dmap.get(int(c_), 99.0) for c_ in com]</span>
+<span class="line" id="L586"><a href="#L586"> 586</a>             pn = pm &amp; (Dm &lt; 7.0)</span>
+<span class="line" id="L587"><a href="#L587"> 587</a>             magn = float(np.median(mag[pn]) * RES) if pn.sum() &gt;= 100 else np.nan</span>
+<span class="line" id="L588"><a href="#L588"> 588</a>             if pn.sum() &gt;= 100:   # 有向：后摄相对前摄的位移（m），按前摄那一拍的车头方向分沿路/横向（右为正）</span>
+<span class="line" id="L589"><a href="#L589"> 589</a>                 sg = 1.0 if ca == 2 else -1.0</span>
+<span class="line" id="L590"><a href="#L590"> 590</a>                 dE_ = sg * float(np.median(flow[..., 0][pn])) * RES; dN_ = -sg * float(np.median(flow[..., 1][pn])) * RES</span>
+<span class="line" id="L591"><a href="#L591"> 591</a>                 f2 = FW[views[fv][2], :2]; f2 = f2 / np.linalg.norm(f2)</span>
+<span class="line" id="L592"><a href="#L592"> 592</a>                 near_al, near_lat = dE_ * f2[0] + dN_ * f2[1], dE_ * f2[1] - dN_ * f2[0]</span>
+<span class="line" id="L593"><a href="#L593"> 593</a>         pairs.append((kind, abs(fa - fb), float(np.median(mag[mm]) * RES), len(com), magm, magn))</span>
+<span class="line" id="L594"><a href="#L594"> 594</a>         pair_rows.append(dict(kind=kind, ra=int(ra), ca=int(ca), rb=int(rb), cb=int(cb), all=float(np.median(mag[mm]) * RES), marks=magm, near=magn, near_al=near_al, near_lat=near_lat))</span>
+<span class="line" id="L595"><a href="#L595"> 595</a> for kind in (&quot;ff&quot;, &quot;fr&quot;, &quot;rr&quot;):</span>
+<span class="line" id="L596"><a href="#L596"> 596</a>     v = np.array([p_[2] for p_ in pairs if p_[0] == kind])</span>
+<span class="line" id="L597"><a href="#L597"> 597</a>     if len(v):</span>
+<span class="line" id="L598"><a href="#L598"> 598</a>         log(f&quot;EVAL pairs {kind}: n {len(v)}  residual misalignment p50 {np.median(v)*100:.1f} cm  p75 {np.percentile(v,75)*100:.1f}  p90 {np.percentile(v,90)*100:.1f} cm&quot;)</span>
+<span class="line" id="L599"><a href="#L599"> 599</a>     vm = np.array([p_[4] for p_ in pairs if p_[0] == kind and np.isfinite(p_[4])])</span>
+<span class="line" id="L600"><a href="#L600"> 600</a>     if len(vm):</span>
+<span class="line" id="L601"><a href="#L601"> 601</a>         log(f&quot;EVAL MARKS {kind}: n {len(vm)}  marking misalignment p50 {np.median(vm)*100:.1f} cm  p75 {np.percentile(vm,75)*100:.1f}  p90 {np.percentile(vm,90)*100:.1f} cm&quot;)</span>
+<span class="line" id="L602"><a href="#L602"> 602</a>     vn = np.array([p_[5] for p_ in pairs if p_[0] == kind and np.isfinite(p_[5])])</span>
+<span class="line" id="L603"><a href="#L603"> 603</a>     if len(vn):</span>
+<span class="line" id="L604"><a href="#L604"> 604</a>         al_ = np.array([r_[&quot;near_al&quot;] for r_ in pair_rows if r_[&quot;kind&quot;] == &quot;fr&quot; and np.isfinite(r_[&quot;near_al&quot;])])</span>
+<span class="line" id="L605"><a href="#L605"> 605</a>         la_ = np.array([r_[&quot;near_lat&quot;] for r_ in pair_rows if r_[&quot;kind&quot;] == &quot;fr&quot; and np.isfinite(r_[&quot;near_lat&quot;])])</span>
+<span class="line" id="L606"><a href="#L606"> 606</a>         if kind == &quot;fr&quot; and len(al_):</span>
+<span class="line" id="L607"><a href="#L607"> 607</a>             log(f&quot;EVAL fr signed (rear minus front, front&lt;7m): along p10/50/90 {np.percentile(al_,10)*100:+.1f} {np.median(al_)*100:+.1f} {np.percentile(al_,90)*100:+.1f} cm; lateral {np.percentile(la_,10)*100:+.1f} {np.median(la_)*100:+.1f} {np.percentile(la_,90)*100:+.1f} cm&quot;)</span>
+<span class="line" id="L608"><a href="#L608"> 608</a>         log(f&quot;EVAL MARKS {kind} front&lt;7m: n {len(vn)}  marking misalignment p50 {np.median(vn)*100:.1f} cm  p75 {np.percentile(vn,75)*100:.1f}  p90 {np.percentile(vn,90)*100:.1f} cm&quot;)</span>
+<span class="line" id="L609"><a href="#L609"> 609</a> json.dump(pair_rows, open(f&quot;{OUT}/joint_{args.name}_pairs.json&quot;, &quot;w&quot;))</span>
+<span class="line" id="L610"><a href="#L610"> 610</a> # 融合纹理的清晰度（梯度能量，标线等高对比处）</span>
+<span class="line" id="L611"><a href="#L611"> 611</a> Tg = (T * torch.tensor([0.299, 0.587, 0.114], device=dev)).sum(1).cpu().numpy()</span>
+<span class="line" id="L612"><a href="#L612"> 612</a> R_ = np.full((HY, WX), np.nan, np.float32); R_[iy, ix] = Tg</span>
+<span class="line" id="L613"><a href="#L613"> 613</a> log(&quot;EVAL texture grad energy (sharpness):&quot;, float(np.nanmean(np.hypot(*np.gradient(np.nan_to_num(R_, nan=np.nanmean(Tg)))) [np.isfinite(R_)] ** 2)))</span>
+<span class="line" id="L614"><a href="#L614"> 614</a> np.savez_compressed(f&quot;{OUT}/joint_{args.name}.npz&quot;, views=np.array(views), W0=W0, omega=omega.detach().cpu().numpy(), delta=delta.detach().cpu().numpy(),</span>
+<span class="line" id="L615"><a href="#L615"> 615</a>                     rear_d=(rinit + rear_d).detach().cpu().numpy(), loga=loga.detach().cpu().numpy(), bb=bb.detach().cpu().numpy(), vig=vig.detach().cpu().numpy(),</span>
+<span class="line" id="L616"><a href="#L616"> 616</a>                     shad=shad.detach().cpu().numpy(), rs=rs.detach().cpu().numpy(), init_profile=args.init_profile, zbase=args.zbase, zb_sigma=args.zb_sigma, zb_ridge=args.zb_ridge, zb_prior=args.zb_prior, rot_center=not args.rot_world, rext_w=rext_w.detach().cpu().numpy(), rext_t=rext_t.detach().cpu().numpy(), rear_ext=args.rear_ext, no_rinit=args.no_rinit, rinit_file=args.rinit_file, bgrid=bgrid.detach().cpu().numpy(), glare_grid=args.glare_grid, nrg=nrg.detach().cpu().numpy(), nonrigid=args.nonrigid, VEL=VEL, Zg=(Zg0_t + dZ).detach().cpu().numpy(), Zg0=Zg0, grid=np.array([E0, N1, HR, GW, GH]),</span>
+<span class="line" id="L617"><a href="#L617"> 617</a>                     tex=T.cpu().numpy().astype(np.float16), texE=TE.astype(np.float32), texN=TN.astype(np.float32), texW=ws.cpu().numpy(), tgrid=np.array([E0, N1, RES, WX, HY]),</span>
+<span class="line" id="L618"><a href="#L618"> 618</a>                     hist=np.array(hist))</span>
+<span class="line" id="L619"><a href="#L619"> 619</a> log(&quot;saved&quot;, f&quot;{OUT}/joint_{args.name}.npz&quot;, f&quot;[{time.time()-t0:.0f}s]&quot;)</span></pre></html>

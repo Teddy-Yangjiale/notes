@@ -1,0 +1,133 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>s05_site.py</title><style>body{margin:24px;font:15px system-ui;background:#faf8f3;color:#243342}pre{overflow:auto;line-height:1.6;background:white;padding:16px}.line{display:block}.line:target{background:#fff1a8}a{color:#58728a}header{overflow-wrap:anywhere}</style><header><a href="/notes/series/internship/">返回实习专栏</a><h1>s05_site.py</h1><p>只读快照：2026-11-09 · /home/yjl/crack/viewer3d/build/s05_site.py</p><p>SHA-256: f8a0354dc912ea894dde4d50add705f20d9427a74bc516943154952f94449657</p></header><pre><span class="line" id="L1"><a href="#L1">   1</a> # -*- coding: utf-8 -*-</span>
+<span class="line" id="L2"><a href="#L2">   2</a> &quot;&quot;&quot;05: 生成查看器要用的裂缝图层数据 —— 每张俯视图在三维地图里的四角坐标、多级贴图、检出框。</span>
+<span class="line" id="L3"><a href="#L3">   3</a> </span>
+<span class="line" id="L4"><a href="#L4">   4</a> 输出 (site/crack/):</span>
+<span class="line" id="L5"><a href="#L5">   5</a>   tiles.json     逐张: 四角 (查看器系 X=E, Y=U, Z=-N), 经纬度, 时间, 配准可信度, 检出列表 (多边形用 0~1 的图内坐标)</span>
+<span class="line" id="L6"><a href="#L6">   6</a>   t0|t1|t2/      贴图金字塔 (1/8, 1/4, 1/2), 三维里按远近取用</span>
+<span class="line" id="L7"><a href="#L7">   7</a>   o1/            分割结果的半透明叠加层 (1/4, 只有有前景的帧才有)</span>
+<span class="line" id="L8"><a href="#L8">   8</a>   full, seg, src 指向原始全分辨率俯视图 / 分割标签 / 相机原图的符号链接 (点击弹窗时才取)</span>
+<span class="line" id="L9"><a href="#L9">   9</a> &quot;&quot;&quot;</span>
+<span class="line" id="L10"><a href="#L10">  10</a> import csv, time, datetime</span>
+<span class="line" id="L11"><a href="#L11">  11</a> import numpy as np, cv2</span>
+<span class="line" id="L12"><a href="#L12">  12</a> from multiprocessing import Pool</span>
+<span class="line" id="L13"><a href="#L13">  13</a> from common import *</span>
+<span class="line" id="L14"><a href="#L14">  14</a> </span>
+<span class="line" id="L15"><a href="#L15">  15</a> RUN0924 = STITCH + &quot;/out/ipm_0924_wide&quot;</span>
+<span class="line" id="L16"><a href="#L16">  16</a> SRC0924 = HOME + &quot;/data/0924/ch1_rear&quot;</span>
+<span class="line" id="L17"><a href="#L17">  17</a> OUT = SITE + &quot;/crack&quot;</span>
+<span class="line" id="L18"><a href="#L18">  18</a> LIFT = 0.03                                   # 贴图比路面抬高 3 cm, 避免与路面图层打架</span>
+<span class="line" id="L19"><a href="#L19">  19</a> </span>
+<span class="line" id="L20"><a href="#L20">  20</a> CLS = {  # 类别: (中文名, 颜色)</span>
+<span class="line" id="L21"><a href="#L21">  21</a>     &quot;asphalt_crack_t&quot;: (&quot;横向裂缝&quot;, &quot;#ff5a4f&quot;), &quot;asphalt_crack_p&quot;: (&quot;纵向裂缝&quot;, &quot;#ff9f1c&quot;),</span>
+<span class="line" id="L22"><a href="#L22">  22</a>     &quot;asphalt_net&quot;: (&quot;网裂&quot;, &quot;#e84393&quot;), &quot;asphalt_patch_block&quot;: (&quot;块状修补&quot;, &quot;#4f9dff&quot;),</span>
+<span class="line" id="L23"><a href="#L23">  23</a>     &quot;asphalt_spall&quot;: (&quot;松散/剥落&quot;, &quot;#b983ff&quot;), &quot;asphalt_pit&quot;: (&quot;坑槽&quot;, &quot;#ff2d95&quot;),</span>
+<span class="line" id="L24"><a href="#L24">  24</a>     &quot;asphalt_chap&quot;: (&quot;龟裂&quot;, &quot;#f06292&quot;), &quot;asphalt_rut&quot;: (&quot;车辙&quot;, &quot;#00c2a8&quot;),</span>
+<span class="line" id="L25"><a href="#L25">  25</a>     &quot;asphalt_nibble&quot;: (&quot;啃边&quot;, &quot;#9ccc65&quot;), &quot;asphalt_sink&quot;: (&quot;沉陷&quot;, &quot;#26c6da&quot;),</span>
+<span class="line" id="L26"><a href="#L26">  26</a>     &quot;cement_crack_p&quot;: (&quot;水泥路面纵缝&quot;, &quot;#ffb74d&quot;), &quot;cement_crack_t&quot;: (&quot;水泥路面横缝&quot;, &quot;#ff8a65&quot;),</span>
+<span class="line" id="L27"><a href="#L27">  27</a>     &quot;cement_broken&quot;: (&quot;水泥板破碎&quot;, &quot;#ba68c8&quot;), &quot;cement_spall_kok&quot;: (&quot;水泥板剥落&quot;, &quot;#9575cd&quot;),</span>
+<span class="line" id="L28"><a href="#L28">  28</a>     &quot;road_box_d&quot;: (&quot;井盖/雨水篦子&quot;, &quot;#8a94a6&quot;),</span>
+<span class="line" id="L29"><a href="#L29">  29</a> }</span>
+<span class="line" id="L30"><a href="#L30">  30</a> SEG_RGBA = {1: (255, 40, 60, 215), 2: (40, 220, 120, 200), 3: (60, 120, 255, 200)}   # A 裂缝 / B 灌缝修补 / C</span>
+<span class="line" id="L31"><a href="#L31">  31</a> </span>
+<span class="line" id="L32"><a href="#L32">  32</a> def make_tex(name):</span>
+<span class="line" id="L33"><a href="#L33">  33</a>     stem = os.path.splitext(name)[0]</span>
+<span class="line" id="L34"><a href="#L34">  34</a>     im = cv2.imread(&quot;%s/bev/%s&quot; % (RUN0924, name))</span>
+<span class="line" id="L35"><a href="#L35">  35</a>     if im is None: return stem, False</span>
+<span class="line" id="L36"><a href="#L36">  36</a>     h, w = im.shape[:2]</span>
+<span class="line" id="L37"><a href="#L37">  37</a>     for lv, f, q in ((&quot;t2&quot;, 2, 86), (&quot;t1&quot;, 4, 84), (&quot;t0&quot;, 8, 82)):</span>
+<span class="line" id="L38"><a href="#L38">  38</a>         cv2.imwrite(&quot;%s/%s/%s.jpg&quot; % (OUT, lv, stem), cv2.resize(im, (w // f, h // f), interpolation=cv2.INTER_AREA), [cv2.IMWRITE_JPEG_QUALITY, q])</span>
+<span class="line" id="L39"><a href="#L39">  39</a>     has = False</span>
+<span class="line" id="L40"><a href="#L40">  40</a>     lab = cv2.imread(&quot;%s/seg_bev/%s.png&quot; % (RUN0924, stem), cv2.IMREAD_UNCHANGED)</span>
+<span class="line" id="L41"><a href="#L41">  41</a>     if lab is not None and lab.max() &gt; 0:</span>
+<span class="line" id="L42"><a href="#L42">  42</a>         small = np.zeros((h // 4, w // 4), np.uint8)</span>
+<span class="line" id="L43"><a href="#L43">  43</a>         for c in (3, 2, 1):                                   # 取最大池化: 细裂缝缩小后不至于消失</span>
+<span class="line" id="L44"><a href="#L44">  44</a>             m = cv2.resize((lab == c).astype(np.uint8) * 255, (w // 4, h // 4), interpolation=cv2.INTER_AREA) &gt; 20</span>
+<span class="line" id="L45"><a href="#L45">  45</a>             small[m] = c</span>
+<span class="line" id="L46"><a href="#L46">  46</a>         rgba = np.zeros((h // 4, w // 4, 4), np.uint8)</span>
+<span class="line" id="L47"><a href="#L47">  47</a>         for c, col in SEG_RGBA.items():</span>
+<span class="line" id="L48"><a href="#L48">  48</a>             rgba[small == c] = (col[2], col[1], col[0], col[3])</span>
+<span class="line" id="L49"><a href="#L49">  49</a>         cv2.imwrite(&quot;%s/o1/%s.png&quot; % (OUT, stem), rgba, [cv2.IMWRITE_PNG_COMPRESSION, 9])</span>
+<span class="line" id="L50"><a href="#L50">  50</a>         has = True</span>
+<span class="line" id="L51"><a href="#L51">  51</a>     return stem, has</span>
+<span class="line" id="L52"><a href="#L52">  52</a> </span>
+<span class="line" id="L53"><a href="#L53">  53</a> if __name__ == &quot;__main__&quot;:</span>
+<span class="line" id="L54"><a href="#L54">  54</a>     t0 = time.time()</span>
+<span class="line" id="L55"><a href="#L55">  55</a>     for d in (&quot;t0&quot;, &quot;t1&quot;, &quot;t2&quot;, &quot;o1&quot;): os.makedirs(&quot;%s/%s&quot; % (OUT, d), exist_ok=True)</span>
+<span class="line" id="L56"><a href="#L56">  56</a>     for link, target in ((&quot;full&quot;, RUN0924 + &quot;/bev&quot;), (&quot;seg&quot;, RUN0924 + &quot;/seg_bev&quot;), (&quot;src&quot;, SRC0924)):</span>
+<span class="line" id="L57"><a href="#L57">  57</a>         p = &quot;%s/%s&quot; % (OUT, link)</span>
+<span class="line" id="L58"><a href="#L58">  58</a>         if os.path.islink(p): os.remove(p)</span>
+<span class="line" id="L59"><a href="#L59">  59</a>         os.symlink(target, p)</span>
+<span class="line" id="L60"><a href="#L60">  60</a>     z = np.load(WORK + &quot;/reg0924.npz&quot;, allow_pickle=True)</span>
+<span class="line" id="L61"><a href="#L61">  61</a>     frames, ts, P, psi, C, off = z[&quot;frame&quot;], z[&quot;ts&quot;], z[&quot;P&quot;], z[&quot;psi&quot;], z[&quot;C&quot;], z[&quot;final&quot;]</span>
+<span class="line" id="L62"><a href="#L62">  62</a>     conf, conf_lon, anchor, have = z[&quot;conf&quot;], z[&quot;conf_lon&quot;], z[&quot;anchor&quot;], z[&quot;have&quot;]</span>
+<span class="line" id="L63"><a href="#L63">  63</a>     X_LO, X_HI, Y_LO, Y_HI, XC, YC = z[&quot;geom&quot;][:6]</span>
+<span class="line" id="L64"><a href="#L64">  64</a>     n = len(frames)</span>
+<span class="line" id="L65"><a href="#L65">  65</a>     o = json.load(open(WORK + &quot;/origin.json&quot;)); og = dict(lon0=o[&quot;lon0&quot;], lat0=o[&quot;lat0&quot;], m_lon=o[&quot;m_lon&quot;])</span>
+<span class="line" id="L66"><a href="#L66">  66</a>     fr = np.load(WORK + &quot;/frames.npz&quot;); rf = RoadField(fr)</span>
+<span class="line" id="L67"><a href="#L67">  67</a>     meta = json.load(open(RUN0924 + &quot;/meta.json&quot;)); W_PX, H_PX = meta[&quot;out_size&quot;]</span>
+<span class="line" id="L68"><a href="#L68">  68</a>     rows = {r[&quot;src&quot;]: r for r in csv.DictReader(open(RUN0924 + &quot;/index.csv&quot;, encoding=&quot;utf-8&quot;))}</span>
+<span class="line" id="L69"><a href="#L69">  69</a>     dfr = {r[&quot;src&quot;]: r for r in csv.DictReader(open(RUN0924 + &quot;/disease_frames.csv&quot;, encoding=&quot;utf-8&quot;))}</span>
+<span class="line" id="L70"><a href="#L70">  70</a>     dets = {}</span>
+<span class="line" id="L71"><a href="#L71">  71</a>     for d in csv.DictReader(open(RUN0924 + &quot;/detections.csv&quot;, encoding=&quot;utf-8&quot;)):</span>
+<span class="line" id="L72"><a href="#L72">  72</a>         dets.setdefault(d[&quot;src&quot;], []).append(d)</span>
+<span class="line" id="L73"><a href="#L73">  73</a> </span>
+<span class="line" id="L74"><a href="#L74">  74</a>     # ---- 贴图 ----</span>
+<span class="line" id="L75"><a href="#L75">  75</a>     with Pool(48) as pool:</span>
+<span class="line" id="L76"><a href="#L76">  76</a>         tex = dict(pool.map(make_tex, [str(f) for f in frames], chunksize=16))</span>
+<span class="line" id="L77"><a href="#L77">  77</a>     print(&quot;贴图完成 %d 张, 其中有分割叠加层的 %d 张 (%.0fs)&quot; % (len(tex), sum(tex.values()), time.time() - t0))</span>
+<span class="line" id="L78"><a href="#L78">  78</a> </span>
+<span class="line" id="L79"><a href="#L79">  79</a>     # ---- 有效区多边形 (所有俯视图共用一张掩膜) ----</span>
+<span class="line" id="L80"><a href="#L80">  80</a>     mk = cv2.imread(RUN0924 + &quot;/mask/valid.png&quot;, 0)</span>
+<span class="line" id="L81"><a href="#L81">  81</a>     cnt = max(cv2.findContours((mk &gt; 0).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0], key=cv2.contourArea)</span>
+<span class="line" id="L82"><a href="#L82">  82</a>     poly = cv2.approxPolyDP(cnt, 3.0, True).reshape(-1, 2)</span>
+<span class="line" id="L83"><a href="#L83">  83</a>     mask_uv = [[round(float(u) / mk.shape[1], 4), round(float(v) / mk.shape[0], 4)] for u, v in poly]</span>
+<span class="line" id="L84"><a href="#L84">  84</a> </span>
+<span class="line" id="L85"><a href="#L85">  85</a>     hw, hl = 0.5 * (X_HI - X_LO), 0.5 * (Y_HI - Y_LO)</span>
+<span class="line" id="L86"><a href="#L86">  86</a>     tiles = []; ndet = 0; cls_count = {}</span>
+<span class="line" id="L87"><a href="#L87">  87</a>     dist_map = np.zeros(n)</span>
+<span class="line" id="L88"><a href="#L88">  88</a>     for i in range(n):</span>
+<span class="line" id="L89"><a href="#L89">  89</a>         name = str(frames[i]); stem = os.path.splitext(name)[0]</span>
+<span class="line" id="L90"><a href="#L90">  90</a>         a0 = psi[i]; fwd0 = np.array([np.sin(a0), np.cos(a0)]); rt0 = np.array([np.cos(a0), -np.sin(a0)])</span>
+<span class="line" id="L91"><a href="#L91">  91</a>         T0 = C[i] + fwd0 * (-YC) + rt0 * (-XC)                       # GNSS 初值下的中心</span>
+<span class="line" id="L92"><a href="#L92">  92</a>         th = a0 + np.radians(off[i, 2]); fw = np.array([np.sin(th), np.cos(th)]); rt = np.array([np.cos(th), -np.sin(th)])</span>
+<span class="line" id="L93"><a href="#L93">  93</a>         T = T0 - rt * off[i, 0] + fw * off[i, 1]                      # 配准后的中心 (图像右 = -车右, 图像下 = +车前)</span>
+<span class="line" id="L94"><a href="#L94">  94</a>         cs = []</span>
+<span class="line" id="L95"><a href="#L95">  95</a>         for sx_, sy_ in ((-1, -1), (1, -1), (1, 1), (-1, 1)):         # 图像 左上, 右上, 右下, 左下</span>
+<span class="line" id="L96"><a href="#L96">  96</a>             Wd = T - rt * (sx_ * hw) + fw * (sy_ * hl)</span>
+<span class="line" id="L97"><a href="#L97">  97</a>             cs.append(Wd)</span>
+<span class="line" id="L98"><a href="#L98">  98</a>         cs = np.array(cs)</span>
+<span class="line" id="L99"><a href="#L99">  99</a>         U, fidx, dd = rf(cs[:, 0], cs[:, 1], return_index=True)</span>
+<span class="line" id="L100"><a href="#L100"> 100</a>         dist_map[i] = float(dd.mean())</span>
+<span class="line" id="L101"><a href="#L101"> 101</a>         corners = [[round(float(cs[k, 0]), 3), round(float(U[k] + LIFT), 3), round(float(-cs[k, 1]), 3)] for k in range(4)]</span>
+<span class="line" id="L102"><a href="#L102"> 102</a>         lon, lat = en_to_lonlat(T0[0], T0[1], og)                     # 经纬度用 0924 自己的定位 (不受配准影响)</span>
+<span class="line" id="L103"><a href="#L103"> 103</a>         r = rows[name]</span>
+<span class="line" id="L104"><a href="#L104"> 104</a>         dl = []</span>
+<span class="line" id="L105"><a href="#L105"> 105</a>         for d in dets.get(name, []):</span>
+<span class="line" id="L106"><a href="#L106"> 106</a>             if not d[&quot;poly_bev_px&quot;] or float(d[&quot;in_window&quot;] or 0) &lt;= 0: continue</span>
+<span class="line" id="L107"><a href="#L107"> 107</a>             pts = [[round(float(a) / W_PX, 4), round(float(b) / H_PX, 4)] for a, b in (q.split() for q in d[&quot;poly_bev_px&quot;].split(&quot;;&quot;))]</span>
+<span class="line" id="L108"><a href="#L108"> 108</a>             dl.append(dict(c=d[&quot;class&quot;], k=d[&quot;kind&quot;], s=round(float(d[&quot;score&quot;]), 3), iw=round(float(d[&quot;in_window&quot;]), 2),</span>
+<span class="line" id="L109"><a href="#L109"> 109</a>                            p=pts, len=round(float(d[&quot;length_m&quot;] or 0), 2), area=round(float(d[&quot;area_m2&quot;] or 0), 3),</span>
+<span class="line" id="L110"><a href="#L110"> 110</a>                            yn=round(float(d[&quot;y_near_m&quot;] or 0), 2), yf=round(float(d[&quot;y_far_m&quot;] or 0), 2),</span>
+<span class="line" id="L111"><a href="#L111"> 111</a>                            ll=[float(d[&quot;lon&quot;]), float(d[&quot;lat&quot;])] if d[&quot;lon&quot;] else None))</span>
+<span class="line" id="L112"><a href="#L112"> 112</a>             cls_count[d[&quot;class&quot;]] = cls_count.get(d[&quot;class&quot;], 0) + 1</span>
+<span class="line" id="L113"><a href="#L113"> 113</a>         ndet += len(dl)</span>
+<span class="line" id="L114"><a href="#L114"> 114</a>         f_ = dfr.get(name, {})</span>
+<span class="line" id="L115"><a href="#L115"> 115</a>         tloc = datetime.datetime.fromtimestamp(ts[i], datetime.timezone(datetime.timedelta(hours=8))).strftime(&quot;%H:%M:%S&quot;)</span>
+<span class="line" id="L116"><a href="#L116"> 116</a>         tiles.append(dict(id=stem, t=tloc, c=corners, ll=[round(float(lon), 7), round(float(lat), 7)],</span>
+<span class="line" id="L117"><a href="#L117"> 117</a>                           v=round(float(r[&quot;speed_kmh&quot;] or 0), 1), hd=round(float(np.degrees(th)) % 360, 1),</span>
+<span class="line" id="L118"><a href="#L118"> 118</a>                           rg=[round(float(conf[i]), 2), round(float(conf_lon[i]), 2), round(float(-off[i, 0]), 2), round(float(off[i, 1]), 2), round(float(off[i, 2]), 2)],</span>
+<span class="line" id="L119"><a href="#L119"> 119</a>                           an=int(bool(anchor[i])), mp=round(float(dist_map[i]), 1), ov=int(tex.get(stem, False)),</span>
+<span class="line" id="L120"><a href="#L120"> 120</a>                           sa=[round(float(f_.get(&quot;seg1_m2&quot;) or 0), 3), round(float(f_.get(&quot;seg2_m2&quot;) or 0), 3)], d=dl))</span>
+<span class="line" id="L121"><a href="#L121"> 121</a>     near = dist_map &lt; 25</span>
+<span class="line" id="L122"><a href="#L122"> 122</a>     print(&quot;俯视图 %d 张; 落在三维地图轨迹 25 m 内的 %d 张 (%.0f%%); 检出 %d 个&quot; % (n, near.sum(), 100 * near.mean(), ndet))</span>
+<span class="line" id="L123"><a href="#L123"> 123</a>     out = dict(session=&quot;0924 后摄宽幅&quot;, date=&quot;2026-09-24&quot;, size_m=[float(X_HI - X_LO), float(Y_HI - Y_LO)], px=[W_PX, H_PX],</span>
+<span class="line" id="L124"><a href="#L124"> 124</a>                y_range=[float(Y_LO), float(Y_HI)], mask=mask_uv,</span>
+<span class="line" id="L125"><a href="#L125"> 125</a>                classes={k: dict(zh=v[0], color=v[1], n=cls_count.get(k, 0)) for k, v in CLS.items() if cls_count.get(k, 0)},</span>
+<span class="line" id="L126"><a href="#L126"> 126</a>                other=[k for k in cls_count if k not in CLS],</span>
+<span class="line" id="L127"><a href="#L127"> 127</a>                stats=dict(n=n, reg_lat=int((conf &gt; 0.3).sum()), reg_lat_hi=int((conf &gt; 0.6).sum()), anchors=int(anchor.sum()),</span>
+<span class="line" id="L128"><a href="#L128"> 128</a>                           lon_near=int((conf_lon &gt; 0).sum()), on_map=int(near.sum()), ndet=ndet),</span>
+<span class="line" id="L129"><a href="#L129"> 129</a>                tiles=tiles)</span>
+<span class="line" id="L130"><a href="#L130"> 130</a>     json.dump(out, open(OUT + &quot;/tiles.json&quot;, &quot;w&quot;), ensure_ascii=False, separators=(&quot;,&quot;, &quot;:&quot;))</span>
+<span class="line" id="L131"><a href="#L131"> 131</a>     sz = lambda d: sum(os.path.getsize(os.path.join(OUT, d, f)) for f in os.listdir(os.path.join(OUT, d))) / 1e6</span>
+<span class="line" id="L132"><a href="#L132"> 132</a>     print(&quot;tiles.json %.1f MB; 贴图 t0 %.0f MB, t1 %.0f MB, t2 %.0f MB, 叠加层 %.0f MB; 用时 %.0fs&quot;</span>
+<span class="line" id="L133"><a href="#L133"> 133</a>           % (os.path.getsize(OUT + &quot;/tiles.json&quot;) / 1e6, sz(&quot;t0&quot;), sz(&quot;t1&quot;), sz(&quot;t2&quot;), sz(&quot;o1&quot;), time.time() - t0))</span></pre></html>

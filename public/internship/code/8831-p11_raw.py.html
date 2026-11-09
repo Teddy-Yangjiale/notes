@@ -1,0 +1,204 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>p11_raw.py</title><style>body{margin:24px;font:15px system-ui;background:#faf8f3;color:#243342}pre{overflow:auto;line-height:1.6;background:white;padding:16px}.line{display:block}.line:target{background:#fff1a8}a{color:#58728a}header{overflow-wrap:anywhere}</style><header><a href="/notes/series/internship/">返回实习专栏</a><h1>p11_raw.py</h1><p>只读快照：2026-11-09 · /home/yjl/crack/snap1012/build/p11_raw.py</p><p>SHA-256: 775b8bc3dc562a46c51357889ab1d0a6d5c0eece25fb0ab158c7f7d70f81594c</p></header><pre><span class="line" id="L1"><a href="#L1">   1</a> # -*- coding: utf-8 -*-</span>
+<span class="line" id="L2"><a href="#L2">   2</a> &quot;&quot;&quot;P11-raw 8831 朴素版站点（由 p11_line.py 改）：路面瓦片取 p22 的 work/raw/ortho_raw（只用平台表格 + 平台原始标定，无任何修正）；</span>
+<span class="line" id="L3"><a href="#L3">   3</a> 视点取表格里每张前摄那一行的经纬度和航向角（不平滑、不改时刻）；没有点云。</span>
+<span class="line" id="L4"><a href="#L4">   4</a> &quot;对比&quot;卷帘：左边 = 8829 优化版的路面（site_raw/base/ground 链接到 site/ground，8829 重建后自动跟着变），右边 = 本站点朴素版。</span>
+<span class="line" id="L5"><a href="#L5">   5</a> 页面沿用 8828（viewer1012/site2），只拷贝不改原件。</span>
+<span class="line" id="L6"><a href="#L6">   6</a> --calib 8829 → 8832 站点（site_cal8829/）：路面取 work/raw/ortho_cal8829（内外参换成 8829 的，其余同 8831）。</span>
+<span class="line" id="L7"><a href="#L7">   7</a> --calib 8829 --time clock → 8833 站点（site_cal8829_clock/）：再按 3 Hz 时钟改照片时刻（其余同 8832）。</span>
+<span class="line" id="L8"><a href="#L8">   8</a> 用法: python p11_raw.py [--calib raw|8829] [--time table|clock]</span>
+<span class="line" id="L9"><a href="#L9">   9</a> &quot;&quot;&quot;</span>
+<span class="line" id="L10"><a href="#L10">  10</a> import argparse</span>
+<span class="line" id="L11"><a href="#L11">  11</a> import json</span>
+<span class="line" id="L12"><a href="#L12">  12</a> import os</span>
+<span class="line" id="L13"><a href="#L13">  13</a> import shutil</span>
+<span class="line" id="L14"><a href="#L14">  14</a> import sys</span>
+<span class="line" id="L15"><a href="#L15">  15</a> import time</span>
+<span class="line" id="L16"><a href="#L16">  16</a> from multiprocessing import Pool</span>
+<span class="line" id="L17"><a href="#L17">  17</a> </span>
+<span class="line" id="L18"><a href="#L18">  18</a> import cv2</span>
+<span class="line" id="L19"><a href="#L19">  19</a> import numpy as np</span>
+<span class="line" id="L20"><a href="#L20">  20</a> from scipy.spatial import cKDTree</span>
+<span class="line" id="L21"><a href="#L21">  21</a> </span>
+<span class="line" id="L22"><a href="#L22">  22</a> sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))</span>
+<span class="line" id="L23"><a href="#L23">  23</a> from sn_common import *  # noqa</span>
+<span class="line" id="L24"><a href="#L24">  24</a> from sn_raw import RAW  # noqa</span>
+<span class="line" id="L25"><a href="#L25">  25</a> </span>
+<span class="line" id="L26"><a href="#L26">  26</a> ap = argparse.ArgumentParser(); ap.add_argument(&quot;--calib&quot;, default=&quot;raw&quot;, choices=[&quot;raw&quot;, &quot;8829&quot;]); ap.add_argument(&quot;--time&quot;, default=&quot;table&quot;, choices=[&quot;table&quot;, &quot;clock&quot;])</span>
+<span class="line" id="L27"><a href="#L27">  27</a> args = ap.parse_args()</span>
+<span class="line" id="L28"><a href="#L28">  28</a> CAL8829 = args.calib == &quot;8829&quot;; CLOCK = args.time == &quot;clock&quot;</span>
+<span class="line" id="L29"><a href="#L29">  29</a> TAG = &quot;raw&quot; if (args.calib, args.time) == (&quot;raw&quot;, &quot;table&quot;) else (&quot;cal8829&quot; if CAL8829 else &quot;rawcal&quot;) + (&quot;_clock&quot; if CLOCK else &quot;&quot;)</span>
+<span class="line" id="L30"><a href="#L30">  30</a> PORT = {&quot;raw&quot;: &quot;8831&quot;, &quot;cal8829&quot;: &quot;8832&quot;, &quot;cal8829_clock&quot;: &quot;8833&quot;}[TAG]</span>
+<span class="line" id="L31"><a href="#L31">  31</a> SITE = ROOT + (&quot;/site_raw&quot; if TAG == &quot;raw&quot; else f&quot;/site_{TAG}&quot;); SRC = HOME + &quot;/crack/viewer1012/site2&quot;</span>
+<span class="line" id="L32"><a href="#L32">  32</a> OD = f&quot;{WORK}/raw/ortho_{TAG}&quot;; GD_ = SITE + &quot;/ground&quot;; GT = f&quot;{WORK}/raw/gtmp_{TAG}&quot;</span>
+<span class="line" id="L33"><a href="#L33">  33</a> LAT_SHOW = 8.0</span>
+<span class="line" id="L34"><a href="#L34">  34</a> CAM_H = float(FRONT[&quot;height&quot;] if CAL8829 else RAW[&quot;front&quot;][&quot;extrinsic&quot;][&quot;height&quot;])</span>
+<span class="line" id="L35"><a href="#L35">  35</a> Z = np.load(f&quot;{WORK}/raw/&quot; + (&quot;raw_poses.npz&quot; if TAG == &quot;raw&quot; else f&quot;poses_{TAG}.npz&quot;))</span>
+<span class="line" id="L36"><a href="#L36">  36</a> fr = np.flatnonzero(Z[&quot;ch&quot;] == 2); fr = fr[np.argsort(Z[&quot;t&quot;][fr])]</span>
+<span class="line" id="L37"><a href="#L37">  37</a> CG = np.array([-(M[:3, :3].T @ M[:3, 3])[:2] for M in Z[&quot;w2c&quot;][fr]])          # 前摄相机中心（表格位置 + 原始外参）</span>
+<span class="line" id="L38"><a href="#L38">  38</a> traj = CG</span>
+<span class="line" id="L39"><a href="#L39">  39</a> dense = []</span>
+<span class="line" id="L40"><a href="#L40">  40</a> for a, b in zip(traj[:-1], traj[1:]):</span>
+<span class="line" id="L41"><a href="#L41">  41</a>     if np.linalg.norm(b - a) &gt; 30:</span>
+<span class="line" id="L42"><a href="#L42">  42</a>         continue</span>
+<span class="line" id="L43"><a href="#L43">  43</a>     m = max(1, int(np.linalg.norm(b - a) / 0.5)); dense.append(a[None] + (b - a)[None] * (np.arange(m)[:, None] / m))</span>
+<span class="line" id="L44"><a href="#L44">  44</a> TREE = cKDTree(np.vstack(dense + [traj[-1:]]))</span>
+<span class="line" id="L45"><a href="#L45">  45</a> </span>
+<span class="line" id="L46"><a href="#L46">  46</a> </span>
+<span class="line" id="L47"><a href="#L47">  47</a> def l0(tid):</span>
+<span class="line" id="L48"><a href="#L48">  48</a>     gx, gn = (int(v) for v in tid.split(&quot;_&quot;))</span>
+<span class="line" id="L49"><a href="#L49">  49</a>     im = cv2.imread(f&quot;{OD}/{tid}.png&quot;, cv2.IMREAD_UNCHANGED)</span>
+<span class="line" id="L50"><a href="#L50">  50</a>     if im is None:</span>
+<span class="line" id="L51"><a href="#L51">  51</a>         print(&quot;  [l0] 读不出:&quot;, tid); return tid, 0</span>
+<span class="line" id="L52"><a href="#L52">  52</a>     q = np.arange(0, 1000, 10) + 5.0</span>
+<span class="line" id="L53"><a href="#L53">  53</a>     QE, QN = np.meshgrid((gx * 1000 + q + 0.5) * 0.02, ((gn + 1) * 1000 - q - 0.5) * 0.02)</span>
+<span class="line" id="L54"><a href="#L54">  54</a>     d = cv2.resize(TREE.query(np.c_[QE.ravel(), QN.ravel()])[0].reshape(100, 100).astype(np.float32), (1000, 1000), interpolation=cv2.INTER_LINEAR)</span>
+<span class="line" id="L55"><a href="#L55">  55</a>     a = (im[:, :, 3] &gt; 0) &amp; (d &lt;= LAT_SHOW)</span>
+<span class="line" id="L56"><a href="#L56">  56</a>     if a.sum() &lt; 400:</span>
+<span class="line" id="L57"><a href="#L57">  57</a>         return tid, 0</span>
+<span class="line" id="L58"><a href="#L58">  58</a>     al = cv2.GaussianBlur(a.astype(np.float32), (0, 0), 1.2); al = np.clip((al - 0.5) * 2.0, 0, 1) * a</span>
+<span class="line" id="L59"><a href="#L59">  59</a>     im[:, :, 3] = (al * 255).astype(np.uint8)</span>
+<span class="line" id="L60"><a href="#L60">  60</a>     cv2.imwrite(f&quot;{GD_}/L0/{tid}.webp&quot;, im, [cv2.IMWRITE_WEBP_QUALITY, 86])</span>
+<span class="line" id="L61"><a href="#L61">  61</a>     cv2.imwrite(f&quot;{GT}/L0/{tid}.png&quot;, im, [cv2.IMWRITE_PNG_COMPRESSION, 1])</span>
+<span class="line" id="L62"><a href="#L62">  62</a>     return tid, int(a.sum())</span>
+<span class="line" id="L63"><a href="#L63">  63</a> </span>
+<span class="line" id="L64"><a href="#L64">  64</a> </span>
+<span class="line" id="L65"><a href="#L65">  65</a> def up(args):</span>
+<span class="line" id="L66"><a href="#L66">  66</a>     lv, gx, gn = args</span>
+<span class="line" id="L67"><a href="#L67">  67</a>     src = f&quot;{GT}/L0&quot; if lv == 1 else f&quot;{GT}{lv - 1}&quot;</span>
+<span class="line" id="L68"><a href="#L68">  68</a>     big = np.zeros((2000, 2000, 4), np.uint8); any_ = False</span>
+<span class="line" id="L69"><a href="#L69">  69</a>     for dx in (0, 1):</span>
+<span class="line" id="L70"><a href="#L70">  70</a>         for dn in (0, 1):</span>
+<span class="line" id="L71"><a href="#L71">  71</a>             p = f&quot;{src}/{2 * gx + dx}_{2 * gn + dn}.png&quot;</span>
+<span class="line" id="L72"><a href="#L72">  72</a>             if not os.path.exists(p):</span>
+<span class="line" id="L73"><a href="#L73">  73</a>                 continue</span>
+<span class="line" id="L74"><a href="#L74">  74</a>             big[(1 - dn) * 1000:(2 - dn) * 1000, dx * 1000:(dx + 1) * 1000] = cv2.imread(p, cv2.IMREAD_UNCHANGED); any_ = True</span>
+<span class="line" id="L75"><a href="#L75">  75</a>     if not any_:</span>
+<span class="line" id="L76"><a href="#L76">  76</a>         return None</span>
+<span class="line" id="L77"><a href="#L77">  77</a>     f = big.astype(np.float32); a = f[:, :, 3:4] / 255.0</span>
+<span class="line" id="L78"><a href="#L78">  78</a>     rgb = cv2.resize(f[:, :, :3] * a, (1000, 1000), interpolation=cv2.INTER_AREA); al = cv2.resize(a[:, :, 0], (1000, 1000), interpolation=cv2.INTER_AREA)</span>
+<span class="line" id="L79"><a href="#L79">  79</a>     out = np.dstack([np.clip(rgb / np.maximum(al, 1e-3)[:, :, None], 0, 255), al * 255]).astype(np.uint8)</span>
+<span class="line" id="L80"><a href="#L80">  80</a>     if (al &gt; 0.3).sum() &lt; 100:</span>
+<span class="line" id="L81"><a href="#L81">  81</a>         return None</span>
+<span class="line" id="L82"><a href="#L82">  82</a>     os.makedirs(f&quot;{GT}{lv}&quot;, exist_ok=True)</span>
+<span class="line" id="L83"><a href="#L83">  83</a>     cv2.imwrite(f&quot;{GT}{lv}/{gx}_{gn}.png&quot;, out, [cv2.IMWRITE_PNG_COMPRESSION, 1])</span>
+<span class="line" id="L84"><a href="#L84">  84</a>     cv2.imwrite(f&quot;{GD_}/L{lv}/{gx}_{gn}.webp&quot;, out, [cv2.IMWRITE_WEBP_QUALITY, 86])</span>
+<span class="line" id="L85"><a href="#L85">  85</a>     return f&quot;{gx}_{gn}&quot;</span>
+<span class="line" id="L86"><a href="#L86">  86</a> </span>
+<span class="line" id="L87"><a href="#L87">  87</a> </span>
+<span class="line" id="L88"><a href="#L88">  88</a> NAME = (&quot;朴素版（8829 内外参 + 3 Hz 时钟改时刻）&quot; if CLOCK else &quot;朴素版（8829 的内外参）&quot;) if CAL8829 else &quot;朴素版（只用原始数据）&quot;</span>
+<span class="line" id="L89"><a href="#L89">  89</a> CALTXT = (&quot;&lt;b&gt;8829 用的内外参&lt;/b&gt;（内参同平台；前摄俯仰 4.93°、偏航 3.2°、高 1.497 m，后摄俯仰 −31.27°、偏航 0.65°）&quot;</span>
+<span class="line" id="L90"><a href="#L90">  90</a>           if CAL8829 else &quot;&lt;b&gt;平台原始标定&lt;/b&gt;（calib_raw_platform.json）&quot;)</span>
+<span class="line" id="L91"><a href="#L91">  91</a> if CLOCK:</span>
+<span class="line" id="L92"><a href="#L92">  92</a>     CALTXT += (&quot;，&lt;b&gt;照片时刻按相机 3 Hz 取帧时钟改&lt;/b&gt;（每张改到表格时刻之前最近的一拍，平均早 0.17 s；完全相同的照片因此落在同一时刻、同一位置），&quot;</span>
+<span class="line" id="L93"><a href="#L93">  93</a>                &quot;位置和航向按改后的时刻在表格轨迹上插值。与 8832 唯一的区别就是时刻&quot;)</span>
+<span class="line" id="L94"><a href="#L94">  94</a> elif CAL8829:</span>
+<span class="line" id="L95"><a href="#L95">  95</a>     CALTXT += &quot;（与 8831 唯一的区别）&quot;</span>
+<span class="line" id="L96"><a href="#L96">  96</a> SWTXT = (&quot;8829 内外参 + 3 Hz 时钟&quot; if CLOCK else &quot;8829 内外参&quot;) if CAL8829 else &quot;原始数据&quot;</span>
+<span class="line" id="L97"><a href="#L97">  97</a> </span>
+<span class="line" id="L98"><a href="#L98">  98</a> </span>
+<span class="line" id="L99"><a href="#L99">  99</a> def patch_page():</span>
+<span class="line" id="L100"><a href="#L100"> 100</a>     s = open(f&quot;{SRC}/index.html&quot;, encoding=&quot;utf-8&quot;).read()</span>
+<span class="line" id="L101"><a href="#L101"> 101</a>     rep = [</span>
+<span class="line" id="L102"><a href="#L102"> 102</a>         (&quot;&lt;title&gt;8828 · 1012 底图 · 路面病害三维展示&lt;/title&gt;&quot;, f&quot;&lt;title&gt;{PORT} · {NAME}&lt;/title&gt;&quot;),</span>
+<span class="line" id="L103"><a href="#L103"> 103</a>         (&quot;载入三维地图与路面病害&quot;, &quot;载入路面图&quot;),</span>
+<span class="line" id="L104"><a href="#L104"> 104</a>         (&#x27;&lt;h1&gt;路面病害三维展示 &lt;span style=&quot;color:var(--warn);font-weight:600&quot;&gt;· 8828 · 2026-10-12 底图&lt;/span&gt;&lt;/h1&gt;&#x27;,</span>
+<span class="line" id="L105"><a href="#L105"> 105</a>          f&#x27;&lt;h1&gt;路面图 &lt;span style=&quot;color:var(--warn);font-weight:600&quot;&gt;· {PORT} · {NAME}&lt;/span&gt;&lt;/h1&gt;&#x27;),</span>
+<span class="line" id="L106"><a href="#L106"> 106</a>         (&#x27;&lt;div class=&quot;sub&quot;&gt;病害：1012 后摄宽幅俯视图（4.30 m）· 地图：&lt;b&gt;2026-10-12 行车录像重建&lt;/b&gt;（与 0903 底图同一坐标系）&lt;br&gt;&lt;span style=&quot;color:var(--warn)&quot;&gt;8828：1012 底图；“对比”里可卷帘对照 0903 底图（带 0924 病害）&lt;/span&gt;&lt;/div&gt;&#x27;,</span>
+<span class="line" id="L107"><a href="#L107"> 107</a>          f&#x27;&lt;div class=&quot;sub&quot;&gt;只用两样东西：&lt;b&gt;平台清单表&lt;/b&gt;（每行的时刻、经纬度、航向角）+ {CALTXT}。&#x27;</span>
+<span class="line" id="L108"><a href="#L108"> 108</a>          + (&#x27;每张照片按改后的时刻放车&#x27; if CLOCK else &#x27;每张照片按它自己那一行的位置和航向放车&#x27;) +</span>
+<span class="line" id="L109"><a href="#L109"> 109</a>          &#x27;，路面当平地，多张照片直接平均——&#x27; + (&#x27;&#x27; if CLOCK else &#x27;不改时刻、&#x27;) + &#x27;不另外改位置、不做特征匹配、不调曝光，错位就显示成重影。&lt;br&gt;&#x27;</span>
+<span class="line" id="L110"><a href="#L110"> 110</a>          f&#x27;&lt;span style=&quot;color:var(--warn)&quot;&gt;“对比”默认打开：竖线左边 = 8829 优化版，右边 = {PORT} 朴素版，拖动竖线对照。&lt;/span&gt;&lt;/div&gt;&#x27;),</span>
+<span class="line" id="L111"><a href="#L111"> 111</a>         (&#x27;&lt;span&gt;已载入点（高斯）/ 俯视图&lt;/span&gt;&#x27;, &#x27;&lt;span&gt;已载入点&lt;/span&gt;&#x27;),</span>
+<span class="line" id="L112"><a href="#L112"> 112</a>         (&#x27;&lt;span&gt;地图路面（1012，2 cm）&lt;/span&gt;&#x27;, f&#x27;&lt;span&gt;路面（{PORT} 朴素版，2 cm）&lt;/span&gt;&#x27;),</span>
+<span class="line" id="L113"><a href="#L113"> 113</a>         (&#x27;var TRIPS = { &quot;0924&quot;: { dir: &quot;crack&quot;, date: &quot;2026-09-24&quot; }, &quot;1012&quot;: { dir: &quot;crack12&quot;, date: &quot;2026-10-12&quot; } };&#x27;,</span>
+<span class="line" id="L114"><a href="#L114"> 114</a>          &#x27;var TRIPS = { &quot;1012&quot;: { dir: &quot;nocrack&quot;, date: &quot;2026-10-12&quot; } };&#x27;),</span>
+<span class="line" id="L115"><a href="#L115"> 115</a>         (&#x27;S.trip = (new URLSearchParams(location.search).get(&quot;trip&quot;) || &quot;1012&quot;); if (!TRIPS[S.trip]) S.trip = &quot;0924&quot;;&#x27;,</span>
+<span class="line" id="L116"><a href="#L116"> 116</a>          &#x27;S.trip = &quot;1012&quot;;&#x27;),</span>
+<span class="line" id="L117"><a href="#L117"> 117</a>         (&#x27;拖拽转视角 · ←/→ 移动 · 点击路面病害看详情&#x27;, &#x27;拖拽转视角 · ←/→ 移动&#x27;),</span>
+<span class="line" id="L118"><a href="#L118"> 118</a>         (&#x27;拖拽平移 · 滚轮缩放 · 点击病害看详情&#x27;, &#x27;拖拽平移 · 滚轮缩放&#x27;),</span>
+<span class="line" id="L119"><a href="#L119"> 119</a>         (&#x27;&lt;option value=&quot;1&quot;&gt;路面 ｜ 叠加俯视图&lt;/option&gt;&lt;option value=&quot;2&quot;&gt;0903 底图+0924 病害 ｜ 1012 底图+1012 病害&lt;/option&gt;&#x27;,</span>
+<span class="line" id="L120"><a href="#L120"> 120</a>          f&#x27;&lt;option value=&quot;2&quot;&gt;8829 优化版 ｜ {PORT} 朴素版&lt;/option&gt;&#x27;),</span>
+<span class="line" id="L121"><a href="#L121"> 121</a>         (&#x27;$(&quot;sw-l&quot;).textContent = m === 1 ? &quot;只有地图路面（1012）&quot; : &quot;0903 底图 + 0924 病害&quot;; $(&quot;sw-r&quot;).textContent = m === 1 ? &quot;叠加病害俯视图（1012）&quot; : &quot;1012 底图 + 1012 病害&quot;;&#x27;,</span>
+<span class="line" id="L122"><a href="#L122"> 122</a>          f&#x27;$(&quot;sw-l&quot;).textContent = &quot;8829 优化版&quot;; $(&quot;sw-r&quot;).textContent = &quot;{PORT} 朴素版（{SWTXT}）&quot;;&#x27;),</span>
+<span class="line" id="L123"><a href="#L123"> 123</a>     ]</span>
+<span class="line" id="L124"><a href="#L124"> 124</a>     for a, b in rep:</span>
+<span class="line" id="L125"><a href="#L125"> 125</a>         if a not in s:</span>
+<span class="line" id="L126"><a href="#L126"> 126</a>             print(&quot;  [patch] 没找到:&quot;, a[:60]); continue</span>
+<span class="line" id="L127"><a href="#L127"> 127</a>         s = s.replace(a, b)</span>
+<span class="line" id="L128"><a href="#L128"> 128</a>     s = s.replace(&#x27;&quot;v3d1012&quot;&#x27;, f&#x27;&quot;v3d{PORT}&quot;&#x27;).replace(&quot;&#x27;v3d1012&#x27;&quot;, f&quot;&#x27;v3d{PORT}&#x27;&quot;)</span>
+<span class="line" id="L129"><a href="#L129"> 129</a>     s = s.replace(&#x27;title=&quot;屏幕中间出现一条可拖动的分界线, 两边各画一种内容。基线 = 0903 底图 (8826 的) 及 0924 俯视图在其中的位置&quot;&#x27;,</span>
+<span class="line" id="L130"><a href="#L130"> 130</a>                   f&#x27;title=&quot;屏幕中间出现一条可拖动的分界线：左边 8829 优化版路面，右边 {PORT} 朴素版路面&quot;&#x27;)</span>
+<span class="line" id="L131"><a href="#L131"> 131</a>     hide = &quot;&quot;&quot;</span>
+<span class="line" id="L132"><a href="#L132"> 132</a> &lt;style&gt;#list{display:none!important}&lt;/style&gt;</span>
+<span class="line" id="L133"><a href="#L133"> 133</a> &lt;script&gt;</span>
+<span class="line" id="L134"><a href="#L134"> 134</a> // 8831/8832：没有病害、没有高斯、没有点云；&quot;对比&quot;只留 8829 优化版 ｜ 8831 朴素版，并默认打开</span>
+<span class="line" id="L135"><a href="#L135"> 135</a> (function(){ function hideField(id){ var e=document.getElementById(id); if(!e) return; var f=e.closest(&#x27;.field&#x27;); (f||e).style.display=&#x27;none&#x27;; }</span>
+<span class="line" id="L136"><a href="#L136"> 136</a>   [&#x27;trip&#x27;,&#x27;l-tiles&#x27;,&#x27;l-box&#x27;,&#x27;l-seg&#x27;,&#x27;l-reg&#x27;,&#x27;f-q2&#x27;,&#x27;l-gain&#x27;,&#x27;f-op&#x27;,&#x27;gs-road&#x27;].forEach(hideField);</span>
+<span class="line" id="L137"><a href="#L137"> 137</a>   var g=document.querySelector(&#x27;#env-mode option[value=gs]&#x27;); if(g) g.remove();</span>
+<span class="line" id="L138"><a href="#L138"> 138</a>   var L=document.getElementById(&#x27;legend&#x27;); if(L){ new MutationObserver(function(){ if(L.dataset.k!==&#x27;1&#x27;){ L.dataset.k=&#x27;1&#x27;; L.innerHTML=&#x27;&#x27;; } }).observe(L,{childList:true}); }</span>
+<span class="line" id="L139"><a href="#L139"> 139</a>   var sel=document.getElementById(&#x27;cmp-mode&#x27;);</span>
+<span class="line" id="L140"><a href="#L140"> 140</a>   if(sel){ var tries=0; (function on(){ tries++; if(window.THREE &amp;&amp; document.readyState===&#x27;complete&#x27; &amp;&amp; tries&gt;3){ sel.value=&#x27;2&#x27;; sel.dispatchEvent(new Event(&#x27;change&#x27;)); } else if(tries&lt;60) setTimeout(on,500); })(); }</span>
+<span class="line" id="L141"><a href="#L141"> 141</a> })();</span>
+<span class="line" id="L142"><a href="#L142"> 142</a> &lt;/script&gt;</span>
+<span class="line" id="L143"><a href="#L143"> 143</a> &quot;&quot;&quot;</span>
+<span class="line" id="L144"><a href="#L144"> 144</a>     s = s.replace(&quot;&lt;/body&gt;&quot;, hide + &quot;&lt;/body&gt;&quot;)</span>
+<span class="line" id="L145"><a href="#L145"> 145</a>     open(f&quot;{SITE}/index.html&quot;, &quot;w&quot;, encoding=&quot;utf-8&quot;).write(s)</span>
+<span class="line" id="L146"><a href="#L146"> 146</a> </span>
+<span class="line" id="L147"><a href="#L147"> 147</a> </span>
+<span class="line" id="L148"><a href="#L148"> 148</a> if __name__ == &quot;__main__&quot;:</span>
+<span class="line" id="L149"><a href="#L149"> 149</a>     t0 = time.time()</span>
+<span class="line" id="L150"><a href="#L150"> 150</a>     os.makedirs(SITE, exist_ok=True)</span>
+<span class="line" id="L151"><a href="#L151"> 151</a>     for f in (&quot;serve2.py&quot;, &quot;three.min.js&quot;):</span>
+<span class="line" id="L152"><a href="#L152"> 152</a>         shutil.copy2(f&quot;{SRC}/{f}&quot;, f&quot;{SITE}/{f}&quot;)</span>
+<span class="line" id="L153"><a href="#L153"> 153</a>     patch_page()</span>
+<span class="line" id="L154"><a href="#L154"> 154</a>     empty = dict(mask=[[0, 0], [1, 0], [1, 1], [0, 1]], tiles=[], classes={}, stats=dict(n=0, ndet=0, q=[0, 0, 0, 0], off=0, ndet_off=0))</span>
+<span class="line" id="L155"><a href="#L155"> 155</a>     os.makedirs(f&quot;{SITE}/nocrack&quot;, exist_ok=True); json.dump(empty, open(f&quot;{SITE}/nocrack/tiles.json&quot;, &quot;w&quot;))</span>
+<span class="line" id="L156"><a href="#L156"> 156</a>     # 对比用的 8829 优化版：只做链接，不拷贝</span>
+<span class="line" id="L157"><a href="#L157"> 157</a>     os.makedirs(f&quot;{SITE}/base&quot;, exist_ok=True)</span>
+<span class="line" id="L158"><a href="#L158"> 158</a>     if not os.path.islink(f&quot;{SITE}/base/ground&quot;):</span>
+<span class="line" id="L159"><a href="#L159"> 159</a>         os.symlink(ROOT + &quot;/site/ground&quot;, f&quot;{SITE}/base/ground&quot;)</span>
+<span class="line" id="L160"><a href="#L160"> 160</a>     json.dump(empty, open(f&quot;{SITE}/base/tiles.json&quot;, &quot;w&quot;))</span>
+<span class="line" id="L161"><a href="#L161"> 161</a>     for d in [GD_, GT] + [f&quot;{GT}{k}&quot; for k in range(1, 5)]:</span>
+<span class="line" id="L162"><a href="#L162"> 162</a>         if os.path.isdir(d):</span>
+<span class="line" id="L163"><a href="#L163"> 163</a>             shutil.rmtree(d)</span>
+<span class="line" id="L164"><a href="#L164"> 164</a>     for k in range(5):</span>
+<span class="line" id="L165"><a href="#L165"> 165</a>         os.makedirs(f&quot;{GD_}/L{k}&quot;, exist_ok=True)</span>
+<span class="line" id="L166"><a href="#L166"> 166</a>     os.makedirs(f&quot;{GT}/L0&quot;, exist_ok=True)</span>
+<span class="line" id="L167"><a href="#L167"> 167</a>     ids = [t[&quot;id&quot;] for t in json.load(open(f&quot;{OD}/index.json&quot;))[&quot;tiles&quot;]]</span>
+<span class="line" id="L168"><a href="#L168"> 168</a>     with Pool(24) as pool:</span>
+<span class="line" id="L169"><a href="#L169"> 169</a>         r0 = pool.map(l0, ids)</span>
+<span class="line" id="L170"><a href="#L170"> 170</a>     levels = [dict(res=0.02, tile=20.0, tiles=sorted(t for t, n in r0 if n &gt; 0))]</span>
+<span class="line" id="L171"><a href="#L171"> 171</a>     area = sum(n for _, n in r0) * 0.0004</span>
+<span class="line" id="L172"><a href="#L172"> 172</a>     cur = [tuple(int(v) for v in t.split(&quot;_&quot;)) for t in levels[0][&quot;tiles&quot;]]</span>
+<span class="line" id="L173"><a href="#L173"> 173</a>     for lv in range(1, 5):</span>
+<span class="line" id="L174"><a href="#L174"> 174</a>         par = sorted(set((gx // 2, gn // 2) for gx, gn in cur))</span>
+<span class="line" id="L175"><a href="#L175"> 175</a>         with Pool(16) as pool:</span>
+<span class="line" id="L176"><a href="#L176"> 176</a>             got = sorted(t for t in pool.map(up, [(lv, gx, gn) for gx, gn in par]) if t)</span>
+<span class="line" id="L177"><a href="#L177"> 177</a>         levels.append(dict(res=0.02 * 2 ** lv, tile=20.0 * 2 ** lv, tiles=got)); cur = [tuple(int(v) for v in t.split(&quot;_&quot;)) for t in got]</span>
+<span class="line" id="L178"><a href="#L178"> 178</a>     for d in [GT] + [f&quot;{GT}{k}&quot; for k in range(1, 5)]:</span>
+<span class="line" id="L179"><a href="#L179"> 179</a>         if os.path.isdir(d):</span>
+<span class="line" id="L180"><a href="#L180"> 180</a>             shutil.rmtree(d)</span>
+<span class="line" id="L181"><a href="#L181"> 181</a>     json.dump(dict(px=1000, levels=levels, lat_show=LAT_SHOW), open(f&quot;{GD_}/index.json&quot;, &quot;w&quot;))</span>
+<span class="line" id="L182"><a href="#L182"> 182</a>     print(&quot;ground:&quot;, &quot;, &quot;.join(f&quot;L{k} {len(l[&#x27;tiles&#x27;])}&quot; for k, l in enumerate(levels)), f&quot;; shown road {area:.0f} m2&quot;)</span>
+<span class="line" id="L183"><a href="#L183"> 183</a>     # 视点：表格里每张前摄的位置和航向（相邻不足 2 m 的跳过，只为减少视点个数）</span>
+<span class="line" id="L184"><a href="#L184"> 184</a>     stations = []; s_acc = 0.0; last = None</span>
+<span class="line" id="L185"><a href="#L185"> 185</a>     for k, i in enumerate(fr):</span>
+<span class="line" id="L186"><a href="#L186"> 186</a>         c = CG[k]</span>
+<span class="line" id="L187"><a href="#L187"> 187</a>         if last is not None:</span>
+<span class="line" id="L188"><a href="#L188"> 188</a>             d = float(np.linalg.norm(c - last))</span>
+<span class="line" id="L189"><a href="#L189"> 189</a>             if d &lt; 2.0:</span>
+<span class="line" id="L190"><a href="#L190"> 190</a>                 continue</span>
+<span class="line" id="L191"><a href="#L191"> 191</a>             s_acc += d</span>
+<span class="line" id="L192"><a href="#L192"> 192</a>         a = np.radians(Z[&quot;az&quot;][i]); f2 = np.array([np.sin(a), np.cos(a)])</span>
+<span class="line" id="L193"><a href="#L193"> 193</a>         lon, lat = en_to_lonlat(c[0], c[1])</span>
+<span class="line" id="L194"><a href="#L194"> 194</a>         stations.append(dict(i=int(Z[&quot;rows&quot;][i]), p=[round(float(c[0]), 3), round(CAM_H, 3), round(float(-c[1]), 3)], f=[round(float(f2[0]), 4), 0.0, round(float(-f2[1]), 4)],</span>
+<span class="line" id="L195"><a href="#L195"> 195</a>                              s=round(s_acc, 1), ll=[round(float(lon), 7), round(float(lat), 7)], g=0, d=0))</span>
+<span class="line" id="L196"><a href="#L196"> 196</a>         last = c</span>
+<span class="line" id="L197"><a href="#L197"> 197</a>     segs = [dict(id=0, d=0, a=0, b=len(stations) - 1, f0=stations[0][&quot;i&quot;], f1=stations[-1][&quot;i&quot;])]</span>
+<span class="line" id="L198"><a href="#L198"> 198</a>     cl0 = json.load(open(f&quot;{WORK}/p02c/cloud_index.json&quot;))</span>
+<span class="line" id="L199"><a href="#L199"> 199</a>     for d in (&quot;tiles&quot;, &quot;tiles1&quot;):</span>
+<span class="line" id="L200"><a href="#L200"> 200</a>         os.makedirs(f&quot;{SITE}/{d}&quot;, exist_ok=True)</span>
+<span class="line" id="L201"><a href="#L201"> 201</a>     origin = dict(lon0=LON0, lat0=LAT0, m_lon=M_LON, m_lat=M_LAT, note=&quot;ENU 原点常数与 8828/8829 相同（只是坐标原点）&quot;)</span>
+<span class="line" id="L202"><a href="#L202"> 202</a>     json.dump(dict(build=time.strftime(&quot;%m%d%H%M%S&quot;), version=2, tile=cl0[&quot;tile&quot;], tiles=[], tile1=cl0[&quot;tile1&quot;], tiles1=[],</span>
+<span class="line" id="L203"><a href="#L203"> 203</a>                    stations=stations, segments=segs, cam_height=round(CAM_H, 3), origin=origin, tunnel=[]), open(f&quot;{SITE}/index.json&quot;, &quot;w&quot;))</span>
+<span class="line" id="L204"><a href="#L204"> 204</a>     print(f&quot;stations {len(stations)}; index.json {os.path.getsize(SITE + &#x27;/index.json&#x27;)/1e3:.0f} KB  [{time.time()-t0:.0f}s]&quot;)</span></pre></html>

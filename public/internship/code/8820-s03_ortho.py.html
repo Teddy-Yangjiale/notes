@@ -1,0 +1,115 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>s03_ortho.py</title><style>body{margin:24px;font:15px system-ui;background:#faf8f3;color:#243342}pre{overflow:auto;line-height:1.6;background:white;padding:16px}.line{display:block}.line:target{background:#fff1a8}a{color:#58728a}header{overflow-wrap:anywhere}</style><header><a href="/notes/series/internship/">返回实习专栏</a><h1>s03_ortho.py</h1><p>只读快照：2026-11-09 · /home/yjl/crack/viewer3d/build/s03_ortho.py</p><p>SHA-256: c88830d081757b6b493b8949096343283f2b57d2fecd652488dbb52da8ee08a2</p></header><pre><span class="line" id="L1"><a href="#L1">   1</a> # -*- coding: utf-8 -*-</span>
+<span class="line" id="L2"><a href="#L2">   2</a> &quot;&quot;&quot;03: 用 rec0903 的录像帧做一张路面正射底图 (IPM), 4 cm/px。</span>
+<span class="line" id="L3"><a href="#L3">   3</a> </span>
+<span class="line" id="L4"><a href="#L4">   4</a> 帧取 ~/gd/frames/rec0903 里已解好的 960x540 JPEG (8791 张齐全)。原始 mp4 是 1080p,</span>
+<span class="line" id="L5"><a href="#L5">   5</a> 但 OpenCV 解到第 1349 帧就断 (码流里有坏的 PPS), 而 6 m 处 540p 的纵向采样约 4 cm, 与底图分辨率相当, 够用。</span>
+<span class="line" id="L6"><a href="#L6">   6</a> </span>
+<span class="line" id="L7"><a href="#L7">   7</a> 用途两个: (1) 0924 裂缝俯视图的配准目标 —— 三维地图自己的车道线/井盖在哪, 由它说了算;</span>
+<span class="line" id="L8"><a href="#L8">   8</a>           (2) 查看器里的&quot;地图路面&quot;图层, 点云的路面点又稀又糊, 这张底图清楚得多。</span>
+<span class="line" id="L9"><a href="#L9">   9</a> 同一块路面被很多帧看到, 取**离相机最近的那一次** (分辨率最高)。</span>
+<span class="line" id="L10"><a href="#L10">  10</a> 几何: common.py 里标定好的 IPM (模板内参, 上仰 5.049, 有效高 1.475) + 平滑轨迹的贴路坐标架。</span>
+<span class="line" id="L11"><a href="#L11">  11</a> health &lt; 0.25 的帧 (急弯 / 定位跳变) 不参与, 留空 —— 宁可没有, 不要错的。</span>
+<span class="line" id="L12"><a href="#L12">  12</a> &quot;&quot;&quot;</span>
+<span class="line" id="L13"><a href="#L13">  13</a> import sys, time</span>
+<span class="line" id="L14"><a href="#L14">  14</a> import numpy as np, cv2</span>
+<span class="line" id="L15"><a href="#L15">  15</a> from common import *</span>
+<span class="line" id="L16"><a href="#L16">  16</a> sys.path.insert(0, STITCH)</span>
+<span class="line" id="L17"><a href="#L17">  17</a> from bev_core import BEVRenderer</span>
+<span class="line" id="L18"><a href="#L18">  18</a> </span>
+<span class="line" id="L19"><a href="#L19">  19</a> t0 = time.time()</span>
+<span class="line" id="L20"><a href="#L20">  20</a> fc = json.load(open(WORK + &quot;/frontcam0903.json&quot;))</span>
+<span class="line" id="L21"><a href="#L21">  21</a> cfg = dict(fx=fc[&quot;fx&quot;], fy=fc[&quot;fy&quot;], cx=fc[&quot;cx&quot;], cy=fc[&quot;cy&quot;], dist=fc[&quot;dist&quot;], height=IPM_HEIGHT,</span>
+<span class="line" id="L22"><a href="#L22">  22</a>            roll=0.0, pitch=np.radians(IPM_PITCH_UP), yaw=np.radians(CAM_YAW))</span>
+<span class="line" id="L23"><a href="#L23">  23</a> RES, TILE = 0.04, 40.0</span>
+<span class="line" id="L24"><a href="#L24">  24</a> TP = int(round(TILE / RES))</span>
+<span class="line" id="L25"><a href="#L25">  25</a> XR, YR = (-9.0, 9.0), (5.4, 13.4)</span>
+<span class="line" id="L26"><a href="#L26">  26</a> rend = BEVRenderer(cfg, (960, 540), XR, YR, RES)</span>
+<span class="line" id="L27"><a href="#L27">  27</a> V = np.asarray(rend.valid); V = V if V.dtype == bool else V &gt; 0</span>
+<span class="line" id="L28"><a href="#L28">  28</a> bh, bw = V.shape</span>
+<span class="line" id="L29"><a href="#L29">  29</a> print(&quot;IPM 条带 %dx%d px, 有效 %.0f%%; 近边行对应图像行 %.0f%%&quot;</span>
+<span class="line" id="L30"><a href="#L30">  30</a>       % (bw, bh, 100 * V.mean(), 100 * rend.ground_to_image(np.array([[0.0, YR[0], 0.0]]))[0, 1] / 540))</span>
+<span class="line" id="L31"><a href="#L31">  31</a> # 每个条带像素的&quot;到相机距离&quot; (近者优先)</span>
+<span class="line" id="L32"><a href="#L32">  32</a> yy = (YR[1] - (np.arange(bh) + 0.5) * RES)[:, None] * np.ones((1, bw))</span>
+<span class="line" id="L33"><a href="#L33">  33</a> xx = (XR[0] + (np.arange(bw) + 0.5) * RES)[None, :] * np.ones((bh, 1))</span>
+<span class="line" id="L34"><a href="#L34">  34</a> rng_img = np.hypot(xx, yy).astype(np.float32)</span>
+<span class="line" id="L35"><a href="#L35">  35</a> rng_img[~V] = np.inf</span>
+<span class="line" id="L36"><a href="#L36">  36</a> VF = V.astype(np.float32)</span>
+<span class="line" id="L37"><a href="#L37">  37</a> </span>
+<span class="line" id="L38"><a href="#L38">  38</a> f = np.load(WORK + &quot;/frames.npz&quot;)</span>
+<span class="line" id="L39"><a href="#L39">  39</a> p, fh, right, s, health, moving = f[&quot;p&quot;], f[&quot;fwd_h&quot;], f[&quot;right&quot;], f[&quot;s&quot;], f[&quot;health&quot;], f[&quot;moving&quot;]</span>
+<span class="line" id="L40"><a href="#L40">  40</a> tiles = {}</span>
+<span class="line" id="L41"><a href="#L41">  41</a> def tile(gx, gn):</span>
+<span class="line" id="L42"><a href="#L42">  42</a>     k = (gx, gn)</span>
+<span class="line" id="L43"><a href="#L43">  43</a>     if k not in tiles:</span>
+<span class="line" id="L44"><a href="#L44">  44</a>         tiles[k] = [np.zeros((TP, TP, 3), np.uint8), np.full((TP, TP), np.inf, np.float32), np.zeros((TP, TP), np.uint16)]</span>
+<span class="line" id="L45"><a href="#L45">  45</a>     return tiles[k]</span>
+<span class="line" id="L46"><a href="#L46">  46</a> </span>
+<span class="line" id="L47"><a href="#L47">  47</a> last_s, used, skipped_bad = -9.0, 0, 0</span>
+<span class="line" id="L48"><a href="#L48">  48</a> src = np.float32([[0, 0], [bw, 0], [0, bh]])</span>
+<span class="line" id="L49"><a href="#L49">  49</a> for i in range(len(p)):</span>
+<span class="line" id="L50"><a href="#L50">  50</a>     if not moving[i] or s[i] - last_s &lt; 0.35:</span>
+<span class="line" id="L51"><a href="#L51">  51</a>         continue</span>
+<span class="line" id="L52"><a href="#L52">  52</a>     if health[i] &lt; 0.25:</span>
+<span class="line" id="L53"><a href="#L53">  53</a>         skipped_bad += 1; last_s = s[i]; continue</span>
+<span class="line" id="L54"><a href="#L54">  54</a>     last_s = s[i]</span>
+<span class="line" id="L55"><a href="#L55">  55</a>     img = cv2.imread(&quot;%s/frames/rec0903/%06d.jpg&quot; % (GD, i))</span>
+<span class="line" id="L56"><a href="#L56">  56</a>     if img is None:</span>
+<span class="line" id="L57"><a href="#L57">  57</a>         continue</span>
+<span class="line" id="L58"><a href="#L58">  58</a>     bev = rend.render(img)</span>
+<span class="line" id="L59"><a href="#L59">  59</a>     # 条带像素 (u,v) -&gt; 地面 (x,y) -&gt; 世界 (E,N) -&gt; 世界像素 (col = E/RES, row = -N/RES)</span>
+<span class="line" id="L60"><a href="#L60">  60</a>     def w(u, v):</span>
+<span class="line" id="L61"><a href="#L61">  61</a>         x = XR[0] + u * RES; y = YR[1] - v * RES</span>
+<span class="line" id="L62"><a href="#L62">  62</a>         e = p[i, 0] + right[i, 0] * x + fh[i, 0] * y</span>
+<span class="line" id="L63"><a href="#L63">  63</a>         n = p[i, 2] + right[i, 2] * x + fh[i, 2] * y</span>
+<span class="line" id="L64"><a href="#L64">  64</a>         return [e / RES, -n / RES]</span>
+<span class="line" id="L65"><a href="#L65">  65</a>     dst = np.float32([w(0, 0), w(bw, 0), w(0, bh)])</span>
+<span class="line" id="L66"><a href="#L66">  66</a>     c4 = np.float32([w(0, 0), w(bw, 0), w(0, bh), w(bw, bh)])</span>
+<span class="line" id="L67"><a href="#L67">  67</a>     c0, r0 = np.floor(c4.min(0)).astype(int) - 1</span>
+<span class="line" id="L68"><a href="#L68">  68</a>     c1, r1 = np.ceil(c4.max(0)).astype(int) + 1</span>
+<span class="line" id="L69"><a href="#L69">  69</a>     M = cv2.getAffineTransform(src, dst - np.float32([c0, r0]))</span>
+<span class="line" id="L70"><a href="#L70">  70</a>     sz = (int(c1 - c0), int(r1 - r0))</span>
+<span class="line" id="L71"><a href="#L71">  71</a>     wimg = cv2.warpAffine(bev, M, sz, flags=cv2.INTER_LINEAR)</span>
+<span class="line" id="L72"><a href="#L72">  72</a>     wrng = cv2.warpAffine(rng_img, M, sz, flags=cv2.INTER_NEAREST, borderValue=float(&quot;inf&quot;))</span>
+<span class="line" id="L73"><a href="#L73">  73</a>     # 条带边缘一圈的像素是和&quot;条带外的黑&quot;线性插值出来的, 会在相邻条带之间留下一道暗缝 —— 用同样插值的掩膜把它们剔掉</span>
+<span class="line" id="L74"><a href="#L74">  74</a>     wval = cv2.warpAffine(VF, M, sz, flags=cv2.INTER_LINEAR)</span>
+<span class="line" id="L75"><a href="#L75">  75</a>     wrng[wval &lt; 0.985] = np.inf</span>
+<span class="line" id="L76"><a href="#L76">  76</a>     for gx in range(int(np.floor(c0 / TP)), int(np.floor((c1 - 1) / TP)) + 1):</span>
+<span class="line" id="L77"><a href="#L77">  77</a>         for gr in range(int(np.floor(r0 / TP)), int(np.floor((r1 - 1) / TP)) + 1):</span>
+<span class="line" id="L78"><a href="#L78">  78</a>             a0, a1 = max(c0, gx * TP), min(c1, (gx + 1) * TP)</span>
+<span class="line" id="L79"><a href="#L79">  79</a>             b0, b1 = max(r0, gr * TP), min(r1, (gr + 1) * TP)</span>
+<span class="line" id="L80"><a href="#L80">  80</a>             if a1 &lt;= a0 or b1 &lt;= b0: continue</span>
+<span class="line" id="L81"><a href="#L81">  81</a>             T = tile(gx, gr)</span>
+<span class="line" id="L82"><a href="#L82">  82</a>             sub_i = wimg[b0 - r0:b1 - r0, a0 - c0:a1 - c0]; sub_r = wrng[b0 - r0:b1 - r0, a0 - c0:a1 - c0]</span>
+<span class="line" id="L83"><a href="#L83">  83</a>             ti = T[0][b0 - gr * TP:b1 - gr * TP, a0 - gx * TP:a1 - gx * TP]</span>
+<span class="line" id="L84"><a href="#L84">  84</a>             tr = T[1][b0 - gr * TP:b1 - gr * TP, a0 - gx * TP:a1 - gx * TP]</span>
+<span class="line" id="L85"><a href="#L85">  85</a>             tf = T[2][b0 - gr * TP:b1 - gr * TP, a0 - gx * TP:a1 - gx * TP]</span>
+<span class="line" id="L86"><a href="#L86">  86</a>             m = sub_r &lt; tr</span>
+<span class="line" id="L87"><a href="#L87">  87</a>             ti[m] = sub_i[m]; tr[m] = sub_r[m]; tf[m] = min(i, 65535)</span>
+<span class="line" id="L88"><a href="#L88">  88</a>     used += 1</span>
+<span class="line" id="L89"><a href="#L89">  89</a>     if used % 500 == 0:</span>
+<span class="line" id="L90"><a href="#L90">  90</a>         print(&quot;  %d 帧已用 (视频第 %d 帧), 瓦片 %d, %.0fs&quot; % (used, i, len(tiles), time.time() - t0), flush=True)</span>
+<span class="line" id="L91"><a href="#L91">  91</a> print(&quot;用了 %d 帧, 因 health&lt;0.25 跳过 %d 帧, 瓦片 %d 个&quot; % (used, skipped_bad, len(tiles)))</span>
+<span class="line" id="L92"><a href="#L92">  92</a> </span>
+<span class="line" id="L93"><a href="#L93">  93</a> os.makedirs(WORK + &quot;/ortho&quot;, exist_ok=True); os.makedirs(SITE + &quot;/ground&quot;, exist_ok=True)</span>
+<span class="line" id="L94"><a href="#L94">  94</a> rf = RoadField(f)</span>
+<span class="line" id="L95"><a href="#L95">  95</a> index = []</span>
+<span class="line" id="L96"><a href="#L96">  96</a> cover = 0</span>
+<span class="line" id="L97"><a href="#L97">  97</a> for (gx, gr), (im, rg, fr) in sorted(tiles.items()):</span>
+<span class="line" id="L98"><a href="#L98">  98</a>     m = np.isfinite(rg)</span>
+<span class="line" id="L99"><a href="#L99">  99</a>     if m.sum() &lt; 500: continue</span>
+<span class="line" id="L100"><a href="#L100"> 100</a>     cover += int(m.sum())</span>
+<span class="line" id="L101"><a href="#L101"> 101</a>     im[~m] = 0</span>
+<span class="line" id="L102"><a href="#L102"> 102</a>     # 世界像素行号 gr 对应 N = -(gr*TP .. (gr+1)*TP)*RES; 文件名用 (东格, 北格) = (gx, -gr-1), 图像上北下南</span>
+<span class="line" id="L103"><a href="#L103"> 103</a>     gn = -gr - 1</span>
+<span class="line" id="L104"><a href="#L104"> 104</a>     cv2.imwrite(&quot;%s/ortho/%d_%d.png&quot; % (WORK, gx, gn), im)</span>
+<span class="line" id="L105"><a href="#L105"> 105</a>     np.save(&quot;%s/ortho/%d_%d_frame.npy&quot; % (WORK, gx, gn), fr)</span>
+<span class="line" id="L106"><a href="#L106"> 106</a>     cv2.imwrite(&quot;%s/ground/%d_%d.jpg&quot; % (SITE, gx, gn), im, [cv2.IMWRITE_JPEG_QUALITY, 86])</span>
+<span class="line" id="L107"><a href="#L107"> 107</a>     # 查看器用: 5x5 的路面高程网格 (行: 北-&gt;南, 列: 西-&gt;东)</span>
+<span class="line" id="L108"><a href="#L108"> 108</a>     es = (gx + np.linspace(0, 1, 5)) * TILE; ns = (gn + 1 - np.linspace(0, 1, 5)) * TILE</span>
+<span class="line" id="L109"><a href="#L109"> 109</a>     E, N = np.meshgrid(es, ns)</span>
+<span class="line" id="L110"><a href="#L110"> 110</a>     index.append(dict(id=&quot;%d_%d&quot; % (gx, gn), e0=gx * TILE, n0=gn * TILE, cov=round(float(m.mean()), 3),</span>
+<span class="line" id="L111"><a href="#L111"> 111</a>                       h=[round(float(v), 2) for v in rf(E, N).ravel()]))</span>
+<span class="line" id="L112"><a href="#L112"> 112</a> json.dump(dict(res=RES, tile=TILE, px=TP, tiles=index), open(SITE + &quot;/ground/index.json&quot;, &quot;w&quot;))</span>
+<span class="line" id="L113"><a href="#L113"> 113</a> json.dump(dict(res=RES, tile=TILE, px=TP, tiles=[t[&quot;id&quot;] for t in index]), open(WORK + &quot;/ortho/index.json&quot;, &quot;w&quot;))</span>
+<span class="line" id="L114"><a href="#L114"> 114</a> print(&quot;写出 %d 个底图瓦片, 覆盖路面 %.0f m2; site/ground %.0f MB; 用时 %.0fs&quot; % (</span>
+<span class="line" id="L115"><a href="#L115"> 115</a>     len(index), cover * RES * RES, sum(os.path.getsize(SITE + &quot;/ground/&quot; + x) for x in os.listdir(SITE + &quot;/ground&quot;)) / 1e6, time.time() - t0))</span></pre></html>

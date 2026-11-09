@@ -1,0 +1,37 @@
+[
+  {
+    "file": "8830-observation.jpg",
+    "source": "/home/yjl/data/0907/eval_disease_v1/images/p_00057_1788762762844.jpg",
+    "source_sha256": "8e2e53c5d35c3e33875f6799411fbc69381f0bd5e6053edf4669eefa2e6c6f8e",
+    "sha256": "dc541bfd01432a05fbc320307407300347e600be03a1c0a8d09296c91e11fa6d",
+    "kind": "raw_observation"
+  },
+  {
+    "file": "8828-front-000052.jpg",
+    "source": "/home/yjl/data/1012/front_all/000052.jpg",
+    "source_sha256": "13399f60886e33cff2736d04e429a73523ba44d1c47ea430be98af451f19edd9",
+    "sha256": "b1917b944c19e3ee3642241922b60d55fe7828b0c81254c57023e62aaf3c7efc",
+    "kind": "raw_observation"
+  },
+  {
+    "file": "8828-front-003540.jpg",
+    "source": "/home/yjl/data/1012/front_all/003540.jpg",
+    "source_sha256": "375dfa18d9ca31181221ada8b44b6ac56496d69d4f2472cf001411a1bb6a9656",
+    "sha256": "71ae0b0efeda64d202c5bdfcd0686765253a021144947a772ddb38011697a7e4",
+    "kind": "raw_observation"
+  },
+  {
+    "file": "8831-ground-0.jpg",
+    "source": "/home/yjl/crack/snap1012/site_raw/ground/L0/-57_-85.webp",
+    "source_sha256": "16f32836367be88aab927510059067fc7ef81ecd8980c75224b810a127679c9d",
+    "sha256": "b0f23137d28cdde3cb67d25974fe2e95d9187a3aacd8e87dfb073cd43d684007",
+    "kind": "saved_orthophoto"
+  },
+  {
+    "file": "8828-ground-0.jpg",
+    "source": "/home/yjl/crack/viewer1012/site2/ground/L0/-57_-28.webp",
+    "source_sha256": "fefb64f2b28cfd8862c1a29102d254410403c09c46e3a7fc0715825462aa03e6",
+    "sha256": "b4e36eec7d515c5984393013ce1f45ad202021eed7c37e6fcb86e3cb48204618",
+    "kind": "saved_orthophoto"
+  }
+]

@@ -1,0 +1,110 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>k03_site.py</title><style>body{margin:24px;font:15px system-ui;background:#faf8f3;color:#243342}pre{overflow:auto;line-height:1.6;background:white;padding:16px}.line{display:block}.line:target{background:#fff1a8}a{color:#58728a}header{overflow-wrap:anywhere}</style><header><a href="/notes/series/internship/">返回实习专栏</a><h1>k03_site.py</h1><p>只读快照：2026-11-09 · /home/yjl/crack/viewer3d/build/k03_site.py</p><p>SHA-256: af9c42b016d135a9228d7a816453389056cdd0b78e62258855d7d34c5570d697</p></header><pre><span class="line" id="L1"><a href="#L1">   1</a> # -*- coding: utf-8 -*-</span>
+<span class="line" id="L2"><a href="#L2">   2</a> &quot;&quot;&quot;k03: KITTI 02 真值验证的展示站点 (site4/, 端口 8823)。</span>
+<span class="line" id="L3"><a href="#L3">   3</a> </span>
+<span class="line" id="L4"><a href="#L4">   4</a> 把 k01/k02 的结果做成和 8822 同一种看法: 每约 4 m 一个站点 (一张前视照片), 每个站点带一块&quot;自己照片里最近的那段路面&quot;的俯视图块;</span>
+<span class="line" id="L5"><a href="#L5">   5</a> 在一张照片里画出后面几个站点的俯视图块落在路面上的位置 —— 按某种做法估出的位置 (实线) 和按真值的位置 (绿色虚线) 一起画, 差多少一眼可见。</span>
+<span class="line" id="L6"><a href="#L6">   6</a> 做法可切换: 只用 (模拟的) 定位 / 路面条带互相关 (第一版 u01 的做法) / 条带 + 整幅画面两视几何 (现在的做法) / 真值。</span>
+<span class="line" id="L7"><a href="#L7">   7</a> 输出 site4/data.json, front/*.jpg (照片), tile/*.webp (俯视图块, 带透明通道), fmask/*.png (车辆掩膜)。</span>
+<span class="line" id="L8"><a href="#L8">   8</a> 用法: k03_site.py [间距 m] [种子] [--notex]</span>
+<span class="line" id="L9"><a href="#L9">   9</a> &quot;&quot;&quot;</span>
+<span class="line" id="L10"><a href="#L10">  10</a> import sys, time</span>
+<span class="line" id="L11"><a href="#L11">  11</a> import numpy as np, cv2</span>
+<span class="line" id="L12"><a href="#L12">  12</a> from multiprocessing import Pool</span>
+<span class="line" id="L13"><a href="#L13">  13</a> from common import *</span>
+<span class="line" id="L14"><a href="#L14">  14</a> sys.path.insert(0, STITCH)</span>
+<span class="line" id="L15"><a href="#L15">  15</a> from bev_core import BEVRenderer</span>
+<span class="line" id="L16"><a href="#L16">  16</a> import k01_kitti as K</span>
+<span class="line" id="L17"><a href="#L17">  17</a> </span>
+<span class="line" id="L18"><a href="#L18">  18</a> SITE4 = ROOT + &quot;/site4&quot;</span>
+<span class="line" id="L19"><a href="#L19">  19</a> TX, TY, TRES = (-4.5, 4.5), (6.4, 11.4), 0.02                 # 俯视图块: 9 m 宽 x 5 m 长 (站点间距约 4.6 m, 相邻两块略有重叠)</span>
+<span class="line" id="L20"><a href="#L20">  20</a> </span>
+<span class="line" id="L21"><a href="#L21">  21</a> G = None; CAL = None</span>
+<span class="line" id="L22"><a href="#L22">  22</a> def make_one(f):</span>
+<span class="line" id="L23"><a href="#L23">  23</a>     im = cv2.imread(&quot;%s/%06d.png&quot; % (K.IMG, f))</span>
+<span class="line" id="L24"><a href="#L24">  24</a>     if im is None: return f, 0</span>
+<span class="line" id="L25"><a href="#L25">  25</a>     cv2.imwrite(&quot;%s/front/%06d.jpg&quot; % (SITE4, f), im, [cv2.IMWRITE_JPEG_QUALITY, 88])</span>
+<span class="line" id="L26"><a href="#L26">  26</a>     H, W = im.shape[:2]</span>
+<span class="line" id="L27"><a href="#L27">  27</a>     cfg = dict(fx=G[&quot;fx&quot;] * 1920.0 / W, fy=G[&quot;fy&quot;] * 1080.0 / H, cx=G[&quot;cx&quot;] * 1920.0 / W, cy=G[&quot;cy&quot;] * 1080.0 / H, dist=[0.0] * 5,</span>
+<span class="line" id="L28"><a href="#L28">  28</a>                height=CAL[2], roll=np.radians(CAL[1]), pitch=np.radians(CAL[0]), yaw=0.0)</span>
+<span class="line" id="L29"><a href="#L29">  29</a>     R = BEVRenderer(cfg, (W, H), TX, TY, TRES, osd_rows=0)</span>
+<span class="line" id="L30"><a href="#L30">  30</a>     tile = R.render(im)</span>
+<span class="line" id="L31"><a href="#L31">  31</a>     lab = load_label(K.KW + &quot;/seg&quot;, &quot;%06d&quot; % f, K.KW + &quot;/mark&quot;)</span>
+<span class="line" id="L32"><a href="#L32">  32</a>     alpha = np.asarray(R.valid).copy()</span>
+<span class="line" id="L33"><a href="#L33">  33</a>     veh = np.zeros((H, W), np.uint8)</span>
+<span class="line" id="L34"><a href="#L34">  34</a>     if lab is not None:</span>
+<span class="line" id="L35"><a href="#L35">  35</a>         road = (lab == 1).astype(np.uint8)</span>
+<span class="line" id="L36"><a href="#L36">  36</a>         hull = cv2.morphologyEx(road, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (41, 41)))   # 路面外廓: 井盖、标线这些&quot;路面以内的洞&quot;保留</span>
+<span class="line" id="L37"><a href="#L37">  37</a>         veh = cv2.dilate((lab == 2).astype(np.uint8), np.ones((7, 7), np.uint8))</span>
+<span class="line" id="L38"><a href="#L38">  38</a>         alpha &amp;= (R.render_nearest(((hull &gt; 0) &amp; (veh == 0)).astype(np.uint8)) &gt; 0)</span>
+<span class="line" id="L39"><a href="#L39">  39</a>     al = cv2.GaussianBlur(alpha.astype(np.float32), (0, 0), 2.0); al = np.clip((al - 0.5) * 3.0 + 0.5, 0, 1)</span>
+<span class="line" id="L40"><a href="#L40">  40</a>     cv2.imwrite(&quot;%s/tile/%06d.webp&quot; % (SITE4, f), np.dstack([tile, (al * 255).astype(np.uint8)]), [cv2.IMWRITE_WEBP_QUALITY, 86])</span>
+<span class="line" id="L41"><a href="#L41">  41</a>     rgba = np.zeros((H, W, 4), np.uint8); rgba[veh &gt; 0, 3] = 255</span>
+<span class="line" id="L42"><a href="#L42">  42</a>     cv2.imwrite(&quot;%s/fmask/%06d.png&quot; % (SITE4, f), rgba, [cv2.IMWRITE_PNG_COMPRESSION, 9])</span>
+<span class="line" id="L43"><a href="#L43">  43</a>     return f, float(alpha.mean())</span>
+<span class="line" id="L44"><a href="#L44">  44</a> </span>
+<span class="line" id="L45"><a href="#L45">  45</a> def rel(P, A, i, j):</span>
+<span class="line" id="L46"><a href="#L46">  46</a>     d = P[j] - P[i]; return d[0] * np.cos(A[i]) - d[1] * np.sin(A[i]), d[0] * np.sin(A[i]) + d[1] * np.cos(A[i]), K.wrap(A[j] - A[i])</span>
+<span class="line" id="L47"><a href="#L47">  47</a> </span>
+<span class="line" id="L48"><a href="#L48">  48</a> if __name__ == &quot;__main__&quot;:</span>
+<span class="line" id="L49"><a href="#L49">  49</a>     t0 = time.time()</span>
+<span class="line" id="L50"><a href="#L50">  50</a>     args = [a for a in sys.argv[1:] if not a.startswith(&quot;--&quot;)]</span>
+<span class="line" id="L51"><a href="#L51">  51</a>     SP = float(args[0]) if len(args) &gt; 0 else 4.0; seed = int(args[1]) if len(args) &gt; 1 else 1</span>
+<span class="line" id="L52"><a href="#L52">  52</a>     for d in (&quot;front&quot;, &quot;tile&quot;, &quot;fmask&quot;): os.makedirs(&quot;%s/%s&quot; % (SITE4, d), exist_ok=True)</span>
+<span class="line" id="L53"><a href="#L53">  53</a>     G = K.load_gt(); n = len(G[&quot;t&quot;])</span>
+<span class="line" id="L54"><a href="#L54">  54</a>     c = json.load(open(K.CALF)); CAL = (c[&quot;pitch&quot;], c[&quot;roll&quot;], c[&quot;h&quot;])</span>
+<span class="line" id="L55"><a href="#L55">  55</a>     Z = np.load(K.KW + &quot;/run_S%g_seed%d.npz&quot; % (SP, seed)); sta = Z[&quot;sta&quot;]; NS = len(sta)</span>
+<span class="line" id="L56"><a href="#L56">  56</a>     V = np.load(K.KW + &quot;/rot_S%g.npz&quot; % SP)</span>
+<span class="line" id="L57"><a href="#L57">  57</a>     if &quot;--notex&quot; not in sys.argv:</span>
+<span class="line" id="L58"><a href="#L58">  58</a>         with Pool(48) as pool: res = pool.map(make_one, [int(f) for f in sta], chunksize=8)</span>
+<span class="line" id="L59"><a href="#L59">  59</a>         print(&quot;照片 / 俯视图块 / 车辆掩膜 各 %d 张; 俯视图块里路面占比中位 %.2f  [%.0fs]&quot; % (len(res), np.median([r[1] for r in res]), time.time() - t0), flush=True)</span>
+<span class="line" id="L60"><a href="#L60">  60</a>     # ---- 各种做法的站点位姿 ----</span>
+<span class="line" id="L61"><a href="#L61">  61</a>     E, N, psi = G[&quot;E&quot;][sta], G[&quot;N&quot;][sta], G[&quot;psi&quot;][sta]</span>
+<span class="line" id="L62"><a href="#L62">  62</a>     M = dict(gt=(np.c_[E, N], psi), gnss=(Z[&quot;pri&quot;], Z[&quot;psi0&quot;]), strip=(Z[&quot;Xu01&quot;][:, :2], Z[&quot;Xu01&quot;][:, 2]), vo=(Z[&quot;Xvo&quot;][:, :2], Z[&quot;Xvo&quot;][:, 2]))</span>
+<span class="line" id="L63"><a href="#L63">  63</a>     # 展示时把每种做法的轨迹整体刚性对齐到真值上 (只为了在地图上叠着看; 所有误差都是按&quot;相对位置&quot;算的, 与这一步无关)</span>
+<span class="line" id="L64"><a href="#L64">  64</a>     step = np.r_[0, np.cumsum(np.hypot(np.diff(G[&quot;E&quot;]), np.diff(G[&quot;N&quot;])))]; s = step[sta]</span>
+<span class="line" id="L65"><a href="#L65">  65</a>     Pg, Ag = M[&quot;gt&quot;]</span>
+<span class="line" id="L66"><a href="#L66">  66</a>     names = dict(gnss=&quot;只用定位（模拟）&quot;, strip=&quot;路面条带互相关（原做法）&quot;, vo=&quot;条带 + 两视几何（现做法）&quot;, gt=&quot;真值&quot;)</span>
+<span class="line" id="L67"><a href="#L67">  67</a>     pairs = [(i, j) for i in range(NS) for j in range(i + 1, min(NS, i + 9)) if 5.5 &lt;= s[j] - s[i] &lt;= 25.0]</span>
+<span class="line" id="L68"><a href="#L68">  68</a>     gtr = np.array([rel(Pg, Ag, i, j) for i, j in pairs])</span>
+<span class="line" id="L69"><a href="#L69">  69</a>     stats = {}; e3 = {}</span>
+<span class="line" id="L70"><a href="#L70">  70</a>     for m, (P, A) in M.items():</span>
+<span class="line" id="L71"><a href="#L71">  71</a>         r = np.array([rel(P, A, i, j) for i, j in pairs]); e = r - gtr; e[:, 2] = K.wrap(e[:, 2])</span>
+<span class="line" id="L72"><a href="#L72">  72</a>         stats[m] = dict(name=names[m], lat=[round(float(np.median(np.abs(e[:, 0]))), 3), round(float(np.percentile(np.abs(e[:, 0]), 90)), 3)],</span>
+<span class="line" id="L73"><a href="#L73">  73</a>                         lon=[round(float(np.median(np.abs(e[:, 1]))), 3), round(float(np.percentile(np.abs(e[:, 1]), 90)), 3)],</span>
+<span class="line" id="L74"><a href="#L74">  74</a>                         th=[round(float(np.degrees(np.median(np.abs(e[:, 2])))), 3), round(float(np.degrees(np.percentile(np.abs(e[:, 2]), 90))), 3)])</span>
+<span class="line" id="L75"><a href="#L75">  75</a>         # 里程条用: 每个站点&quot;往前第 3 个站点 (约 14 m)&quot;的相对位置误差</span>
+<span class="line" id="L76"><a href="#L76">  76</a>         la = np.full(NS, np.nan); lo = np.full(NS, np.nan)</span>
+<span class="line" id="L77"><a href="#L77">  77</a>         for i in range(NS - 3):</span>
+<span class="line" id="L78"><a href="#L78">  78</a>             a_ = rel(P, A, i, i + 3); b_ = rel(Pg, Ag, i, i + 3); la[i] = a_[0] - b_[0]; lo[i] = a_[1] - b_[1]</span>
+<span class="line" id="L79"><a href="#L79">  79</a>         e3[m] = dict(lat=[None if not np.isfinite(v) else round(float(v), 3) for v in la], lon=[None if not np.isfinite(v) else round(float(v), 3) for v in lo])</span>
+<span class="line" id="L80"><a href="#L80">  80</a>         if m != &quot;gt&quot;: print(&quot;   %-22s 站点对 %d (前方 5.5~25 m): 横向 中位 %.3f m, 相对朝向 中位 %.2f 度, 沿路 中位 %.3f m&quot; % (names[m], len(pairs), stats[m][&quot;lat&quot;][0], stats[m][&quot;th&quot;][0], stats[m][&quot;lon&quot;][0]))</span>
+<span class="line" id="L81"><a href="#L81">  81</a>     # ---- 每一步 (站点 k -&gt; k+1) 的量测对真值 ----</span>
+<span class="line" id="L82"><a href="#L82">  82</a>     R = Z[&quot;R&quot;]; lat = Z[&quot;lat&quot;]; lon = Z[&quot;lon&quot;]</span>
+<span class="line" id="L83"><a href="#L83">  83</a>     ed = dict(sl=[0] * (NS - 1), so=[0] * (NS - 1), sx=[None] * (NS - 1), st=[None] * (NS - 1), sy=[None] * (NS - 1), vt=[None] * (NS - 1), vd=[None] * (NS - 1), dy=[0.0] * (NS - 1), da=[0.0] * (NS - 1))</span>
+<span class="line" id="L84"><a href="#L84">  84</a>     for r, l1, l2, exo, et, ey in zip(R, lat, lon, Z[&quot;exo&quot;], Z[&quot;et&quot;], Z[&quot;ey&quot;]):</span>
+<span class="line" id="L85"><a href="#L85">  85</a>         k = int(r[9])</span>
+<span class="line" id="L86"><a href="#L86">  86</a>         if l1: ed[&quot;sl&quot;][k] = 1; ed[&quot;sx&quot;][k] = round(float(exo), 3); ed[&quot;st&quot;][k] = round(float(et), 2)</span>
+<span class="line" id="L87"><a href="#L87">  87</a>         if l2: ed[&quot;so&quot;][k] = 1; ed[&quot;sy&quot;][k] = round(float(ey), 3)</span>
+<span class="line" id="L88"><a href="#L88">  88</a>     for k in range(NS - 1):</span>
+<span class="line" id="L89"><a href="#L89">  89</a>         g = rel(Pg, Ag, k, k + 1); ed[&quot;dy&quot;][k] = round(float(g[1]), 2); ed[&quot;da&quot;][k] = round(float(np.degrees(g[2])), 2)</span>
+<span class="line" id="L90"><a href="#L90">  90</a>         if V[&quot;ok&quot;][k]: ed[&quot;vt&quot;][k] = round(float(V[&quot;ea&quot;][k]), 3); ed[&quot;vd&quot;][k] = round(float(V[&quot;ed&quot;][k]), 2)</span>
+<span class="line" id="L91"><a href="#L91">  91</a>     # ---- 相机 ----</span>
+<span class="line" id="L92"><a href="#L92">  92</a>     im0 = cv2.imread(&quot;%s/%06d.png&quot; % (K.IMG, int(sta[0]))); H, W = im0.shape[:2]</span>
+<span class="line" id="L93"><a href="#L93">  93</a>     cfg = dict(fx=G[&quot;fx&quot;] * 1920.0 / W, fy=G[&quot;fy&quot;] * 1080.0 / H, cx=G[&quot;cx&quot;] * 1920.0 / W, cy=G[&quot;cy&quot;] * 1080.0 / H, dist=[0.0] * 5, height=CAL[2], roll=np.radians(CAL[1]), pitch=np.radians(CAL[0]), yaw=0.0)</span>
+<span class="line" id="L94"><a href="#L94">  94</a>     Rr = BEVRenderer(cfg, (W, H), TX, TY, 0.1, osd_rows=0)</span>
+<span class="line" id="L95"><a href="#L95">  95</a>     cam = dict(W=W, H=H, fx=float(Rr.fx), fy=float(Rr.fy), cx=float(Rr.cx), cy=float(Rr.cy), dist=[0.0] * 5, R=[[float(v) for v in row] for row in Rr.R_c2w], h=float(Rr.h))</span>
+<span class="line" id="L96"><a href="#L96">  96</a>     v_kmh = np.r_[np.hypot(np.diff(E), np.diff(N)) / np.maximum(np.diff(G[&quot;t&quot;][sta]), 1e-3) * 3.6, 0.0]</span>
+<span class="line" id="L97"><a href="#L97">  97</a>     build = time.strftime(&quot;%m%d%H%M%S&quot;)</span>
+<span class="line" id="L98"><a href="#L98">  98</a>     out = dict(version=1, build=build, dataset=&quot;KITTI odometry 02&quot;, spacing=SP, cam=cam,</span>
+<span class="line" id="L99"><a href="#L99">  99</a>                tile_geom=dict(hw=0.5 * (TX[1] - TX[0]), hl=0.5 * (TY[1] - TY[0]), yc=0.5 * (TY[0] + TY[1]), px=[int(round((TX[1] - TX[0]) / TRES)), int(round((TY[1] - TY[0]) / TRES))]),</span>
+<span class="line" id="L100"><a href="#L100"> 100</a>                cal=dict(pitch=round(CAL[0], 3), roll=round(CAL[1], 3), h=round(CAL[2], 3)),</span>
+<span class="line" id="L101"><a href="#L101"> 101</a>                st=dict(f=[&quot;%06d&quot; % f for f in sta], t=[round(float(v), 2) for v in G[&quot;t&quot;][sta]], s=[round(float(v), 2) for v in s], v=[round(float(v), 0) for v in v_kmh]),</span>
+<span class="line" id="L102"><a href="#L102"> 102</a>                methods={m: dict(e=[round(float(v), 3) for v in P[:, 0]], n=[round(float(v), 3) for v in P[:, 1]], a=[round(float(v), 5) for v in A]) for m, (P, A) in M.items()},</span>
+<span class="line" id="L103"><a href="#L103"> 103</a>                stats=stats, e3=e3, edges=ed,</span>
+<span class="line" id="L104"><a href="#L104"> 104</a>                summary=dict(stations=NS, km=round(float(s[-1]) / 1000, 2), strip_lat=int(lat.sum()), strip_lon=int(lon.sum()), vo_ok=int(V[&quot;ok&quot;].sum()),</span>
+<span class="line" id="L105"><a href="#L105"> 105</a>                             strip_x=round(float(np.median(np.abs(Z[&quot;exo&quot;][lat]))), 3), strip_t=round(float(np.median(np.abs(Z[&quot;et&quot;][lat]))), 2), strip_y=round(float(np.median(np.abs(Z[&quot;ey&quot;][lon]))), 3),</span>
+<span class="line" id="L106"><a href="#L106"> 106</a>                             vo_t=round(float(np.median(np.abs(V[&quot;ea&quot;][V[&quot;ok&quot;]]))), 3), vo_d=round(float(np.median(np.abs(V[&quot;ed&quot;][V[&quot;ok&quot;]]))), 2)))</span>
+<span class="line" id="L107"><a href="#L107"> 107</a>     json.dump(out, open(SITE4 + &quot;/data.json&quot;, &quot;w&quot;), ensure_ascii=False, separators=(&quot;,&quot;, &quot;:&quot;))</span>
+<span class="line" id="L108"><a href="#L108"> 108</a>     sz = lambda d: sum(os.path.getsize(os.path.join(SITE4, d, f)) for f in os.listdir(os.path.join(SITE4, d))) / 1e6</span>
+<span class="line" id="L109"><a href="#L109"> 109</a>     print(&quot;站点 %d 个, %.2f km; data.json %.2f MB; 照片 %.0f MB, 俯视图块 %.0f MB, 掩膜 %.1f MB; 构建号 %s; 用时 %.0fs&quot;</span>
+<span class="line" id="L110"><a href="#L110"> 110</a>           % (NS, s[-1] / 1000, os.path.getsize(SITE4 + &quot;/data.json&quot;) / 1e6, sz(&quot;front&quot;), sz(&quot;tile&quot;), sz(&quot;fmask&quot;), build, time.time() - t0))</span></pre></html>

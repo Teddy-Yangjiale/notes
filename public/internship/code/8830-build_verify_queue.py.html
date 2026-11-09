@@ -1,0 +1,91 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>build_verify_queue.py</title><style>body{margin:24px;font:15px system-ui;background:#faf8f3;color:#243342}pre{overflow:auto;line-height:1.6;background:white;padding:16px}.line{display:block}.line:target{background:#fff1a8}a{color:#58728a}header{overflow-wrap:anywhere}</style><header><a href="/notes/series/internship/">返回实习专栏</a><h1>build_verify_queue.py</h1><p>只读快照：2026-11-09 · /home/yjl/crack/annot_tool/build_verify_queue.py</p><p>SHA-256: f49636e12cb7570580cd16197b8058d5c8806373f2b0e6c57857bf74c03fa3ca</p></header><pre><span class="line" id="L1"><a href="#L1">   1</a> # -*- coding: utf-8 -*-</span>
+<span class="line" id="L2"><a href="#L2">   2</a> &quot;&quot;&quot;从 0907×0929 跨趟复现性结果里分层抽样, 生成“核对”队列。</span>
+<span class="line" id="L3"><a href="#L3">   3</a> 每层 (分数档 × 另一趟是否复现) 抽同样多, 抽样权重记在 *_meta.csv (不发给页面), 之后按权重还原总体精度。</span>
+<span class="line" id="L4"><a href="#L4">   4</a> 用法: python3 build_verify_queue.py   (只用标准库)</span>
+<span class="line" id="L5"><a href="#L5">   5</a> &quot;&quot;&quot;</span>
+<span class="line" id="L6"><a href="#L6">   6</a> import csv, json, os, random</span>
+<span class="line" id="L7"><a href="#L7">   7</a> HERE = os.path.dirname(os.path.abspath(__file__))</span>
+<span class="line" id="L8"><a href="#L8">   8</a> REP = &#x27;/home/yjl/crack/stitich/out/repro_0907_0929&#x27;</span>
+<span class="line" id="L9"><a href="#L9">   9</a> OUT = os.path.join(HERE, &#x27;data&#x27;, &#x27;queues&#x27;); os.makedirs(OUT, exist_ok=True)</span>
+<span class="line" id="L10"><a href="#L10">  10</a> BINS = [(0.2, 0.25), (0.25, 0.3), (0.3, 0.4), (0.4, 0.5), (0.5, 0.6), (0.6, 1.01)]</span>
+<span class="line" id="L11"><a href="#L11">  11</a> random.seed(20261002)</span>
+<span class="line" id="L12"><a href="#L12">  12</a> </span>
+<span class="line" id="L13"><a href="#L13">  13</a> </span>
+<span class="line" id="L14"><a href="#L14">  14</a> def rd(p):</span>
+<span class="line" id="L15"><a href="#L15">  15</a>     return list(csv.DictReader(open(p, encoding=&#x27;utf-8-sig&#x27;)))</span>
+<span class="line" id="L16"><a href="#L16">  16</a> </span>
+<span class="line" id="L17"><a href="#L17">  17</a> </span>
+<span class="line" id="L18"><a href="#L18">  18</a> def sbin(s):</span>
+<span class="line" id="L19"><a href="#L19">  19</a>     for i, (lo, hi) in enumerate(BINS):</span>
+<span class="line" id="L20"><a href="#L20">  20</a>         if lo &lt;= s &lt; hi:</span>
+<span class="line" id="L21"><a href="#L21">  21</a>             return i</span>
+<span class="line" id="L22"><a href="#L22">  22</a>     return 0 if s &lt; 0.2 else len(BINS) - 1</span>
+<span class="line" id="L23"><a href="#L23">  23</a> </span>
+<span class="line" id="L24"><a href="#L24">  24</a> </span>
+<span class="line" id="L25"><a href="#L25">  25</a> box29 = {}</span>
+<span class="line" id="L26"><a href="#L26">  26</a> for r in rd(&#x27;/home/yjl/crack/stitich/out/ipm_0929_ch1/detections.csv&#x27;):</span>
+<span class="line" id="L27"><a href="#L27">  27</a>     box29[(r[&#x27;src&#x27;], r[&#x27;class&#x27;], &#x27;%.3f&#x27; % float(r[&#x27;score&#x27;]))] = [float(v) for v in r[&#x27;box&#x27;].split()]</span>
+<span class="line" id="L28"><a href="#L28">  28</a> D29 = rd(REP + &#x27;/det0929_inst.csv&#x27;)</span>
+<span class="line" id="L29"><a href="#L29">  29</a> det_by_did = {int(r[&#x27;did&#x27;]): r for r in D29}</span>
+<span class="line" id="L30"><a href="#L30">  30</a> best_by_inst = {}</span>
+<span class="line" id="L31"><a href="#L31">  31</a> for r in D29:</span>
+<span class="line" id="L32"><a href="#L32">  32</a>     k = int(r[&#x27;inst&#x27;])</span>
+<span class="line" id="L33"><a href="#L33">  33</a>     if k not in best_by_inst or float(r[&#x27;score&#x27;]) &gt; float(best_by_inst[k][&#x27;score&#x27;]):</span>
+<span class="line" id="L34"><a href="#L34">  34</a>         best_by_inst[k] = r</span>
+<span class="line" id="L35"><a href="#L35">  35</a> </span>
+<span class="line" id="L36"><a href="#L36">  36</a> </span>
+<span class="line" id="L37"><a href="#L37">  37</a> def b29(r):</span>
+<span class="line" id="L38"><a href="#L38">  38</a>     return box29.get((r[&#x27;src&#x27;], r[&#x27;cls&#x27;], &#x27;%.3f&#x27; % float(r[&#x27;score&#x27;])))</span>
+<span class="line" id="L39"><a href="#L39">  39</a> </span>
+<span class="line" id="L40"><a href="#L40">  40</a> </span>
+<span class="line" id="L41"><a href="#L41">  41</a> def sample(rows, n_dis, n_fac):</span>
+<span class="line" id="L42"><a href="#L42">  42</a>     strata = {}</span>
+<span class="line" id="L43"><a href="#L43">  43</a>     for r in rows:</span>
+<span class="line" id="L44"><a href="#L44">  44</a>         key = (&#x27;fac&#x27;, r[&#x27;c_grp&#x27;]) if r[&#x27;kind&#x27;] == &#x27;facility&#x27; else (sbin(float(r[&#x27;score&#x27;])), r[&#x27;c_grp&#x27;])</span>
+<span class="line" id="L45"><a href="#L45">  45</a>         strata.setdefault(key, []).append(r)</span>
+<span class="line" id="L46"><a href="#L46">  46</a>     out = []</span>
+<span class="line" id="L47"><a href="#L47">  47</a>     for key, L in sorted(strata.items(), key=lambda x: str(x[0])):</span>
+<span class="line" id="L48"><a href="#L48">  48</a>         n = min(len(L), n_fac if key[0] == &#x27;fac&#x27; else n_dis)</span>
+<span class="line" id="L49"><a href="#L49">  49</a>         for r in random.sample(L, n):</span>
+<span class="line" id="L50"><a href="#L50">  50</a>             r[&#x27;_stratum&#x27;], r[&#x27;_npop&#x27;], r[&#x27;_nsamp&#x27;] = &#x27;%s|%s&#x27; % key, len(L), n</span>
+<span class="line" id="L51"><a href="#L51">  51</a>             out.append(r)</span>
+<span class="line" id="L52"><a href="#L52">  52</a>     random.shuffle(out)</span>
+<span class="line" id="L53"><a href="#L53">  53</a>     return out</span>
+<span class="line" id="L54"><a href="#L54">  54</a> </span>
+<span class="line" id="L55"><a href="#L55">  55</a> </span>
+<span class="line" id="L56"><a href="#L56">  56</a> def write(q, title, items, meta):</span>
+<span class="line" id="L57"><a href="#L57">  57</a>     json.dump(dict(title=title, items=items), open(os.path.join(OUT, q + &#x27;.json&#x27;), &#x27;w&#x27;, encoding=&#x27;utf-8&#x27;), ensure_ascii=False)</span>
+<span class="line" id="L58"><a href="#L58">  58</a>     with open(os.path.join(OUT, q + &#x27;_meta.csv&#x27;), &#x27;w&#x27;, encoding=&#x27;utf-8&#x27;, newline=&#x27;&#x27;) as f:</span>
+<span class="line" id="L59"><a href="#L59">  59</a>         w = csv.DictWriter(f, fieldnames=list(meta[0].keys())); w.writeheader(); w.writerows(meta)</span>
+<span class="line" id="L60"><a href="#L60">  60</a>     print(q, title, len(items), &#x27;条; 带第二张图&#x27;, sum(1 for i in items if i.get(&#x27;pair&#x27;)))</span>
+<span class="line" id="L61"><a href="#L61">  61</a> </span>
+<span class="line" id="L62"><a href="#L62">  62</a> </span>
+<span class="line" id="L63"><a href="#L63">  63</a> # ---- 队列 A: 0907 录像的检出</span>
+<span class="line" id="L64"><a href="#L64">  64</a> rows = [r for r in rd(REP + &#x27;/final_B_0907_by_0929_ts3.0.csv&#x27;) if r[&#x27;vis&#x27;] == &#x27;True&#x27; and abs(float(r[&#x27;d29&#x27;])) &lt;= 2.0</span>
+<span class="line" id="L65"><a href="#L65">  65</a>         and os.path.exists(&#x27;/home/yjl/data/0907/work/frames/&#x27; + r[&#x27;rep_orig&#x27;])]</span>
+<span class="line" id="L66"><a href="#L66">  66</a> items, meta = [], []</span>
+<span class="line" id="L67"><a href="#L67">  67</a> for i, r in enumerate(sample(rows, 30, 20)):</span>
+<span class="line" id="L68"><a href="#L68">  68</a>     it = dict(id=&#x27;a%04d&#x27; % i, img=&#x27;/vimg/f07/&#x27; + r[&#x27;rep_orig&#x27;], box=[float(v) for v in r[&#x27;rep_box&#x27;].split()], cls=r[&#x27;cls&#x27;], pair=None)</span>
+<span class="line" id="L69"><a href="#L69">  69</a>     d = det_by_did.get(int(r[&#x27;match_did&#x27;])) if r[&#x27;c_grp&#x27;] == &#x27;True&#x27; else None</span>
+<span class="line" id="L70"><a href="#L70">  70</a>     if d and b29(d):</span>
+<span class="line" id="L71"><a href="#L71">  71</a>         it[&#x27;pair&#x27;] = dict(img=&#x27;/vimg/r29/&#x27; + d[&#x27;src&#x27;], box=b29(d), cls=d[&#x27;cls&#x27;])</span>
+<span class="line" id="L72"><a href="#L72">  72</a>     items.append(it)</span>
+<span class="line" id="L73"><a href="#L73">  73</a>     meta.append(dict(id=it[&#x27;id&#x27;], seg=r[&#x27;seg&#x27;], instance=r[&#x27;instance&#x27;], cls=r[&#x27;cls&#x27;], grp=r[&#x27;grp&#x27;], kind=r[&#x27;kind&#x27;], score=r[&#x27;score&#x27;],</span>
+<span class="line" id="L74"><a href="#L74">  74</a>                      n_obs=r[&#x27;n_obs&#x27;], c_grp=r[&#x27;c_grp&#x27;], c_any=r[&#x27;c_any&#x27;], stratum=r[&#x27;_stratum&#x27;], n_pop=r[&#x27;_npop&#x27;], n_samp=r[&#x27;_nsamp&#x27;]))</span>
+<span class="line" id="L75"><a href="#L75">  75</a> write(&#x27;q0907&#x27;, &#x27;0907 录像的检出&#x27;, items, meta)</span>
+<span class="line" id="L76"><a href="#L76">  76</a> </span>
+<span class="line" id="L77"><a href="#L77">  77</a> # ---- 队列 B: 0929 抓拍的检出</span>
+<span class="line" id="L78"><a href="#L78">  78</a> rows = []</span>
+<span class="line" id="L79"><a href="#L79">  79</a> for r in rd(REP + &#x27;/final_B_0929_by_0907_ts3.0.csv&#x27;):</span>
+<span class="line" id="L80"><a href="#L80">  80</a>     d = best_by_inst.get(int(r[&#x27;inst&#x27;]))</span>
+<span class="line" id="L81"><a href="#L81">  81</a>     if r[&#x27;vis&#x27;] == &#x27;True&#x27; and abs(float(r[&#x27;d07&#x27;])) &lt;= 2.5 and d and b29(d):</span>
+<span class="line" id="L82"><a href="#L82">  82</a>         r[&#x27;_det&#x27;] = d</span>
+<span class="line" id="L83"><a href="#L83">  83</a>         rows.append(r)</span>
+<span class="line" id="L84"><a href="#L84">  84</a> items, meta = [], []</span>
+<span class="line" id="L85"><a href="#L85">  85</a> for i, r in enumerate(sample(rows, 25, 20)):</span>
+<span class="line" id="L86"><a href="#L86">  86</a>     d = r[&#x27;_det&#x27;]</span>
+<span class="line" id="L87"><a href="#L87">  87</a>     it = dict(id=&#x27;b%04d&#x27; % i, img=&#x27;/vimg/r29/&#x27; + d[&#x27;src&#x27;], box=b29(d), cls=d[&#x27;cls&#x27;], pair=None)</span>
+<span class="line" id="L88"><a href="#L88">  88</a>     items.append(it)</span>
+<span class="line" id="L89"><a href="#L89">  89</a>     meta.append(dict(id=it[&#x27;id&#x27;], seg=r[&#x27;seg&#x27;], instance=r[&#x27;inst&#x27;], cls=d[&#x27;cls&#x27;], grp=r[&#x27;grp&#x27;], kind=r[&#x27;kind&#x27;], score=r[&#x27;score&#x27;],</span>
+<span class="line" id="L90"><a href="#L90">  90</a>                      n_obs=r[&#x27;n_obs&#x27;], c_grp=r[&#x27;c_grp&#x27;], c_any=r[&#x27;c_any&#x27;], stratum=r[&#x27;_stratum&#x27;], n_pop=r[&#x27;_npop&#x27;], n_samp=r[&#x27;_nsamp&#x27;]))</span>
+<span class="line" id="L91"><a href="#L91">  91</a> write(&#x27;q0929&#x27;, &#x27;0929 抓拍的检出&#x27;, items, meta)</span></pre></html>

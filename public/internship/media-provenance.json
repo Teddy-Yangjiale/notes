@@ -1,0 +1,495 @@
+[
+  {
+    "file": "8820-02-ortho-samples.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\01-桌面资料\\路面病害查看器文档\\images\\8820-02-ortho-samples.jpg",
+    "source_sha256": "b35f5fbad55bc2d8ffff67630f8fc8d7b96b8db72d9b865f2bff89a42cdd711a",
+    "sha256": "c35cd58b3322c41395055c3dc670f2062731581c346331d342ff77d1520196e1",
+    "kind": "historical_result",
+    "description": "2026-10-05 导出的历史说明配图；不是本次重新运行结果"
+  },
+  {
+    "file": "8820-03-registration.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\01-桌面资料\\路面病害查看器文档\\images\\8820-03-registration.jpg",
+    "source_sha256": "86ee7954297582f9659dd160214d5422477357a3e8b6ccd5b1968634f7a1366d",
+    "sha256": "7f7d4b1831049fbc5bf352bd171c73928534f720388e521887abf6c4bec474e7",
+    "kind": "historical_result",
+    "description": "2026-10-05 导出的历史说明配图；不是本次重新运行结果"
+  },
+  {
+    "file": "8821-03-ortho.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\01-桌面资料\\路面病害查看器文档\\images\\8821-03-ortho.jpg",
+    "source_sha256": "9088dd14cf8a8fb452c82a17c5c8211bda3a26f99da61e08221098619082cc3f",
+    "sha256": "147296ed48da10530d17b86f095dd21791b79c3f1d2b107c25f9d2767c2afe84",
+    "kind": "historical_result",
+    "description": "2026-10-05 导出的历史说明配图；不是本次重新运行结果"
+  },
+  {
+    "file": "8821-04-level3.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\01-桌面资料\\路面病害查看器文档\\images\\8821-04-level3.jpg",
+    "source_sha256": "81709bc51fd4ffe452aff0741e345e527546951ce3578ccd704ba710bbb20d24",
+    "sha256": "46d902c21ca848fe17ca34262757a25abf9ec2b5a1138bb4d2cdbfc6b9c4862a",
+    "kind": "historical_result",
+    "description": "2026-10-05 导出的历史说明配图；不是本次重新运行结果"
+  },
+  {
+    "file": "8821-05-street.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\01-桌面资料\\路面病害查看器文档\\images\\8821-05-street.jpg",
+    "source_sha256": "439d8a34eea645a5e392001dfb95d4219dc9fb571c82d96295f9339c7a5f52cd",
+    "sha256": "a3a95706a11044d5c9c65baac34a1165c49b43303cfc448c7710b35f571e39fb",
+    "kind": "historical_result",
+    "description": "2026-10-05 导出的历史说明配图；不是本次重新运行结果"
+  },
+  {
+    "file": "8821-06-top.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\01-桌面资料\\路面病害查看器文档\\images\\8821-06-top.jpg",
+    "source_sha256": "04bc1354b2456659071754ed9b605a53d02a514c313251b0f81d57894b3e1ff4",
+    "sha256": "583cbd2f6d4a3a8f059f48170b084960627d996832c8d0a64212e19638305ed5",
+    "kind": "historical_result",
+    "description": "2026-10-05 导出的历史说明配图；不是本次重新运行结果"
+  },
+  {
+    "file": "8822-01-ui.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\01-桌面资料\\路面病害查看器文档\\images\\8822-01-ui.jpg",
+    "source_sha256": "33b9ed53543ad27fafad2ab2e8980cddd5654c00407f58608df1831074e6e9bc",
+    "sha256": "3f799dad3f8842e21ad34fc5ef0f14626d74e13572dd1b328548f69e43f07728",
+    "kind": "historical_result",
+    "description": "2026-10-05 导出的历史说明配图；不是本次重新运行结果"
+  },
+  {
+    "file": "8822-03-top.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\01-桌面资料\\路面病害查看器文档\\images\\8822-03-top.jpg",
+    "source_sha256": "b31497d21d16e4d980eb47dc86b09604f7f51b93f6069c04fc00311eaeb0640c",
+    "sha256": "f3f254db1793885c31731857963bcacbdae405faee7966c9313aef06cf7b52c0",
+    "kind": "historical_result",
+    "description": "2026-10-05 导出的历史说明配图；不是本次重新运行结果"
+  },
+  {
+    "file": "8822-04-occlusion.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\01-桌面资料\\路面病害查看器文档\\images\\8822-04-occlusion.jpg",
+    "source_sha256": "909cd8573e070d94fa7648830ab91f555a213df6bd818787ddd97065c542eb3e",
+    "sha256": "b387891535314f9cfc256c043daa445cc83cb96c47dc0b1e323a762a76d4bc20",
+    "kind": "historical_result",
+    "description": "2026-10-05 导出的历史说明配图；不是本次重新运行结果"
+  },
+  {
+    "file": "8822-05-tunnel.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\01-桌面资料\\路面病害查看器文档\\images\\8822-05-tunnel.jpg",
+    "source_sha256": "57d98964d9c7dca130c3bef38b5c860e0df07dc2d0768ffe24cb7582de2a8fb5",
+    "sha256": "9124326eca6eae1bd2ababc126bdd1c502d50ad6d83466d59914aed151605e86",
+    "kind": "historical_result",
+    "description": "2026-10-05 导出的历史说明配图；不是本次重新运行结果"
+  },
+  {
+    "file": "8822-06-drape.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\01-桌面资料\\路面病害查看器文档\\images\\8822-06-drape.jpg",
+    "source_sha256": "52b28eba830532bd82d43f7d7efea839f24f2d570aacb3ce5393a9efa33d9dce",
+    "sha256": "9c45de7479e9d891a0f0d1003a98476736909be0f6628197a36b197582655633",
+    "kind": "historical_result",
+    "description": "2026-10-05 导出的历史说明配图；不是本次重新运行结果"
+  },
+  {
+    "file": "8822-07-along-own.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\01-桌面资料\\路面病害查看器文档\\images\\8822-07-along-own.jpg",
+    "source_sha256": "df6ef60968eb8323dfa856d2cd221ccf9c8d960383f84696482c782c5654305c",
+    "sha256": "c99a9ddf88cd910f601dea0cb7f2389fe674f54c4438405bd3a6d0482a76068d",
+    "kind": "historical_result",
+    "description": "2026-10-05 导出的历史说明配图；不是本次重新运行结果"
+  },
+  {
+    "file": "8822-08-along-ref.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\01-桌面资料\\路面病害查看器文档\\images\\8822-08-along-ref.jpg",
+    "source_sha256": "af62f4743ec7ea152e7e3f78aa339a9981c09bc2a62a5071bc24e0e535504f3f",
+    "sha256": "5a3759a5ce8383ae2d0474f8f614403529c81f4be9d6cb3dd8dc34d0d16dfd46",
+    "kind": "historical_result",
+    "description": "2026-10-05 导出的历史说明配图；不是本次重新运行结果"
+  },
+  {
+    "file": "8820_street.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8820_street.jpg",
+    "source_sha256": "6fc36b8d9e05f56f4bc333a93e4a41e5c1479ee07db2a996e204c76f56624f8f",
+    "sha256": "3cd4a40259aacc1fa78488a536117c11f59a2625d3b7d434af1f75b09e87508f",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "8820_street_canvas.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8820_street_canvas.jpg",
+    "source_sha256": "555d867e7c6f1338f7997d84129c1edc03318c991ec19787faabe7b1172c8642",
+    "sha256": "286dc9e2651fdd2379d64daf94be5ea65c368d9085507c0c9de891d9b7a97817",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "8820_street_ui.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8820_street_ui.jpg",
+    "source_sha256": "94aa8fbda4799e2aa31dcf4259f97cefc0ead76d14a9144192c9b7883cae5062",
+    "sha256": "b7fccac8901bc01603ef939dab0a70ce8539424b50c4d22d460d088c2691a8d0",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "8820_top.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8820_top.jpg",
+    "source_sha256": "ec22646b308dd653136bb0669d4ef12f601d3987048eacf17581157738551865",
+    "sha256": "6f4d8a5d6ab7b5e52e716fb63538b98966976f7dfd12d2fa95d5d16f2a414751",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "8820_top_canvas.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8820_top_canvas.jpg",
+    "source_sha256": "014a3d958cc1a76eec2c13cca07480162ef0f5d9311fb1468f28b38ce204a776",
+    "sha256": "4d2da3bb43150cd9764a23d6a1aa254a1ca661d4b8b863070829123c7c32f796",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "8820_top_ui.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8820_top_ui.jpg",
+    "source_sha256": "fa36c2e573e533444ecb97801d8177f4e2e63ef1364b4169d1fd6a7b82889f1c",
+    "sha256": "0a25ec4c705b913e1e517e3c68b742c91ec230c559ed30aabaf9cfcab8c49cdd",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "8821_detail_ui.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8821_detail_ui.jpg",
+    "source_sha256": "5be3c2e2d2b0d6c6b858d94eb5ed07a6cd9b0e61b282bf8076423d8274726969",
+    "sha256": "72946f61f1cf88523c1d3618c1ff00023a840c70dd4bfd9498a53960d8bf4cbf",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "8821_hud_crop.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8821_hud_crop.jpg",
+    "source_sha256": "d26cc1e40134b83d04e680372d05c27b9a1e8b13ba2860a30b829fd18d7b586d",
+    "sha256": "626d3637dda890cf9a78462a91688b4f8796aad346df81f955e7dfdfc52e97ac",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "8821_street_reg.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8821_street_reg.jpg",
+    "source_sha256": "88723c308dced04299c7bf69dfc716b812246a3b7a62904712ea0bc8826643b0",
+    "sha256": "8bdb3912b648eac2b127151fa9ccf5859ad12ef753fd43f27e2d4ef81668fad1",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "8821_street_ui.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8821_street_ui.jpg",
+    "source_sha256": "883c8b7e15d3308da4791d9049a27eff02b3c204ee6c64996185b8656d6274e6",
+    "sha256": "1ed1590c385c48b5aa49401d9e1bf20f46dfcb24292285d7743c175ef0f524fe",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "8821_tools_crop.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8821_tools_crop.jpg",
+    "source_sha256": "a5d447d0e7ba07136a9e257794774b387b09eb25cbe7c31c70b1ef6e6dba59c3",
+    "sha256": "3d4796759a1a0bf4bea0a2c134bffcc6b1d531f945e1cbffbad85dc5d120ac30",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "8821_top_break.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8821_top_break.jpg",
+    "source_sha256": "be6fa07a5dc4eaa060b25f62f5761a4118fd4e7cc5ba6a47b6927cf7461ed227",
+    "sha256": "23cc842ce1f80bb92b3a93f304ba83657939d0adeca35ea6d99c53391aa8f42d",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "8821_top_break_ground.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8821_top_break_ground.jpg",
+    "source_sha256": "3719bf99d574e087385a2328db51b0ceab749e451d11769f703c5886a81cfbd4",
+    "sha256": "9b857be1df9771a133cc00021fba798e84907a6102112a9d669959ad5e9ee458",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "8821_top_break_reg.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8821_top_break_reg.jpg",
+    "source_sha256": "da0da673ec15bb7f5c1633aee9cae60aea7c24ee085dc5cc285d9fe3bf139d7a",
+    "sha256": "5685bb85e8e6e2a4ce9fd3ed2b74c8d804b76cb1dc5af9587bcda88068a06bc8",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "8821_top_bulge.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8821_top_bulge.jpg",
+    "source_sha256": "738cca280ec65272078a8715023ddf121a4dd6592de95b870f1a6fc7dd75413e",
+    "sha256": "3db3771b8ef2b641f957dc977d56c9874042ac893cb86130888c5e99dcbaf47a",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "8821_top_bulge2_ground.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8821_top_bulge2_ground.jpg",
+    "source_sha256": "94c63741453e3d6c18d9d61d0690e3a52b46a58f0b33f9a363804d2600618c8e",
+    "sha256": "f86389f3837a2c13349097c7e83b87d923fc4b72f534250e8a2887b66294f7e1",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "8821_top_bulge_ground.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8821_top_bulge_ground.jpg",
+    "source_sha256": "dd25cb6e99b153abf8ca6b7ff83d75eb7809ebd9de3fa07ede857e6397d5f97d",
+    "sha256": "e82bc1c13e7754fe322f6af26b87732a74657a63bce57f381d34bb5e7839b4b1",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "8821_top_kink2_reg.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8821_top_kink2_reg.jpg",
+    "source_sha256": "23c9066dda4f092d5a4b9c788bb98ca5df4d54180b48850a6f553a871126ab41",
+    "sha256": "20ef9780f87108b71b028e686d7816f76a3271226823c0bc007890038018ce21",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "8821_top_ui.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8821_top_ui.jpg",
+    "source_sha256": "6123730fc98f104e1d9e16ce198e3efc60a22c9a618af376c7fd3cff716b37ec",
+    "sha256": "a16b71ee29f327580a57ca55def62485621f19fa095e4f319307ffeedf4f2253",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "8821_ui_street2.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8821_ui_street2.jpg",
+    "source_sha256": "798826699388a5629a000d0c9eda749e72b64289fbefb80c51328f4f5da333cf",
+    "sha256": "7181f5bae7dc1168b65cf46db8929a997857c60b2c90fa2071d3786a512f828a",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "8823_ct_strip.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8823_ct_strip.jpg",
+    "source_sha256": "2ee41267966db6568825fe73775700becfe2618e57ae01cd2552f91b91cfb316",
+    "sha256": "f283607668a813abb32de920412aa81a07e88b806a1aa14e0b84b65c61ec3aa5",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "8823_ct_vo.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8823_ct_vo.jpg",
+    "source_sha256": "8aa6c810c1cb8a6980732176fe954e1795fc9c4331f4d84ff5049ed9c149bb79",
+    "sha256": "05ab87553b1b7c1182b28dcea87bfb3eddd6611fe224bfacd41b0e26aea80bd9",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "8823_c_gnss.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8823_c_gnss.jpg",
+    "source_sha256": "fedeb39024b59172977e0506547e1aa19bc5502664643584f9c106c43ff450e5",
+    "sha256": "42451a6d573d8e1b3266ff46c36d4738b91d199335e759273b1a0dbf616b5602",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "8823_c_strip.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8823_c_strip.jpg",
+    "source_sha256": "e2e916a9298f76864113d746901d6e68080d003e9bcf329cc646eedd55ef11d1",
+    "sha256": "55d633b58c249c832dd394c676497ed05885ccc3fec8508e96f1413b26144736",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "8823_c_vo.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8823_c_vo.jpg",
+    "source_sha256": "bd9ef2ec9634b8b854e922285b930e12db66c4bfce94a52db8f830ee39073437",
+    "sha256": "f8495f94564f7971ea63c6519beeed3f4f00bb0b5a44eaa5b1aae9ad7d2f9bb0",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "8823_s378_gnss.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8823_s378_gnss.jpg",
+    "source_sha256": "1bed002ca2884b63343c53558e64ac2d6eacece6fde393b79ff92160706fc390",
+    "sha256": "e8ef8af775b8db98d403f40960498f1495b63450b6758494e2f214b3168e1c5c",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "8823_s378_strip.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8823_s378_strip.jpg",
+    "source_sha256": "af46ce8365d9b83ff3eb6ca7e676a98bd66795aa69cf9734482e58604f80d563",
+    "sha256": "e636c4502e48a2914ba8ba10a69381984526a07cac7107cd177930785b743bf9",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "8823_s378_top_strip.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8823_s378_top_strip.jpg",
+    "source_sha256": "845c5a2f453eb71d069e80459a6ae59f2bb9ccf3acdb6b28e31b3fd4a14cf6e7",
+    "sha256": "6163f80a62d21bc25d58aec9c0ac9c0a7acf54ab1fcc269d2cf43bcbb4349afb",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "8823_s378_top_vo.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8823_s378_top_vo.jpg",
+    "source_sha256": "92a16b0b325065d2db7f555b3ee8a35a5636bc5ab11f6e49fa892413fc0b850b",
+    "sha256": "60a9e6e1950a2f6384332e4144a2966f0bc9f4d6439387640ad2119f3c6d6e7b",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "8823_s378_vo.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8823_s378_vo.jpg",
+    "source_sha256": "cb77e06e34fba36023ea9a34d6e2d9ed4b21063c8c0f2274d14098c3061c5290",
+    "sha256": "962344a6b05cd53da5e3df170869aaab0e2488968628a9af0cbfe157a75aac84",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "8823_worst_vo.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8823_worst_vo.jpg",
+    "source_sha256": "ac7efe6d0360edeab05b25cec6dbd2e909602df2309c1136066628fff854c3ce",
+    "sha256": "38d5089465244c82c9d42250095b5c790a011653fd0c7e526b4fa6cbedae0c79",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "8824_light.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8824_light.jpg",
+    "source_sha256": "124341bbc47bf51a7e0c069f8d20cbc8e62f446178a8d14bf8f9f27a8c250d05",
+    "sha256": "562a3d55ca9f7d8758e6e8f6992ae3a5592983ab869e03536609599b2a081776",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "8824_mark.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8824_mark.jpg",
+    "source_sha256": "5ad1f0af3b32dccfb2042cd113076beb421cdbee92b975834340eec97b0cf57b",
+    "sha256": "75f17ed8cdaff21ac2e24334bb3008ad753001806f484740dee92ea9288ad607",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "8824_overview.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8824_overview.jpg",
+    "source_sha256": "d14b45c6de1f91d8fb1a56679ce97fc27c27dab90f11a477ae26f817333227c9",
+    "sha256": "efb6ae53b713a8483171bf2f3094dd60e8e8e5894137e02c9a99353b87c2cdc0",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "8824_sign.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8824_sign.jpg",
+    "source_sha256": "5fabbe3e81df4c787895a5b8340dd95371a4dcdc74f2bac328b5251d9db0770d",
+    "sha256": "cc2483583ed2b41e4357cccae8c36bd2a85da0b6e20511c2b6cfc4819a93b55e",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "8826_top_break.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8826_top_break.jpg",
+    "source_sha256": "5c7ec05a0f8e849c4416c89423ac7a02fd3ece91ba2804d1d141cadf22f98354",
+    "sha256": "3e513a09c840aa97aef930e5dba75a72cd462a8f7a11e8d33ef8b07815ccd128",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "8826_top_kink2.jpg",
+    "source": "D:\\Downloads\\8820起\\8820起\\02-报告\\viewer-decks\\assets\\shots\\8826_top_kink2.jpg",
+    "source_sha256": "e23a1c5f056ed97629b9405c079820e09d19b95307eed3ec267d240a09752a12",
+    "sha256": "7f481a459bd56a724441b67a4dccc490d195e069bb394f4fb97c19722ad28972",
+    "kind": "historical_result",
+    "description": "既有项目报告中的真实查看器截图；观察日期以原报告为准"
+  },
+  {
+    "file": "g1_00-sheet_hold.jpg",
+    "source": "D:\\Downloads\\8820起\\.codex-work\\gaussian-audit\\g1_00\\sheet_hold.jpg",
+    "source_sha256": "8a559b558a33b6a6345d8b5731bf23a3581bcefdd00e37668c4810f5f55939db",
+    "sha256": "97359a80c547d1ebfcca63457df636bf21c95fc5569543f8359e81a1ccc5918b",
+    "kind": "historical_result",
+    "description": "历史 g1_00 诊断拼图；训练母版缺失且位姿版本改变，不是真值精度评测"
+  },
+  {
+    "file": "g1_00-sheet_novel.jpg",
+    "source": "D:\\Downloads\\8820起\\.codex-work\\gaussian-audit\\g1_00\\sheet_novel.jpg",
+    "source_sha256": "6f911012019011d911c6dad86792e197d4e51af42705b5a97172a174933a336d",
+    "sha256": "640a2df909346d4c72cc73468833a0f4972dcb5a7fa70b59c45cc103f2aff3c6",
+    "kind": "historical_result",
+    "description": "历史 g1_00 诊断拼图；训练母版缺失且位姿版本改变，不是真值精度评测"
+  },
+  {
+    "file": "8829-best_resolved_source.jpg",
+    "source": "D:\\Downloads\\8820起\\analysis_time\\deploy_8829\\20261023-194508\\releases\\20261023-194508\\best_resolved_source.png",
+    "source_sha256": "a8d66be96ea0dc4ea74675e92b5e59c4b17cf15f35b1ac654e2785ba55c98574",
+    "sha256": "71dfdd0c2afd0326e3684dcbc55d9cf8fabe43a6048da9627575e07d6ed6d91f",
+    "kind": "historical_result",
+    "description": "8829 已有局部实验产物；不是全路线几何验收"
+  },
+  {
+    "file": "8829-equal_weight_blend.jpg",
+    "source": "D:\\Downloads\\8820起\\analysis_time\\deploy_8829\\20261023-194508\\releases\\20261023-194508\\equal_weight_blend.png",
+    "source_sha256": "929d3103979a5ee17808e31788c161ac27a427d993aeb3ea54ce80be5cbf98aa",
+    "sha256": "19c148074749f8971be3eb233f899c4fa1588566c579fee5d691e486f699c614",
+    "kind": "historical_result",
+    "description": "8829 已有局部实验产物；不是全路线几何验收"
+  },
+  {
+    "file": "8829-heldout_intersections.jpg",
+    "source": "D:\\Downloads\\8820起\\analysis_time\\deploy_8829\\20261023-194508\\releases\\20261023-194508\\heldout_intersections.jpg",
+    "source_sha256": "5923e383039d9a885c95eff9bf8f4988eaa82f73c1769f29c10e6df513d6214c",
+    "sha256": "96a7a4fdcd16fa47fb2f4b0a05691152ac8147600f32adea99fc83cdb72dcf12",
+    "kind": "historical_result",
+    "description": "8829 已有局部实验产物；不是全路线几何验收"
+  },
+  {
+    "file": "8829-correspondence_review.jpg",
+    "source": "D:\\Downloads\\8820起\\analysis_time\\deploy_8829\\20261023-194508\\releases\\20261023-194508\\correspondence_review.jpg",
+    "source_sha256": "f65b1a019e883c364456e417017a34f6ab1752318d40087de524823c598e2d43",
+    "sha256": "8b7e78584ca9b8778e7bf56ec8a8ed8f22b5a0320da8e3d0d639c2063f31219b",
+    "kind": "historical_result",
+    "description": "8829 已有局部实验产物；不是全路线几何验收"
+  },
+  {
+    "file": "8829-center_patch_review.jpg",
+    "source": "D:\\Downloads\\8820起\\analysis_time\\deploy_8829\\20261023-194508\\releases\\20261023-194508\\center_patch_review.jpg",
+    "source_sha256": "4825b174995a81362481267bc393564cc57289172f04fb560ff850a7453c0e0e",
+    "sha256": "c0bc86685b3f7976362331ab52fbdae2f61989cd491fb41d595af81630a4aad4",
+    "kind": "historical_result",
+    "description": "8829 已有局部实验产物；不是全路线几何验收"
+  },
+  {
+    "file": "8829-coverage_comparison.jpg",
+    "source": "D:\\Downloads\\8820起\\analysis_time\\deploy_8829\\20261023-194508\\releases\\20261023-194508\\coverage_comparison.jpg",
+    "source_sha256": "16e7958823d5f9432dc798b6790c8ecf71ad3caa3d9fc9b0e0e9ded9234122fc",
+    "sha256": "dda96c015c8890be2dab23de881ded61cf59663e7cd3707c4dc5f89e0374f2b3",
+    "kind": "historical_result",
+    "description": "8829 已有局部实验产物；不是全路线几何验收"
+  },
+  {
+    "file": "8829-raw_grid_rows.jpg",
+    "source": "D:\\Downloads\\8820起\\analysis_time\\deploy_8829\\20261023-194508\\releases\\20261023-194508\\raw_grid_rows.jpg",
+    "source_sha256": "0accb05dd272ac3ace74b6a015bd897cfec18a06c534061ebd7b76a6413aa4b1",
+    "sha256": "d38460779cb67e094bfe58f4f4045da2d4ea04a7f220533de8b01a0f08178fc5",
+    "kind": "historical_result",
+    "description": "8829 已有局部实验产物；不是全路线几何验收"
+  },
+  {
+    "file": "3540-rgb.jpg",
+    "source": "/vdata/yjl/recon8833/site/media/3540-rgb.jpg",
+    "sha256": "aea9bdd41f3b5571c45554e820e8025cb115dcb6a732096c963caa6f076798bd",
+    "kind": "saved_observation",
+    "description": "2026-11-09 读取现有服务器产物；未运行模型"
+  },
+  {
+    "file": "3540-labels.jpg",
+    "source": "/vdata/yjl/recon8833/site/media/3540-labels.jpg",
+    "sha256": "be0842023c0ac26d6f1198287505431e92acce2dbc53cef1066fd756c73a4970",
+    "kind": "saved_model_output",
+    "description": "2026-11-09 读取现有服务器产物；未运行模型"
+  },
+  {
+    "file": "3540-depth.jpg",
+    "source": "/vdata/yjl/recon8833/site/media/3540-depth.jpg",
+    "sha256": "e886f6804670da3be17ac08211bff2a763ab234dc1f238629bbce8176d256a6c",
+    "kind": "saved_model_output",
+    "description": "2026-11-09 读取现有服务器产物；未运行模型"
+  }
+]

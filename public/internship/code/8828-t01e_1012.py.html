@@ -1,0 +1,51 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>t01e_1012.py</title><style>body{margin:24px;font:15px system-ui;background:#faf8f3;color:#243342}pre{overflow:auto;line-height:1.6;background:white;padding:16px}.line{display:block}.line:target{background:#fff1a8}a{color:#58728a}header{overflow-wrap:anywhere}</style><header><a href="/notes/series/internship/">返回实习专栏</a><h1>t01e_1012.py</h1><p>只读快照：2026-11-09 · /home/yjl/crack/viewer1012/build/t01e_1012.py</p><p>SHA-256: dd8df02f4463d979ae3098359674a2f4105692a27e2c07675446bf125830d4a7</p></header><pre><span class="line" id="L1"><a href="#L1">   1</a> # -*- coding: utf-8 -*-</span>
+<span class="line" id="L2"><a href="#L2">   2</a> &quot;&quot;&quot;t01e (1012 版): 每帧时刻与定位轨迹 —— 不用 0903 那套&quot;帧号/FPS + 时延模型&quot;, 时刻直接来自 DVR 容器 (frames.json)。</span>
+<span class="line" id="L3"><a href="#L3">   3</a> 定位源两选一 (命令行 --gps=bb|csv, 默认 bb):</span>
+<span class="line" id="L4"><a href="#L4">   4</a>   bb  = 黑匣子 ~/gd/2026-10-12/log/blackbox/*.json (parse_blackbox.py 解析成 work/bb1012.json): 1 Hz, gps=[lat, lon], speed km/h, direction 航向;</span>
+<span class="line" id="L5"><a href="#L5">   5</a>         33% 的记录位置不更新 (沿用上一秒), 只取更新了的点; 行程内 919 个点, 相对 5 点平滑线抖动中位 0.47 m (p90 1.5)。2026-10-13 用户要求用它。</span>
+<span class="line" id="L6"><a href="#L6">   6</a>   csv = 平台抓拍清单 ~/gd/2026-10-12/1012.csv: 每 ~4 m / 0.25 s 一条, 抖动 0.37 m (p90 1.3)。</span>
+<span class="line" id="L7"><a href="#L7">   7</a> 两者在同一时刻的位置差中位 0.52 m (时间偏移 0 时最小), 即两者的&quot;时刻-位置&quot;关系一致, 所以同一个 LAG12 对两者都加:</span>
+<span class="line" id="L8"><a href="#L8">   8</a>   LAG12 = 0.56 s —— 定位时刻相对录像帧时刻的超前量 (0924 同一平台量得; 1012 没扣时底图整体比病害层先验超前 5.65 m, 扣掉后只剩 1.2 m)。</span>
+<span class="line" id="L9"><a href="#L9">   9</a> 写 work/time1012.npz (t: 每帧相对 T_REF 的秒; f2r/r2f 恒等), work/frames.npz (lag=LAG12; 逐帧 lon/lat/p 按定位轨迹插值),</span>
+<span class="line" id="L10"><a href="#L10">  10</a>    work/bb_track.npz (t, E, N, speed[m/s], cspeed, heading, lat, lon; ENU 原点与 0903 相同, 两张底图同一坐标系; 还多存 src)。</span>
+<span class="line" id="L11"><a href="#L11">  11</a> T_REF = 2026-10-12 16:45:22 (第 0 帧前一秒的整秒), 与 0903 的 CLIP_START 同一用法。&quot;&quot;&quot;</span>
+<span class="line" id="L12"><a href="#L12">  12</a> import sys, os, json, csv, datetime, subprocess</span>
+<span class="line" id="L13"><a href="#L13">  13</a> import numpy as np</span>
+<span class="line" id="L14"><a href="#L14">  14</a> from common import *</span>
+<span class="line" id="L15"><a href="#L15">  15</a> import video1012</span>
+<span class="line" id="L16"><a href="#L16">  16</a> T_REF = datetime.datetime(2026, 10, 12, 16, 45, 22).timestamp()</span>
+<span class="line" id="L17"><a href="#L17">  17</a> LAG12 = 0.56</span>
+<span class="line" id="L18"><a href="#L18">  18</a> SRC = &quot;bb&quot;</span>
+<span class="line" id="L19"><a href="#L19">  19</a> for a in sys.argv[1:]:</span>
+<span class="line" id="L20"><a href="#L20">  20</a>     if a.startswith(&quot;--gps=&quot;): SRC = a.split(&quot;=&quot;, 1)[1]</span>
+<span class="line" id="L21"><a href="#L21">  21</a> assert SRC in (&quot;bb&quot;, &quot;csv&quot;), SRC</span>
+<span class="line" id="L22"><a href="#L22">  22</a> M = video1012.meta(); n = len(M); t = np.array([m[&quot;t&quot;] for m in M]) - T_REF; spd_f = np.array([m[&quot;speed&quot;] for m in M]) / 3.6</span>
+<span class="line" id="L23"><a href="#L23">  23</a> o = enu_origin()</span>
+<span class="line" id="L24"><a href="#L24">  24</a> np.savez(WORK + &quot;/time1012.npz&quot;, f2r=np.arange(n), r2f=np.arange(n), t=t, T0=0.0, alpha=1.0, bad=np.zeros(0, int), wins=np.zeros((0, 3)), corr_cen=np.zeros(0, int), corr_off=np.zeros(0))</span>
+<span class="line" id="L25"><a href="#L25">  25</a> ep = lambda s, fmt: datetime.datetime.strptime(s, fmt).timestamp() - T_REF</span>
+<span class="line" id="L26"><a href="#L26">  26</a> if SRC == &quot;csv&quot;:</span>
+<span class="line" id="L27"><a href="#L27">  27</a>     rows = []</span>
+<span class="line" id="L28"><a href="#L28">  28</a>     for r in csv.reader(open(os.path.expanduser(&quot;~/gd/2026-10-12/1012.csv&quot;))):</span>
+<span class="line" id="L29"><a href="#L29">  29</a>         if len(r) &gt;= 6 and r[2] and float(r[2]) &gt; 100: rows.append((ep(r[1], &quot;%Y-%m-%d %H:%M:%S.%f&quot;), float(r[2]), float(r[3]), float(r[4] or 0) / 3.6, float(r[5] or 0)))</span>
+<span class="line" id="L30"><a href="#L30">  30</a>     rows.sort(); keep = [rows[0]] + [r for a, r in zip(rows[:-1], rows[1:]) if r[0] - a[0] &gt;= 0.01]        # 两路成对的只留一条</span>
+<span class="line" id="L31"><a href="#L31">  31</a>     tb = np.array([r[0] for r in keep]); lonb = np.array([r[1] for r in keep]); latb = np.array([r[2] for r in keep]); vb = np.array([r[3] for r in keep]); hb = np.array([r[4] for r in keep]); cb = vb.copy()</span>
+<span class="line" id="L32"><a href="#L32">  32</a> else:</span>
+<span class="line" id="L33"><a href="#L33">  33</a>     bbj = WORK + &quot;/bb1012.json&quot;</span>
+<span class="line" id="L34"><a href="#L34">  34</a>     if not os.path.exists(bbj):</span>
+<span class="line" id="L35"><a href="#L35">  35</a>         src = sorted(os.listdir(os.path.expanduser(&quot;~/gd/2026-10-12/log/blackbox&quot;)))[0]</span>
+<span class="line" id="L36"><a href="#L36">  36</a>         subprocess.run([sys.executable, os.path.expanduser(&quot;~/gd/tools/parse_blackbox.py&quot;), &quot;--blackbox&quot;, os.path.expanduser(&quot;~/gd/2026-10-12/log/blackbox/&quot;) + src, &quot;--out&quot;, bbj], check=True, stdout=subprocess.DEVNULL)</span>
+<span class="line" id="L37"><a href="#L37">  37</a>     R = [r for r in json.load(open(bbj)) if r.get(&quot;gps&quot;) and r[&quot;gps&quot;][1] &gt; 100]</span>
+<span class="line" id="L38"><a href="#L38">  38</a>     tr = np.array([ep(r[&quot;gpstime&quot;], &quot;%Y-%m-%d %H:%M:%S&quot;) for r in R]); latr = np.array([r[&quot;gps&quot;][0] for r in R]); lonr = np.array([r[&quot;gps&quot;][1] for r in R])</span>
+<span class="line" id="L39"><a href="#L39">  39</a>     m = (tr &gt; t[0] - 120) &amp; (tr &lt; t[-1] + 120)</span>
+<span class="line" id="L40"><a href="#L40">  40</a>     fresh = np.r_[True, (np.diff(lonr) != 0) | (np.diff(latr) != 0)] &amp; m                                    # 位置没更新的记录 (沿用上一秒) 不要</span>
+<span class="line" id="L41"><a href="#L41">  41</a>     tb, lonb, latb = tr[fresh], lonr[fresh], latr[fresh]</span>
+<span class="line" id="L42"><a href="#L42">  42</a>     vb = np.array([r[&quot;speed&quot;] for r in R], float)[fresh] / 3.6; cb = np.array([r[&quot;cspeed&quot;] for r in R], float)[fresh] / 3.6; hb = np.array([r[&quot;direction&quot;] for r in R], float)[fresh]</span>
+<span class="line" id="L43"><a href="#L43">  43</a>     print(&quot;黑匣子: 行程窗内 %d 条, 位置更新的 %d 条 (%.0f%% 不更新), 间隔中位 %.1f s&quot; % (m.sum(), fresh.sum(), 100 * (1 - fresh.sum() / max(m.sum(), 1)), np.median(np.diff(tb))))</span>
+<span class="line" id="L44"><a href="#L44">  44</a> tb = tb + LAG12</span>
+<span class="line" id="L45"><a href="#L45">  45</a> Eb, Nb = lonlat_to_en(lonb, latb, o)</span>
+<span class="line" id="L46"><a href="#L46">  46</a> np.savez(WORK + &quot;/bb_track.npz&quot;, t=tb, E=Eb, N=Nb, speed=vb, cspeed=cb, heading=hb, lat=latb, lon=lonb, src=SRC, lag=LAG12)</span>
+<span class="line" id="L47"><a href="#L47">  47</a> lon = np.interp(t, tb, lonb); lat = np.interp(t, tb, latb); E, N = lonlat_to_en(lon, lat, o)        # 逐帧位置: 按扣了超前量的定位轨迹插值</span>
+<span class="line" id="L48"><a href="#L48">  48</a> moving = spd_f &gt; 0.5</span>
+<span class="line" id="L49"><a href="#L49">  49</a> np.savez(WORK + &quot;/frames.npz&quot;, lon=lon, lat=lat, t=t, lag=np.full(n, LAG12), p=np.c_[E, N, np.zeros(n)], moving=moving, s=np.r_[0, np.cumsum(np.hypot(np.diff(E), np.diff(N)))], speed=spd_f)</span>
+<span class="line" id="L50"><a href="#L50">  50</a> print(&quot;帧 %d 张, 时刻 %.1f ~ %.1f s; 定位源 %s: %d 条 (%.1f ~ %.1f s, 已加 LAG12 %.2f s), 折线里程 %.2f km; 原点 lon0 %.6f lat0 %.6f (同 0903)&quot;</span>
+<span class="line" id="L51"><a href="#L51">  51</a>       % (n, t[0], t[-1], SRC, len(tb), tb[0], tb[-1], LAG12, np.hypot(np.diff(Eb), np.diff(Nb)).sum() / 1000, o[&quot;lon0&quot;], o[&quot;lat0&quot;]))</span></pre></html>

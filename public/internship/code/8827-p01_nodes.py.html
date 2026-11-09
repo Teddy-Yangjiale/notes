@@ -1,0 +1,53 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>p01_nodes.py</title><style>body{margin:24px;font:15px system-ui;background:#faf8f3;color:#243342}pre{overflow:auto;line-height:1.6;background:white;padding:16px}.line{display:block}.line:target{background:#fff1a8}a{color:#58728a}header{overflow-wrap:anywhere}</style><header><a href="/notes/series/internship/">返回实习专栏</a><h1>p01_nodes.py</h1><p>只读快照：2026-11-09 · /home/yjl/crack/city8827/build/p01_nodes.py</p><p>SHA-256: 81fdda9fe8ebbc0c5dcb9a068e7eb449290a816969206e3b48b2c685ef18be20</p></header><pre><span class="line" id="L1"><a href="#L1">   1</a> # -*- coding: utf-8 -*-</span>
+<span class="line" id="L2"><a href="#L2">   2</a> &quot;&quot;&quot;p01: 街景节点 —— 照片模式 (参考 Mapillary 的做法: 看的是原片, 节点之间按深度网格过渡) 的数据。每个有位姿、深度、掩膜的帧出两样东西, 放在 site/nodes/:</span>
+<span class="line" id="L3"><a href="#L3">   3</a>   &lt;帧&gt;.jpg    1920x1080 去畸变照片 (质量 85, 约 300 KB)</span>
+<span class="line" id="L4"><a href="#L4">   4</a>   &lt;帧&gt;.d.png  378x210 的 RGBA 贴图: R,G = 深度 (厘米, 高/低字节; 天空固定 300 m), B = 标签 x 50 (0 其他 / 1 路面 / 2 动态物 / 3 天空 / 4 引擎盖), A = 255</span>
+<span class="line" id="L5"><a href="#L5">   5</a> 并写 site/nodes/nodes.json: 所有节点的位姿 (查看器系 X=E Y=上 Z=-N; 四元数是 three.js 相机的朝向)、段号、段内里程、位姿来源、航向, 以及相机内参。</span>
+<span class="line" id="L6"><a href="#L6">   6</a> 网页里每个节点是一张按深度位移的网格 (顶点着色器从 .d.png 取深度): 从节点自己的位置看就是原片, 偏一点有视差; 相邻节点之间交叉淡入。</span>
+<span class="line" id="L7"><a href="#L7">   7</a> 用法: ~/3dgs/.venvs/geometry/bin/python p01_nodes.py [起帧 止帧] [--jobs 24]&quot;&quot;&quot;</span>
+<span class="line" id="L8"><a href="#L8">   8</a> import sys, os, json, time</span>
+<span class="line" id="L9"><a href="#L9">   9</a> import numpy as np, cv2</span>
+<span class="line" id="L10"><a href="#L10">  10</a> from multiprocessing import Pool</span>
+<span class="line" id="L11"><a href="#L11">  11</a> from scipy.spatial.transform import Rotation</span>
+<span class="line" id="L12"><a href="#L12">  12</a> sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))</span>
+<span class="line" id="L13"><a href="#L13">  13</a> from cc_common import WORK, SITE, Track</span>
+<span class="line" id="L14"><a href="#L14">  14</a> OUT = SITE + &quot;/nodes&quot;; os.makedirs(OUT, exist_ok=True)</span>
+<span class="line" id="L15"><a href="#L15">  15</a> DW, DH, Q = 378, 210, 85; HOOD = 1032; SKY_M = 300.0</span>
+<span class="line" id="L16"><a href="#L16">  16</a> args = [a for a in sys.argv[1:] if not a.startswith(&quot;--&quot;)]; JOBS = int([a for a in sys.argv[1:] if a.startswith(&quot;--jobs&quot;)][0].split(&quot;=&quot;)[1]) if any(a.startswith(&quot;--jobs&quot;) for a in sys.argv[1:]) else 24</span>
+<span class="line" id="L17"><a href="#L17">  17</a> F0, F1 = (int(args[0]), int(args[1])) if len(args) &gt;= 2 else (0, 10 ** 9)</span>
+<span class="line" id="L18"><a href="#L18">  18</a> </span>
+<span class="line" id="L19"><a href="#L19">  19</a> def build(f):</span>
+<span class="line" id="L20"><a href="#L20">  20</a>     jpg = &quot;%s/%06d.jpg&quot; % (OUT, f); dpng = &quot;%s/%06d.d.png&quot; % (OUT, f)</span>
+<span class="line" id="L21"><a href="#L21">  21</a>     if os.path.exists(jpg) and os.path.exists(dpng): return 0</span>
+<span class="line" id="L22"><a href="#L22">  22</a>     img = cv2.imread(&quot;%s/frames/%06d.jpg&quot; % (WORK, f))</span>
+<span class="line" id="L23"><a href="#L23">  23</a>     if img is None: return -1</span>
+<span class="line" id="L24"><a href="#L24">  24</a>     if not os.path.exists(jpg): cv2.imwrite(jpg + &quot;.tmp.jpg&quot;, img, [cv2.IMWRITE_JPEG_QUALITY, Q]); os.replace(jpg + &quot;.tmp.jpg&quot;, jpg)</span>
+<span class="line" id="L25"><a href="#L25">  25</a>     z = np.load(&quot;%s/depth/%06d.npz&quot; % (WORK, f)); d = cv2.resize(z[&quot;depth&quot;].astype(np.float32), (DW, DH), interpolation=cv2.INTER_AREA)</span>
+<span class="line" id="L26"><a href="#L26">  26</a>     lab = cv2.resize(cv2.imread(&quot;%s/masks/%06d.png&quot; % (WORK, f), cv2.IMREAD_GRAYSCALE), (DW, DH), interpolation=cv2.INTER_NEAREST).astype(np.uint8)</span>
+<span class="line" id="L27"><a href="#L27">  27</a>     lab[int(round(HOOD / 1080.0 * DH)):] = 4; d[lab == 3] = SKY_M</span>
+<span class="line" id="L28"><a href="#L28">  28</a>     cm = np.clip(np.round(d * 100.0), 1, 65535).astype(np.uint16)</span>
+<span class="line" id="L29"><a href="#L29">  29</a>     png = np.dstack([lab * 50, (cm &amp; 255).astype(np.uint8), (cm &gt;&gt; 8).astype(np.uint8), np.full((DH, DW), 255, np.uint8)])      # cv2 按 B,G,R,A 存: B=标签 G=低字节 R=高字节</span>
+<span class="line" id="L30"><a href="#L30">  30</a>     cv2.imwrite(dpng + &quot;.tmp.png&quot;, png, [cv2.IMWRITE_PNG_COMPRESSION, 4]); os.replace(dpng + &quot;.tmp.png&quot;, dpng); return 1</span>
+<span class="line" id="L31"><a href="#L31">  31</a> </span>
+<span class="line" id="L32"><a href="#L32">  32</a> if __name__ == &quot;__main__&quot;:</span>
+<span class="line" id="L33"><a href="#L33">  33</a>     cam = json.load(open(WORK + &quot;/cam.json&quot;)); z = np.load(WORK + &quot;/poses.npz&quot;); frames = [int(f) for f in z[&quot;frames&quot;]]; c2w = z[&quot;c2w&quot;]; src = z[&quot;src&quot;]; tr = Track()</span>
+<span class="line" id="L34"><a href="#L34">  34</a>     cj = json.load(open(WORK + &quot;/chunks.json&quot;)); SEGS = {s[&quot;id&quot;]: s for s in cj[&quot;segments&quot;]}</span>
+<span class="line" id="L35"><a href="#L35">  35</a>     have = [i for i, f in enumerate(frames) if F0 &lt;= f &lt;= F1 and os.path.exists(&quot;%s/depth/%06d.npz&quot; % (WORK, f)) and os.path.exists(&quot;%s/masks/%06d.png&quot; % (WORK, f)) and tr.seg[tr.row[f]] &gt;= 0]</span>
+<span class="line" id="L36"><a href="#L36">  36</a>     t0 = time.time()</span>
+<span class="line" id="L37"><a href="#L37">  37</a>     with Pool(JOBS) as pool: r = pool.map(build, [frames[i] for i in have], chunksize=8)</span>
+<span class="line" id="L38"><a href="#L38">  38</a>     print(&quot;节点文件: 新建 %d, 已有 %d, 失败 %d [%.0fs]&quot; % (sum(1 for x in r if x == 1), sum(1 for x in r if x == 0), sum(1 for x in r if x &lt; 0), time.time() - t0), flush=True)</span>
+<span class="line" id="L39"><a href="#L39">  39</a>     # 索引: 这次范围之外、以前建好的节点也一并收进去 (按 site/nodes 里实际有的文件)</span>
+<span class="line" id="L40"><a href="#L40">  40</a>     M = np.array([[1, 0, 0], [0, 0, 1], [0, -1, 0]], float); Fc = np.diag([1.0, -1.0, -1.0]); nodes = []</span>
+<span class="line" id="L41"><a href="#L41">  41</a>     for i, f in enumerate(frames):</span>
+<span class="line" id="L42"><a href="#L42">  42</a>         if not (os.path.exists(&quot;%s/%06d.jpg&quot; % (OUT, f)) and os.path.exists(&quot;%s/%06d.d.png&quot; % (OUT, f))): continue</span>
+<span class="line" id="L43"><a href="#L43">  43</a>         k = tr.row[f]; sg = int(tr.seg[k])</span>
+<span class="line" id="L44"><a href="#L44">  44</a>         if sg &lt; 0: continue</span>
+<span class="line" id="L45"><a href="#L45">  45</a>         C = c2w[i]; p = M @ C[:3, 3]; q = Rotation.from_matrix(M @ C[:3, :3] @ Fc).as_quat(); fwd = C[:3, :3][:, 2]</span>
+<span class="line" id="L46"><a href="#L46">  46</a>         nodes.append([int(f), sg] + [round(float(v), 3) for v in p] + [round(float(v), 5) for v in q] + [round(float(tr.s[k] - SEGS[sg][&quot;s_abs0&quot;]), 2), int(src[i]), round(float(np.degrees(np.arctan2(fwd[0], fwd[1])) % 360), 2)])</span>
+<span class="line" id="L47"><a href="#L47">  47</a>     json.dump(dict(w=1920, h=1080, K=[cam[&quot;fx&quot;], cam[&quot;fy&quot;], cam[&quot;cx&quot;], cam[&quot;cy&quot;]], hood=HOOD, dw=DW, dh=DH, sky_m=SKY_M, segments=[dict(id=s[&quot;id&quot;], dir=s[&quot;dir&quot;], length=s[&quot;length&quot;], f0=s[&quot;f0&quot;], f1=s[&quot;f1&quot;]) for s in cj[&quot;segments&quot;]],</span>
+<span class="line" id="L48"><a href="#L48">  48</a>                    fields=&quot;f, seg, x, y, z, qx, qy, qz, qw, s, src(0 轨迹/1 平差), heading(自北顺时针, 度)&quot;, nodes=nodes,</span>
+<span class="line" id="L49"><a href="#L49">  49</a>                    note=&quot;查看器系 X=E Y=上 Z=-N (米, 原点同 8821/8826); 四元数是 three.js 相机 (x 右 y 上 z 后) 的朝向; .d.png: R,G 深度厘米高/低字节, B 标签x50, 天空 300 m&quot;),</span>
+<span class="line" id="L50"><a href="#L50">  50</a>               open(OUT + &quot;/nodes.json&quot;, &quot;w&quot;), ensure_ascii=False, separators=(&quot;,&quot;, &quot;:&quot;))</span>
+<span class="line" id="L51"><a href="#L51">  51</a>     segc = {}</span>
+<span class="line" id="L52"><a href="#L52">  52</a>     for n in nodes: segc[n[1]] = segc.get(n[1], 0) + 1</span>
+<span class="line" id="L53"><a href="#L53">  53</a>     print(&quot;nodes.json: %d 个节点 (按段 %s); 平差位姿 %d&quot; % (len(nodes), segc, sum(1 for n in nodes if n[10] == 1)))</span></pre></html>

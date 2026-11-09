@@ -1,0 +1,113 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>README.md</title><style>body{margin:24px;font:15px system-ui;background:#faf8f3;color:#243342}pre{overflow:auto;line-height:1.6;background:white;padding:16px}.line{display:block}.line:target{background:#fff1a8}a{color:#58728a}header{overflow-wrap:anywhere}</style><header><a href="/notes/series/internship/">返回实习专栏</a><h1>README.md</h1><p>只读快照：2026-11-09 · /home/yjl/asset8824/README.md</p><p>SHA-256: 63e0e132bc15cba880bd4683aca1a5e09d9d2fccb1dbb078f7dde125c43654c3</p></header><pre><span class="line" id="L1"><a href="#L1">   1</a> # 路面资产盘点 · 8824</span>
+<span class="line" id="L2"><a href="#L2">   2</a> </span>
+<span class="line" id="L3"><a href="#L3">   3</a> http://192.168.203.143:8824 （内网）/ http://100.105.132.36:8824 （Tailscale）</span>
+<span class="line" id="L4"><a href="#L4">   4</a> </span>
+<span class="line" id="L5"><a href="#L5">   5</a> 0907 数据的资产盘点：**用 P0 的米制位姿重新定位全部 92 个资产，并与 P1/P2 点云同框展示**。</span>
+<span class="line" id="L6"><a href="#L6">   6</a> 与裂缝查看器（8820/8821/8822）无关——那三个用 0924 数据做路面病害，这个用 0907 做资产。</span>
+<span class="line" id="L7"><a href="#L7">   7</a> </span>
+<span class="line" id="L8"><a href="#L8">   8</a> ## 为什么要重算，而不是直接展示旧台账</span>
+<span class="line" id="L9"><a href="#L9">   9</a> </span>
+<span class="line" id="L10"><a href="#L10">  10</a> 旧台账（`3dgs/outputs/assets/0907_geo/assets_final.parquet`，2026-09-08）：</span>
+<span class="line" id="L11"><a href="#L11">  11</a> </span>
+<span class="line" id="L12"><a href="#L12">  12</a> - 离地类 51 个用「**尺寸先验** + GPS」：查国标尺寸表，由框的像素高反推距离。</span>
+<span class="line" id="L13"><a href="#L13">  13</a>   之所以这样，是因为当时 SfM 尺度漂移 **749×**，位姿不能用。</span>
+<span class="line" id="L14"><a href="#L14">  14</a> - 贴地类 41 个用「IPM + GPS」。</span>
+<span class="line" id="L15"><a href="#L15">  15</a> - 两类都以抓拍 GPS 为绝对基准，而那一列后来被查明**位置差、速度列好**</span>
+<span class="line" id="L16"><a href="#L16">  16</a>   （38.5% 的相邻记录位置完全重复；与真实位移只相关 +0.338，速度列是 +0.902）。</span>
+<span class="line" id="L17"><a href="#L17">  17</a> - 结果：81 个入库资产里 **41 个（51%）需复核**，经验散布 1.48 m。</span>
+<span class="line" id="L18"><a href="#L18">  18</a> </span>
+<span class="line" id="L19"><a href="#L19">  19</a> P0（本仓库 `/home/yjl/p0_pose`）之后位姿是米制 ENU 的，姿态误差约 0.09°、</span>
+<span class="line" id="L20"><a href="#L20">  20</a> 总里程偏差 0.10%。**可以直接多视三角化，不需要尺寸先验**——尺寸候选选错</span>
+<span class="line" id="L21"><a href="#L21">  21</a> 正是旧台账需复核的主因。</span>
+<span class="line" id="L22"><a href="#L22">  22</a> </span>
+<span class="line" id="L23"><a href="#L23">  23</a> ## 流程</span>
+<span class="line" id="L24"><a href="#L24">  24</a> </span>
+<span class="line" id="L25"><a href="#L25">  25</a> ```</span>
+<span class="line" id="L26"><a href="#L26">  26</a> a1_locate.py   资产三维定位      ~5 s</span>
+<span class="line" id="L27"><a href="#L27">  27</a> a2_verify.py   四条独立核验       ~20 s</span>
+<span class="line" id="L28"><a href="#L28">  28</a> a3_tiles.py    点云切瓦片         ~2 min   → 145 块 / 740 万点 / 111 MB</span>
+<span class="line" id="L29"><a href="#L29">  29</a> a4_site.py     站点数据           ~5 s     → data.json 0.2 MB</span>
+<span class="line" id="L30"><a href="#L30">  30</a> site/serve.py  服务（端口 8824）</span>
+<span class="line" id="L31"><a href="#L31">  31</a> ```</span>
+<span class="line" id="L32"><a href="#L32">  32</a> </span>
+<span class="line" id="L33"><a href="#L33">  33</a> ### a1 两类几何分开处理</span>
+<span class="line" id="L34"><a href="#L34">  34</a> </span>
+<span class="line" id="L35"><a href="#L35">  35</a> | 类 | 数量 | 方法 | 锚点 |</span>
+<span class="line" id="L36"><a href="#L36">  36</a> |---|---|---|---|</span>
+<span class="line" id="L37"><a href="#L37">  37</a> | 离地（标志/信号灯/电子眼） | 51 | 最小二乘多视三角化 + Huber 重加权 | 框中心 |</span>
+<span class="line" id="L38"><a href="#L38">  38</a> | 贴地（标线） | 30 | 射线 × 局部路面 `z = C_z − 1.60` | 框竖直中心 |</span>
+<span class="line" id="L39"><a href="#L39">  39</a> | 立在地面（锥桶/施工牌） | 11 | 同上 | 框底边 |</span>
+<span class="line" id="L40"><a href="#L40">  40</a> </span>
+<span class="line" id="L41"><a href="#L41">  41</a> 三角化：`min Σ wᵢ‖(I − dᵢdᵢᵀ)(X − oᵢ)‖²`，并查条件数与最大射线夹角——</span>
+<span class="line" id="L42"><a href="#L42">  42</a> 前向运动下极点附近不论基线多长都解不出来（P2 里量化过这条退化）。</span>
+<span class="line" id="L43"><a href="#L43">  43</a> </span>
+<span class="line" id="L44"><a href="#L44">  44</a> ## 核验结果（四条互不相关的证据）</span>
+<span class="line" id="L45"><a href="#L45">  45</a> </span>
+<span class="line" id="L46"><a href="#L46">  46</a> **① 离路面高度 vs 国标挂高**（独立于定位算法）</span>
+<span class="line" id="L47"><a href="#L47">  47</a> </span>
+<span class="line" id="L48"><a href="#L48">  48</a> | 类 | n | 高度中位 | 落在国标区间 |</span>
+<span class="line" id="L49"><a href="#L49">  49</a> |---|---|---|---|</span>
+<span class="line" id="L50"><a href="#L50">  50</a> | traffic_light | 11 | 6.43 m | **11/11**（GB 14886 悬臂式 5.5–7 m） |</span>
+<span class="line" id="L51"><a href="#L51">  51</a> | traffic_sign | 39 | 3.49 m | 37/39（GB 5768） |</span>
+<span class="line" id="L52"><a href="#L52">  52</a> | camera | 1 | 5.98 m | 1/1 |</span>
+<span class="line" id="L53"><a href="#L53">  53</a> </span>
+<span class="line" id="L54"><a href="#L54">  54</a> 两个异常都是蓝底指路牌 h≈8 m，疑为门架悬挂，判据上界 7.5 m 可能偏紧。</span>
+<span class="line" id="L55"><a href="#L55">  55</a> </span>
+<span class="line" id="L56"><a href="#L56">  56</a> **② MVS 点云支持**（P2 产物，与资产定位完全独立：一个来自检测框三角化，</span>
+<span class="line" id="L57"><a href="#L57">  57</a> 一个来自逐像素平面扫描）</span>
+<span class="line" id="L58"><a href="#L58">  58</a> </span>
+<span class="line" id="L59"><a href="#L59">  59</a> - 半径 0.5 m 内有 MVS 点：**85/92（92.4%）**</span>
+<span class="line" id="L60"><a href="#L60">  60</a> - 半径 1.5 m 内：92/92（100%）</span>
+<span class="line" id="L61"><a href="#L61">  61</a> - 最近 MVS 点距离中位：标志 0.07 m · 标线 0.11 m · 信号灯 0.15 m · 电子眼 0.10 m</span>
+<span class="line" id="L62"><a href="#L62">  62</a> </span>
+<span class="line" id="L63"><a href="#L63">  63</a> **③ 与旧台账的位移**：中位 **5.60 m**，p90 14.65 m。</span>
+<span class="line" id="L64"><a href="#L64">  64</a> 系统分量只有 1.52 m（27%），**主要在沿路方向**（|中位| 4.26 m，横向 2.45 m）——</span>
+<span class="line" id="L65"><a href="#L65">  65</a> 方向与量级都与已知的「抓拍定位超前 0.56 s × 车速」吻合（50 km/h 时 7.8 m）。</span>
+<span class="line" id="L66"><a href="#L66">  66</a> 旧定位有资产离轨迹 48.6 m，新的最大 24.4 m。</span>
+<span class="line" id="L67"><a href="#L67">  67</a> </span>
+<span class="line" id="L68"><a href="#L68">  68</a> **④ 几何自洽**：离地类重投影 RMS 中位 2.27 px（p90 9.30）；最大射线夹角中位 17.4°、</span>
+<span class="line" id="L69"><a href="#L69">  69</a> 最小 2.2°（无退化）；贴地类多帧散布中位 **0.206 m**（旧台账经验散布 1.48 m）。</span>
+<span class="line" id="L70"><a href="#L70">  70</a> </span>
+<span class="line" id="L71"><a href="#L71">  71</a> ## 质量分级与结论</span>
+<span class="line" id="L72"><a href="#L72">  72</a> </span>
+<span class="line" id="L73"><a href="#L73">  73</a> | 等级 | 判据 | 张数 |</span>
+<span class="line" id="L74"><a href="#L74">  74</a> |---|---|---|</span>
+<span class="line" id="L75"><a href="#L75">  75</a> | 3 | 离地：RMS&lt;4 px 且夹角&gt;8° 且 ≥4 帧；贴地：散布&lt;0.3 m 且 ≥4 帧 | 37 |</span>
+<span class="line" id="L76"><a href="#L76">  76</a> | 2 | 离地：RMS&lt;10 px 且夹角&gt;3°；贴地：散布&lt;0.8 m | 45 |</span>
+<span class="line" id="L77"><a href="#L77">  77</a> | 1 | 其余 | 10 |</span>
+<span class="line" id="L78"><a href="#L78">  78</a> </span>
+<span class="line" id="L79"><a href="#L79">  79</a> **入库 81 个，需复核 10 个（12%）——旧台账是 41/81（51%）。**</span>
+<span class="line" id="L80"><a href="#L80">  80</a> </span>
+<span class="line" id="L81"><a href="#L81">  81</a> ## 查看器</span>
+<span class="line" id="L82"><a href="#L82">  82</a> </span>
+<span class="line" id="L83"><a href="#L83">  83</a> 三栏：资产列表（按类分组、按等级排序）/ 三维点云 + 资产标记 / 详情面板。</span>
+<span class="line" id="L84"><a href="#L84">  84</a> 详情里有最佳观测照片（画出检测框）、可切换的全部观测帧、定位量与核验量。</span>
+<span class="line" id="L85"><a href="#L85">  85</a> 左下角俯视路线图。筛选：全部 / 仅入库 / 需复核；图层：点云 / 路面 / 资产标记。</span>
+<span class="line" id="L86"><a href="#L86">  86</a> </span>
+<span class="line" id="L87"><a href="#L87">  87</a> 点云 = P2 的 MVS 离地点云 420 万（15 cm）+ P1 的路面点云抽稀到 318 万（原 5 cm，1/3）。</span>
+<span class="line" id="L88"><a href="#L88">  88</a> 原始帧从 `3dgs/data/0907/frames` 只读服务，不复制（省 818 MB）。</span>
+<span class="line" id="L89"><a href="#L89">  89</a> </span>
+<span class="line" id="L90"><a href="#L90">  90</a> ## 已知限制</span>
+<span class="line" id="L91"><a href="#L91">  91</a> </span>
+<span class="line" id="L92"><a href="#L92">  92</a> - **沿路绝对精度仍受限**：定位的绝对基准是 P0 轨迹，而 P0 的 GPS 侧残差是</span>
+<span class="line" id="L93"><a href="#L93">  93</a>   2.74 m 的慢变多路径偏差。资产之间的**相对**位置好得多（MVS 一致性 0.1 m 量级）。</span>
+<span class="line" id="L94"><a href="#L94">  94</a> - 2 个标志高度超出国标上界，需人工判断是否门架悬挂。</span>
+<span class="line" id="L95"><a href="#L95">  95</a> - 贴地类假设局部路面水平（`z = C_z − 1.60`），纵坡大的路段会有偏差。</span>
+<span class="line" id="L96"><a href="#L96">  96</a> - 细分类仍沿用 TSR 的叶子投票，40.9% 未解析（`background`/`fuzziness`/两级矛盾）——</span>
+<span class="line" id="L97"><a href="#L97">  97</a>   这是感知侧的问题，本项目未触碰。</span>
+<span class="line" id="L98"><a href="#L98">  98</a> - 服务由 setsid 起，**不是 systemd，重启不会自动恢复**。</span>
+<span class="line" id="L99"><a href="#L99">  99</a> </span>
+<span class="line" id="L100"><a href="#L100"> 100</a> ## 2026-10-08 只读审计（线上结果未改）</span>
+<span class="line" id="L101"><a href="#L101"> 101</a> </span>
+<span class="line" id="L102"><a href="#L102"> 102</a> 脚本 `run/b1_audit.py` … `b8_figs.py`，输出 `outputs/audit.json`、`audit_height.json`、`sync_scan.json`、`preview_*`。</span>
+<span class="line" id="L103"><a href="#L103"> 103</a> </span>
+<span class="line" id="L104"><a href="#L104"> 104</a> - **录像与定位记录差约 +1.7 s**（车速互相关 +1.65 s、转向率互相关 +1.75 s、位姿图代价最小 +1.8 s）。</span>
+<span class="line" id="L105"><a href="#L105"> 105</a>   车速中位 44 km/h，所以现在所有资产的绝对坐标落在真实位置后方约 20 m；相对几何和个数不受影响。</span>
+<span class="line" id="L106"><a href="#L106"> 106</a>   上面“已知限制”里把 2.74 m 定位残差归为多路径、“核验结果 ③”里把新旧位移归为 0.56 s 定位超前，都要按这一条重看。</span>
+<span class="line" id="L107"><a href="#L107"> 107</a> - **相机高度**：流程用 1.60 m，实测约 1.50 m（稀疏点落差 1.479、车道正中 1.499、自由平面拟合 1.497、同车 0903 标定 1.475）；</span>
+<span class="line" id="L108"><a href="#L108"> 108</a>   箭头多帧落点的离散在 1.55–1.60 m 处最小，结论不一致，需现场实测。</span>
+<span class="line" id="L109"><a href="#L109"> 109</a> - 标志 39 块里 3 对重复（细类在帧间翻转，关联的叶子级类别门把同一块牌断成两串）。</span>
+<span class="line" id="L110"><a href="#L110"> 110</a> - 1398 个候选框只用上 891 个；落单的框能凑出漏记候选：标志 7 组、信号灯 1、标线 1。</span>
+<span class="line" id="L111"><a href="#L111"> 111</a> - 点云核验对水平和远近有分辨力，对竖直没有（竖直挪 1.5 m 仍有 57% 通过）。</span>
+<span class="line" id="L112"><a href="#L112"> 112</a> - 预演（τ = 1.7 s、h = 1.50 m，只写 `outputs/preview_*`）：定位残差 2.57 → 0.59 m，资产前移中位 20.0 m。</span>
+<span class="line" id="L113"><a href="#L113"> 113</a>   **未应用**：要重跑 P0 → P1 → P2 → a1–a4，约 20–30 分钟，等确认。</span></pre></html>

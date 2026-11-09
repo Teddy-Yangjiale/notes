@@ -1,0 +1,131 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>geom.py</title><style>body{margin:24px;font:15px system-ui;background:#faf8f3;color:#243342}pre{overflow:auto;line-height:1.6;background:white;padding:16px}.line{display:block}.line:target{background:#fff1a8}a{color:#58728a}header{overflow-wrap:anywhere}</style><header><a href="/notes/series/internship/">返回实习专栏</a><h1>geom.py</h1><p>只读快照：2026-11-09 · /home/yjl/asset8824/a/geom.py</p><p>SHA-256: 99f584b61b6950b1fc2a01451703b4e88fb1e2f17767a9169c92fc2deb3b0dc2</p></header><pre><span class="line" id="L1"><a href="#L1">   1</a> # -*- coding: utf-8 -*-</span>
+<span class="line" id="L2"><a href="#L2">   2</a> &quot;&quot;&quot;资产三维定位的几何。</span>
+<span class="line" id="L3"><a href="#L3">   3</a> </span>
+<span class="line" id="L4"><a href="#L4">   4</a> 为什么现在可以直接三角化</span>
+<span class="line" id="L5"><a href="#L5">   5</a> ----------------------</span>
+<span class="line" id="L6"><a href="#L6">   6</a> 旧台账（2026-09-08）给离地资产用的是「尺寸先验 + GPS」：查表拿国标尺寸，</span>
+<span class="line" id="L7"><a href="#L7">   7</a> 由框的像素高反推距离。那是因为当时 SfM 的尺度漂移 749×，位姿不能用。</span>
+<span class="line" id="L8"><a href="#L8">   8</a> P0 之后位姿是米制 ENU 的（姿态误差 ≈0.09°、总里程偏差 0.10%），</span>
+<span class="line" id="L9"><a href="#L9">   9</a> **多视三角化直接给出米制位置，不需要尺寸先验** —— 也就消掉了旧台账里</span>
+<span class="line" id="L10"><a href="#L10">  10</a> 41/92 需复核的主要来源（尺寸候选选错）。</span>
+<span class="line" id="L11"><a href="#L11">  11</a> </span>
+<span class="line" id="L12"><a href="#L12">  12</a> 两类几何分开处理</span>
+<span class="line" id="L13"><a href="#L13">  13</a> --------------</span>
+<span class="line" id="L14"><a href="#L14">  14</a> 贴地类：射线与局部路面平面求交。路面高程由位姿直接给出 z = C_z − 1.60，</span>
+<span class="line" id="L15"><a href="#L15">  15</a>         这是 P1 验证过的模型（标线漆宽实测 21.0 cm vs 国标 15 cm）。</span>
+<span class="line" id="L16"><a href="#L16">  16</a> 离地类：最小二乘多视三角化。前向运动下必须查条件数——极点附近的点</span>
+<span class="line" id="L17"><a href="#L17">  17</a>         不论基线多长都解不出来（P2 里量化过这条退化）。</span>
+<span class="line" id="L18"><a href="#L18">  18</a> &quot;&quot;&quot;</span>
+<span class="line" id="L19"><a href="#L19">  19</a> from __future__ import annotations</span>
+<span class="line" id="L20"><a href="#L20">  20</a> import numpy as np</span>
+<span class="line" id="L21"><a href="#L21">  21</a> </span>
+<span class="line" id="L22"><a href="#L22">  22</a> </span>
+<span class="line" id="L23"><a href="#L23">  23</a> def K_mat(fx, fy, cx, cy):</span>
+<span class="line" id="L24"><a href="#L24">  24</a>     return np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1.0]])</span>
+<span class="line" id="L25"><a href="#L25">  25</a> </span>
+<span class="line" id="L26"><a href="#L26">  26</a> </span>
+<span class="line" id="L27"><a href="#L27">  27</a> def anchor_uv(box, kind: str) -&gt; tuple[float, float]:</span>
+<span class="line" id="L28"><a href="#L28">  28</a>     &quot;&quot;&quot;按资产几何取锚点像素。box = (x0,y0,x1,y1)。&quot;&quot;&quot;</span>
+<span class="line" id="L29"><a href="#L29">  29</a>     x0, y0, x1, y1 = box</span>
+<span class="line" id="L30"><a href="#L30">  30</a>     u = (x0 + x1) / 2.0</span>
+<span class="line" id="L31"><a href="#L31">  31</a>     if kind == &quot;flat&quot;:        # 平放在地面：框的竖直中心就是地面点</span>
+<span class="line" id="L32"><a href="#L32">  32</a>         v = (y0 + y1) / 2.0</span>
+<span class="line" id="L33"><a href="#L33">  33</a>     elif kind == &quot;standing&quot;:  # 立在地面：框底边是接地点</span>
+<span class="line" id="L34"><a href="#L34">  34</a>         v = y1</span>
+<span class="line" id="L35"><a href="#L35">  35</a>     else:                     # 离地：框中心</span>
+<span class="line" id="L36"><a href="#L36">  36</a>         v = (y0 + y1) / 2.0</span>
+<span class="line" id="L37"><a href="#L37">  37</a>     return u, v</span>
+<span class="line" id="L38"><a href="#L38">  38</a> </span>
+<span class="line" id="L39"><a href="#L39">  39</a> </span>
+<span class="line" id="L40"><a href="#L40">  40</a> def ray(K_inv, R_cw, C, u, v):</span>
+<span class="line" id="L41"><a href="#L41">  41</a>     &quot;&quot;&quot;像素 → (原点, 单位方向) 的世界系射线。R_cw 为 world→cam。&quot;&quot;&quot;</span>
+<span class="line" id="L42"><a href="#L42">  42</a>     r = K_inv @ np.array([u, v, 1.0])</span>
+<span class="line" id="L43"><a href="#L43">  43</a>     d = R_cw.T @ r</span>
+<span class="line" id="L44"><a href="#L44">  44</a>     return C, d / np.linalg.norm(d)</span>
+<span class="line" id="L45"><a href="#L45">  45</a> </span>
+<span class="line" id="L46"><a href="#L46">  46</a> </span>
+<span class="line" id="L47"><a href="#L47">  47</a> def ground_intersect(C, d, z_road):</span>
+<span class="line" id="L48"><a href="#L48">  48</a>     &quot;&quot;&quot;射线与水平路面 z = z_road 求交。返回 (点, 沿射线距离) 或 None。&quot;&quot;&quot;</span>
+<span class="line" id="L49"><a href="#L49">  49</a>     if d[2] &gt;= -1e-9:</span>
+<span class="line" id="L50"><a href="#L50">  50</a>         return None</span>
+<span class="line" id="L51"><a href="#L51">  51</a>     t = (z_road - C[2]) / d[2]</span>
+<span class="line" id="L52"><a href="#L52">  52</a>     if t &lt;= 0:</span>
+<span class="line" id="L53"><a href="#L53">  53</a>         return None</span>
+<span class="line" id="L54"><a href="#L54">  54</a>     return C + t * d, t</span>
+<span class="line" id="L55"><a href="#L55">  55</a> </span>
+<span class="line" id="L56"><a href="#L56">  56</a> </span>
+<span class="line" id="L57"><a href="#L57">  57</a> def triangulate(origins, dirs, weights=None):</span>
+<span class="line" id="L58"><a href="#L58">  58</a>     &quot;&quot;&quot;最小二乘多视三角化：min Σ wᵢ‖(I − dᵢdᵢᵀ)(X − oᵢ)‖²。</span>
+<span class="line" id="L59"><a href="#L59">  59</a> </span>
+<span class="line" id="L60"><a href="#L60">  60</a>     返回 (X, 残差RMS, 条件数)。条件数大 = 几何退化（前向运动的极点附近）。</span>
+<span class="line" id="L61"><a href="#L61">  61</a>     &quot;&quot;&quot;</span>
+<span class="line" id="L62"><a href="#L62">  62</a>     O = np.asarray(origins, float)</span>
+<span class="line" id="L63"><a href="#L63">  63</a>     D = np.asarray(dirs, float)</span>
+<span class="line" id="L64"><a href="#L64">  64</a>     w = np.ones(len(O)) if weights is None else np.asarray(weights, float)</span>
+<span class="line" id="L65"><a href="#L65">  65</a>     A = np.zeros((3, 3)); b = np.zeros(3)</span>
+<span class="line" id="L66"><a href="#L66">  66</a>     for oi, di, wi in zip(O, D, w):</span>
+<span class="line" id="L67"><a href="#L67">  67</a>         P = np.eye(3) - np.outer(di, di)</span>
+<span class="line" id="L68"><a href="#L68">  68</a>         A += wi * P</span>
+<span class="line" id="L69"><a href="#L69">  69</a>         b += wi * (P @ oi)</span>
+<span class="line" id="L70"><a href="#L70">  70</a>     cond = float(np.linalg.cond(A))</span>
+<span class="line" id="L71"><a href="#L71">  71</a>     if not np.isfinite(cond) or cond &gt; 1e12:</span>
+<span class="line" id="L72"><a href="#L72">  72</a>         return None, np.inf, cond</span>
+<span class="line" id="L73"><a href="#L73">  73</a>     X = np.linalg.solve(A, b)</span>
+<span class="line" id="L74"><a href="#L74">  74</a>     res = np.array([np.linalg.norm((np.eye(3) - np.outer(d, d)) @ (X - o))</span>
+<span class="line" id="L75"><a href="#L75">  75</a>                     for o, d in zip(O, D)])</span>
+<span class="line" id="L76"><a href="#L76">  76</a>     return X, float(np.sqrt((res ** 2).mean())), cond</span>
+<span class="line" id="L77"><a href="#L77">  77</a> </span>
+<span class="line" id="L78"><a href="#L78">  78</a> </span>
+<span class="line" id="L79"><a href="#L79">  79</a> def max_pair_angle(dirs) -&gt; float:</span>
+<span class="line" id="L80"><a href="#L80">  80</a>     &quot;&quot;&quot;射线两两夹角的最大值（度）。前向运动下这是可解性的直接度量。&quot;&quot;&quot;</span>
+<span class="line" id="L81"><a href="#L81">  81</a>     D = np.asarray(dirs, float)</span>
+<span class="line" id="L82"><a href="#L82">  82</a>     if len(D) &lt; 2:</span>
+<span class="line" id="L83"><a href="#L83">  83</a>         return 0.0</span>
+<span class="line" id="L84"><a href="#L84">  84</a>     c = np.clip(D @ D.T, -1, 1)</span>
+<span class="line" id="L85"><a href="#L85">  85</a>     return float(np.degrees(np.arccos(c.min())))</span>
+<span class="line" id="L86"><a href="#L86">  86</a> </span>
+<span class="line" id="L87"><a href="#L87">  87</a> </span>
+<span class="line" id="L88"><a href="#L88">  88</a> def reproject(X, K, R_cw, C):</span>
+<span class="line" id="L89"><a href="#L89">  89</a>     &quot;&quot;&quot;世界点 → 像素。返回 (u, v, 相机系深度)。&quot;&quot;&quot;</span>
+<span class="line" id="L90"><a href="#L90">  90</a>     Xc = R_cw @ (X - C)</span>
+<span class="line" id="L91"><a href="#L91">  91</a>     if Xc[2] &lt;= 1e-6:</span>
+<span class="line" id="L92"><a href="#L92">  92</a>         return None</span>
+<span class="line" id="L93"><a href="#L93">  93</a>     p = K @ Xc</span>
+<span class="line" id="L94"><a href="#L94">  94</a>     return p[0] / p[2], p[1] / p[2], float(Xc[2])</span>
+<span class="line" id="L95"><a href="#L95">  95</a> </span>
+<span class="line" id="L96"><a href="#L96">  96</a> </span>
+<span class="line" id="L97"><a href="#L97">  97</a> def robust_triangulate(obs, K, huber_px=8.0, max_iter=8):</span>
+<span class="line" id="L98"><a href="#L98">  98</a>     &quot;&quot;&quot;带 Huber 重加权的三角化。obs = [(R_cw, C, u, v)]。</span>
+<span class="line" id="L99"><a href="#L99">  99</a> </span>
+<span class="line" id="L100"><a href="#L100"> 100</a>     返回 dict：X / rms_px / cond / max_angle / n_used / 每次观测的重投影残差。</span>
+<span class="line" id="L101"><a href="#L101"> 101</a>     &quot;&quot;&quot;</span>
+<span class="line" id="L102"><a href="#L102"> 102</a>     K_inv = np.linalg.inv(K)</span>
+<span class="line" id="L103"><a href="#L103"> 103</a>     O, D = [], []</span>
+<span class="line" id="L104"><a href="#L104"> 104</a>     for R_cw, C, u, v in obs:</span>
+<span class="line" id="L105"><a href="#L105"> 105</a>         o, d = ray(K_inv, R_cw, C, u, v)</span>
+<span class="line" id="L106"><a href="#L106"> 106</a>         O.append(o); D.append(d)</span>
+<span class="line" id="L107"><a href="#L107"> 107</a>     w = np.ones(len(obs))</span>
+<span class="line" id="L108"><a href="#L108"> 108</a>     X = None</span>
+<span class="line" id="L109"><a href="#L109"> 109</a>     for _ in range(max_iter):</span>
+<span class="line" id="L110"><a href="#L110"> 110</a>         X, _, cond = triangulate(O, D, w)</span>
+<span class="line" id="L111"><a href="#L111"> 111</a>         if X is None:</span>
+<span class="line" id="L112"><a href="#L112"> 112</a>             return None</span>
+<span class="line" id="L113"><a href="#L113"> 113</a>         err = []</span>
+<span class="line" id="L114"><a href="#L114"> 114</a>         for (R_cw, C, u, v) in obs:</span>
+<span class="line" id="L115"><a href="#L115"> 115</a>             pr = reproject(X, K, R_cw, C)</span>
+<span class="line" id="L116"><a href="#L116"> 116</a>             err.append(np.hypot(pr[0] - u, pr[1] - v) if pr else 1e6)</span>
+<span class="line" id="L117"><a href="#L117"> 117</a>         err = np.array(err)</span>
+<span class="line" id="L118"><a href="#L118"> 118</a>         nw = np.where(err &lt;= huber_px, 1.0, huber_px / np.maximum(err, 1e-6))</span>
+<span class="line" id="L119"><a href="#L119"> 119</a>         if np.allclose(nw, w, atol=1e-3):</span>
+<span class="line" id="L120"><a href="#L120"> 120</a>             w = nw; break</span>
+<span class="line" id="L121"><a href="#L121"> 121</a>         w = nw</span>
+<span class="line" id="L122"><a href="#L122"> 122</a>     used = w &gt; 0.3</span>
+<span class="line" id="L123"><a href="#L123"> 123</a>     return {&quot;X&quot;: X, &quot;err_px&quot;: err, &quot;w&quot;: w, &quot;cond&quot;: cond,</span>
+<span class="line" id="L124"><a href="#L124"> 124</a>             &quot;rms_px&quot;: float(np.sqrt((err[used] ** 2).mean())) if used.any() else float(&quot;inf&quot;),</span>
+<span class="line" id="L125"><a href="#L125"> 125</a>             &quot;max_angle&quot;: max_pair_angle(np.asarray(D)[used]) if used.sum() &gt;= 2 else 0.0,</span>
+<span class="line" id="L126"><a href="#L126"> 126</a>             &quot;n_used&quot;: int(used.sum())}</span>
+<span class="line" id="L127"><a href="#L127"> 127</a> </span>
+<span class="line" id="L128"><a href="#L128"> 128</a> </span>
+<span class="line" id="L129"><a href="#L129"> 129</a> def enu_to_wgs84(e, n, lon0, lat0, lat_ref):</span>
+<span class="line" id="L130"><a href="#L130"> 130</a>     mlon = 111320.0 * np.cos(np.radians(lat_ref))</span>
+<span class="line" id="L131"><a href="#L131"> 131</a>     return lon0 + e / mlon, lat0 + n / 110540.0</span></pre></html>

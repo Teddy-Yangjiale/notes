@@ -1,0 +1,64 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>prepare_clean_inputs.py</title><style>body{margin:24px;font:15px system-ui;background:#faf8f3;color:#243342}pre{overflow:auto;line-height:1.6;background:white;padding:16px}.line{display:block}.line:target{background:#fff1a8}a{color:#58728a}header{overflow-wrap:anywhere}</style><header><a href="/notes/series/internship/">返回实习专栏</a><h1>prepare_clean_inputs.py</h1><p>只读快照：2026-11-09 · /home/yjl/crack/snap1012/build/prepare_clean_inputs.py</p><p>SHA-256: b103f91134d9559fa85099e473f7333187c88072bbf576f0367c46d9b89cd294</p></header><pre><span class="line" id="L1"><a href="#L1">   1</a> &quot;&quot;&quot;Run both cleaning stages and bind them to an isolated reconstruction workdir.&quot;&quot;&quot;</span>
+<span class="line" id="L2"><a href="#L2">   2</a> import argparse</span>
+<span class="line" id="L3"><a href="#L3">   3</a> import csv</span>
+<span class="line" id="L4"><a href="#L4">   4</a> import shutil</span>
+<span class="line" id="L5"><a href="#L5">   5</a> import subprocess</span>
+<span class="line" id="L6"><a href="#L6">   6</a> import sys</span>
+<span class="line" id="L7"><a href="#L7">   7</a> from pathlib import Path</span>
+<span class="line" id="L8"><a href="#L8">   8</a> </span>
+<span class="line" id="L9"><a href="#L9">   9</a> import numpy as np</span>
+<span class="line" id="L10"><a href="#L10">  10</a> </span>
+<span class="line" id="L11"><a href="#L11">  11</a> from clean_common import read_rows, source_hash, write_json</span>
+<span class="line" id="L12"><a href="#L12">  12</a> </span>
+<span class="line" id="L13"><a href="#L13">  13</a> </span>
+<span class="line" id="L14"><a href="#L14">  14</a> def main():</span>
+<span class="line" id="L15"><a href="#L15">  15</a>     p = argparse.ArgumentParser()</span>
+<span class="line" id="L16"><a href="#L16">  16</a>     p.add_argument(&quot;--source-root&quot;, required=True); p.add_argument(&quot;--run-root&quot;, required=True)</span>
+<span class="line" id="L17"><a href="#L17">  17</a>     p.add_argument(&quot;--csv&quot;, required=True)</span>
+<span class="line" id="L18"><a href="#L18">  18</a>     a = p.parse_args()</span>
+<span class="line" id="L19"><a href="#L19">  19</a>     source, run = Path(a.source_root).resolve(), Path(a.run_root).resolve()</span>
+<span class="line" id="L20"><a href="#L20">  20</a>     if source == run or source in run.parents:</span>
+<span class="line" id="L21"><a href="#L21">  21</a>         raise ValueError(&quot;Use a separate output directory outside the source tree&quot;)</span>
+<span class="line" id="L22"><a href="#L22">  22</a>     work, clean = run / &quot;work&quot;, run / &quot;clean&quot;</span>
+<span class="line" id="L23"><a href="#L23">  23</a>     work.mkdir(parents=True, exist_ok=True); clean.mkdir(exist_ok=True)</span>
+<span class="line" id="L24"><a href="#L24">  24</a>     if (work / &quot;q01_photo.npz&quot;).exists():</span>
+<span class="line" id="L25"><a href="#L25">  25</a>         raise FileExistsError(&quot;Prepared run already exists; use its manifest or choose a fresh run root&quot;)</span>
+<span class="line" id="L26"><a href="#L26">  26</a>     build = Path(__file__).parent</span>
+<span class="line" id="L27"><a href="#L27">  27</a>     subprocess.run([sys.executable, str(build / &quot;clean_time_regressions.py&quot;), &quot;--csv&quot;, a.csv, &quot;--out&quot;, str(clean)], check=True)</span>
+<span class="line" id="L28"><a href="#L28">  28</a>     subprocess.run([sys.executable, str(build / &quot;clean_duplicate_images.py&quot;), &quot;--csv&quot;, a.csv,</span>
+<span class="line" id="L29"><a href="#L29">  29</a>                     &quot;--photos&quot;, str(source / &quot;data/photos&quot;), &quot;--out&quot;, str(clean),</span>
+<span class="line" id="L30"><a href="#L30">  30</a>                     &quot;--time-mask&quot;, str(clean / &quot;time_mask.npz&quot;), &quot;--legacy-qc&quot;, str(source / &quot;work/q04_dups.npz&quot;),</span>
+<span class="line" id="L31"><a href="#L31">  31</a>                     &quot;--photo-qc&quot;, str(source / &quot;work/q01_photo.npz&quot;)], check=True)</span>
+<span class="line" id="L32"><a href="#L32">  32</a>     dup = np.load(clean / &quot;duplicate_mask.npz&quot;)</span>
+<span class="line" id="L33"><a href="#L33">  33</a>     time = np.load(clean / &quot;time_mask.npz&quot;)</span>
+<span class="line" id="L34"><a href="#L34">  34</a>     photo = {k: v.copy() for k, v in np.load(source / &quot;work/q01_photo.npz&quot;, allow_pickle=True).items()}</span>
+<span class="line" id="L35"><a href="#L35">  35</a>     old = {k: v.copy() for k, v in np.load(source / &quot;work/q04_dups.npz&quot;).items()}</span>
+<span class="line" id="L36"><a href="#L36">  36</a>     photo[&quot;ok&quot;] = np.where(dup[&quot;keep&quot;], photo[&quot;ok&quot;], 0)</span>
+<span class="line" id="L37"><a href="#L37">  37</a>     np.savez_compressed(work / &quot;q01_photo.npz&quot;, **photo)</span>
+<span class="line" id="L38"><a href="#L38">  38</a>     # Retain the established approximate QC as an independent criterion.</span>
+<span class="line" id="L39"><a href="#L39">  39</a>     old[&quot;dup&quot;] |= dup[&quot;duplicate&quot;]</span>
+<span class="line" id="L40"><a href="#L40">  40</a>     np.savez_compressed(work / &quot;q04_dups.npz&quot;, **old)</span>
+<span class="line" id="L41"><a href="#L41">  41</a>     rows = read_rows(a.csv)</span>
+<span class="line" id="L42"><a href="#L42">  42</a>     eligible = dup[&quot;keep&quot;] &amp; ~old[&quot;dup&quot;] &amp; (photo[&quot;ok&quot;] == 1)</span>
+<span class="line" id="L43"><a href="#L43">  43</a>     # Reuse only image-derived segmentation, never old poses or joint models.</span>
+<span class="line" id="L44"><a href="#L44">  44</a>     shutil.copytree(source / &quot;work/seg&quot;, work / &quot;seg&quot;, dirs_exist_ok=True)</span>
+<span class="line" id="L45"><a href="#L45">  45</a>     missing = [i for i, r in enumerate(rows) if eligible[i] and not (work / f&quot;seg/ch{r[&#x27;channel&#x27;]}/r{i:05d}.png&quot;).is_file()]</span>
+<span class="line" id="L46"><a href="#L46">  46</a>     (clean / &quot;missing_seg_rows.txt&quot;).write_text(&quot;&quot;.join(f&quot;{i} {rows[i][&#x27;channel&#x27;]}\n&quot; for i in missing))</span>
+<span class="line" id="L47"><a href="#L47">  47</a>     with open(clean / &quot;row_manifest.csv&quot;, &quot;w&quot;, encoding=&quot;utf-8&quot;, newline=&quot;&quot;) as f:</span>
+<span class="line" id="L48"><a href="#L48">  48</a>         writer = csv.writer(f)</span>
+<span class="line" id="L49"><a href="#L49">  49</a>         writer.writerow([&quot;source_row&quot;, &quot;csv_line&quot;, &quot;channel&quot;, &quot;time&quot;, &quot;image_selected&quot;, &quot;pipeline_image_eligible&quot;, &quot;gps_keep&quot;, &quot;body_representative&quot;, &quot;legacy_dup&quot;, &quot;legacy_minority&quot;])</span>
+<span class="line" id="L50"><a href="#L50">  50</a>         for i, r in enumerate(rows):</span>
+<span class="line" id="L51"><a href="#L51">  51</a>             writer.writerow([i, i + 2, r[&quot;channel&quot;], r[&quot;time&quot;], int(dup[&quot;keep&quot;][i]), int(eligible[i]),</span>
+<span class="line" id="L52"><a href="#L52">  52</a>                              int(time[&quot;keep&quot;][i]), int(dup[&quot;representative&quot;][i]), int(old[&quot;dup&quot;][i]), int(old[&quot;minority&quot;][i])])</span>
+<span class="line" id="L53"><a href="#L53">  53</a>     summary = dict(source_sha256=source_hash(a.csv), rows=len(rows), image_selected=int(dup[&quot;keep&quot;].sum()),</span>
+<span class="line" id="L54"><a href="#L54">  54</a>                    pipeline_image_eligible=int(eligible.sum()), navigation_kept=int(time[&quot;keep&quot;].sum()),</span>
+<span class="line" id="L55"><a href="#L55">  55</a>                    missing_segmentation=len(missing), source_root=str(source), run_root=str(run),</span>
+<span class="line" id="L56"><a href="#L56">  56</a>                    reuse=[&quot;per-image quality metrics&quot;, &quot;per-image segmentation&quot;, &quot;existing stale-clock hypothesis&quot;],</span>
+<span class="line" id="L57"><a href="#L57">  57</a>                    recompute=[&quot;two-view pairs&quot;, &quot;SfM&quot;, &quot;GPS alignment&quot;, &quot;fallback poses&quot;, &quot;rear registration&quot;, &quot;joint optimization&quot;, &quot;render&quot;, &quot;segment alignment&quot;, &quot;merge&quot;],</span>
+<span class="line" id="L58"><a href="#L58">  58</a>                    caveat=&quot;Input cleaning does not validate the existing exposure-clock hypothesis or guarantee seam accuracy.&quot;)</span>
+<span class="line" id="L59"><a href="#L59">  59</a>     write_json(clean / &quot;input_summary.json&quot;, summary)</span>
+<span class="line" id="L60"><a href="#L60">  60</a>     print(summary)</span>
+<span class="line" id="L61"><a href="#L61">  61</a> </span>
+<span class="line" id="L62"><a href="#L62">  62</a> </span>
+<span class="line" id="L63"><a href="#L63">  63</a> if __name__ == &quot;__main__&quot;:</span>
+<span class="line" id="L64"><a href="#L64">  64</a>     main()</span></pre></html>

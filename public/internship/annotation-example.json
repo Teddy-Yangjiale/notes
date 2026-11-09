@@ -1,0 +1,37 @@
+{
+  "boxes": [
+    {
+      "cls": "road_box_d",
+      "x1": 428.0,
+      "y1": 270.0,
+      "x2": 474.0,
+      "y2": 295.0,
+      "difficult": 0,
+      "sealed": 0,
+      "score": 0.2572,
+      "origin": "model",
+      "id": 1
+    }
+  ],
+  "seg": {
+    "removed": [],
+    "recls": {},
+    "lines": []
+  },
+  "cands": [],
+  "comps": [],
+  "note": {
+    "name": "p_00057_1788762762844",
+    "done_det": "0",
+    "done_seg": "0",
+    "usable": "1",
+    "road": "",
+    "annotator": "",
+    "remark": ""
+  },
+  "name": "p_00057_1788762762844",
+  "w": 1280,
+  "h": 720,
+  "source": "platform",
+  "stratum": "predicted"
+}

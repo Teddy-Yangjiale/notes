@@ -1,0 +1,206 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>t03f_pose24.py</title><style>body{margin:24px;font:15px system-ui;background:#faf8f3;color:#243342}pre{overflow:auto;line-height:1.6;background:white;padding:16px}.line{display:block}.line:target{background:#fff1a8}a{color:#58728a}header{overflow-wrap:anywhere}</style><header><a href="/notes/series/internship/">返回实习专栏</a><h1>t03f_pose24.py</h1><p>只读快照：2026-11-09 · /home/yjl/crack/viewer3d/build/t03f_pose24.py</p><p>SHA-256: ec72240224283d055ff8c3eb9a815605bc40b90c60750fb79c43ea8dc528cbad</p></header><pre><span class="line" id="L1"><a href="#L1">   1</a> # -*- coding: utf-8 -*-</span>
+<span class="line" id="L2"><a href="#L2">   2</a> &quot;&quot;&quot;t03f: 0924 每个抓拍时刻的车身位姿 (前摄 + 后摄一起定), 以及每张后摄病害俯视图的最终位置。</span>
+<span class="line" id="L3"><a href="#L3">   3</a> </span>
+<span class="line" id="L4"><a href="#L4">   4</a>   1. 前摄精配: 每张前摄条带在序列解 (t03d) 给的位置附近重配 (横 ±1.0 m, 纵 ±2.2 m, 转角 ±4 度)。</span>
+<span class="line" id="L5"><a href="#L5">   5</a>   2. 后摄精配: 同一时刻的后摄俯视图 (2 cm/px) 按车身几何放到预测位置, 同样小范围重配。</span>
+<span class="line" id="L6"><a href="#L6">   6</a>      横向与沿路分开判: 只有实线的地方沿路是一条&quot;脊&quot;, 那就只采用横向和转角。</span>
+<span class="line" id="L7"><a href="#L7">   7</a>   3. 位姿图: 节点 = 抓拍时刻的车身位姿 (前摄落地点 + 车头方位角);</span>
+<span class="line" id="L8"><a href="#L8">   8</a>         一元约束 = 前摄精配、后摄精配 (经车身几何折算到车身位姿), 沿路不成峰的只约束横向和朝向;</span>
+<span class="line" id="L9"><a href="#L9">   9</a>         相邻约束 = 两张前摄条带之间的图像位移 (横移/转角可信, 前进量放宽), 或定位间距 (更宽);</span>
+<span class="line" id="L10"><a href="#L10">  10</a>         什么都没配上的时刻, 由前后配上的时刻经相邻约束带过去, 并留一个很松的先验拴在序列解上。</span>
+<span class="line" id="L11"><a href="#L11">  11</a>   4. 后摄俯视图的最终位置 = 车身位姿 + 车身几何, 再让每张自己小范围微调一次 (横 ±0.4 m, 纵 ±0.8 m)。</span>
+<span class="line" id="L12"><a href="#L12">  12</a> 依据等级 (写进查看器): 3 横向对上车道线且沿路有依据; 2 横向对上车道线; 1 车道由前摄确定; 0 只有序列推算。</span>
+<span class="line" id="L13"><a href="#L13">  13</a> 输出 work/f24_pose.npz (车身位姿), work/r24_pose.npz (俯视图位置)</span>
+<span class="line" id="L14"><a href="#L14">  14</a> &quot;&quot;&quot;</span>
+<span class="line" id="L15"><a href="#L15">  15</a> import sys, time</span>
+<span class="line" id="L16"><a href="#L16">  16</a> import numpy as np, cv2</span>
+<span class="line" id="L17"><a href="#L17">  17</a> from multiprocessing import Pool</span>
+<span class="line" id="L18"><a href="#L18">  18</a> from common import *</span>
+<span class="line" id="L19"><a href="#L19">  19</a> import s24, omatch, refpath, pgraph</span>
+<span class="line" id="L20"><a href="#L20">  20</a> import t03b_loc24 as L</span>
+<span class="line" id="L21"><a href="#L21">  21</a> import t03g_rear24 as T</span>
+<span class="line" id="L22"><a href="#L22">  22</a> </span>
+<span class="line" id="L23"><a href="#L23">  23</a> ORT4 = None; INIT = None</span>
+<span class="line" id="L24"><a href="#L24">  24</a> TH1 = [-4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0]</span>
+<span class="line" id="L25"><a href="#L25">  25</a> def fine_one(k):</span>
+<span class="line" id="L26"><a href="#L26">  26</a>     ft, mk = L.strip_feature(k)</span>
+<span class="line" id="L27"><a href="#L27">  27</a>     if mk.sum() &lt; 2500: return k, None</span>
+<span class="line" id="L28"><a href="#L28">  28</a>     c0 = INIT[k, :2]; psi0 = INIT[k, 2]</span>
+<span class="line" id="L29"><a href="#L29">  29</a>     S, dus, dvs = omatch.match(ORT4, ft, mk, c0, psi0, TH1, 1.0, 2.2)</span>
+<span class="line" id="L30"><a href="#L30">  30</a>     if S.max() &lt; 0.05: return k, None</span>
+<span class="line" id="L31"><a href="#L31">  31</a>     th0 = TH1[int(np.argmax(S.reshape(len(TH1), -1).max(1)))]</span>
+<span class="line" id="L32"><a href="#L32">  32</a>     TH2 = [th0 - 0.5, th0 - 0.25, th0, th0 + 0.25, th0 + 0.5]</span>
+<span class="line" id="L33"><a href="#L33">  33</a>     S2, _, _ = omatch.match(ORT4, ft, mk, c0, psi0, TH2, 1.0, 2.2)</span>
+<span class="line" id="L34"><a href="#L34">  34</a>     q = omatch.analyse(S2, dus, dvs, TH2, lat_off=0.30, lon_off=0.60)</span>
+<span class="line" id="L35"><a href="#L35">  35</a>     a = psi0 + np.radians(q[&quot;th&quot;])</span>
+<span class="line" id="L36"><a href="#L36">  36</a>     fw = np.array([np.sin(a), np.cos(a)]); rt = np.array([np.cos(a), -np.sin(a)])</span>
+<span class="line" id="L37"><a href="#L37">  37</a>     lon_good = q[&quot;lon_in&quot;] and q[&quot;lon_sharp&quot;] &gt;= 0.06</span>
+<span class="line" id="L38"><a href="#L38">  38</a>     dv = q[&quot;dv&quot;] if lon_good else 0.0</span>
+<span class="line" id="L39"><a href="#L39">  39</a>     C = c0 + rt * q[&quot;du&quot;] - fw * dv</span>
+<span class="line" id="L40"><a href="#L40">  40</a>     return k, (C[0], C[1], a, q[&quot;pk&quot;], q[&quot;lon_sharp&quot;] if q[&quot;lon_in&quot;] else 0.0, q[&quot;lat_sharp&quot;], q[&quot;du&quot;], dv, q[&quot;th&quot;], float(not q[&quot;lat_in&quot;]))</span>
+<span class="line" id="L41"><a href="#L41">  41</a> </span>
+<span class="line" id="L42"><a href="#L42">  42</a> def rear_match(pred, win, ids):</span>
+<span class="line" id="L43"><a href="#L43">  43</a>     &quot;&quot;&quot;后摄俯视图在预测位置附近配正射图 (2 cm)。返回 (n, 8): 峰值, du, dv, 转角, 沿路峰形, 横向峰形, 横向峰在窗边, 特征量&quot;&quot;&quot;</span>
+<span class="line" id="L44"><a href="#L44">  44</a>     T.PRED = pred; T.WIN = win</span>
+<span class="line" id="L45"><a href="#L45">  45</a>     with Pool(56) as pool: res = pool.map(T.match_one, [int(i) for i in ids], chunksize=8)</span>
+<span class="line" id="L46"><a href="#L46">  46</a>     R = np.full((len(pred), 8), np.nan)</span>
+<span class="line" id="L47"><a href="#L47">  47</a>     for i, r in res:</span>
+<span class="line" id="L48"><a href="#L48">  48</a>         if r is not None: R[i] = r</span>
+<span class="line" id="L49"><a href="#L49">  49</a>     return R</span>
+<span class="line" id="L50"><a href="#L50">  50</a> </span>
+<span class="line" id="L51"><a href="#L51">  51</a> def rear_ok(R, pk_min=0.40):</span>
+<span class="line" id="L52"><a href="#L52">  52</a>     lat = np.isfinite(R[:, 0]) &amp; (R[:, 0] &gt;= pk_min) &amp; (R[:, 5] &gt;= 0.06) &amp; (R[:, 6] == 0)</span>
+<span class="line" id="L53"><a href="#L53">  53</a>     return lat, lat &amp; (R[:, 4] &gt;= 0.06)</span>
+<span class="line" id="L54"><a href="#L54">  54</a> </span>
+<span class="line" id="L55"><a href="#L55">  55</a> def tile_from_match(pred, R, lat, lon):</span>
+<span class="line" id="L56"><a href="#L56">  56</a>     &quot;&quot;&quot;把匹配到的位移加到预测的图块位姿上 (横向/转角只在 lat 时采用, 沿路只在 lon 时采用)&quot;&quot;&quot;</span>
+<span class="line" id="L57"><a href="#L57">  57</a>     a = pred[:, 2]; rt = np.stack([np.cos(a), -np.sin(a)], 1); fw = np.stack([np.sin(a), np.cos(a)], 1)</span>
+<span class="line" id="L58"><a href="#L58">  58</a>     du = np.where(lat, np.nan_to_num(R[:, 1]), 0.0); dv = np.where(lon, np.nan_to_num(R[:, 2]), 0.0); dth = np.where(lat, np.nan_to_num(R[:, 3]), 0.0)</span>
+<span class="line" id="L59"><a href="#L59">  59</a>     out = pred.copy()</span>
+<span class="line" id="L60"><a href="#L60">  60</a>     out[:, :2] = pred[:, :2] + rt * du[:, None] - fw * dv[:, None]; out[:, 2] = pred[:, 2] + np.radians(dth)</span>
+<span class="line" id="L61"><a href="#L61">  61</a>     return out</span>
+<span class="line" id="L62"><a href="#L62">  62</a> </span>
+<span class="line" id="L63"><a href="#L63">  63</a> def veh_from_tile(tile, rig):</span>
+<span class="line" id="L64"><a href="#L64">  64</a>     &quot;&quot;&quot;图块中心与&quot;上方&quot;方位角 -&gt; 车身位姿 (T.predict 的逆)&quot;&quot;&quot;</span>
+<span class="line" id="L65"><a href="#L65">  65</a>     psi = tile[:, 2] - np.pi - np.radians(rig[&quot;dpsi&quot;])</span>
+<span class="line" id="L66"><a href="#L66">  66</a>     fw = np.stack([np.sin(psi), np.cos(psi)], 1); rt = np.stack([np.cos(psi), -np.sin(psi)], 1)</span>
+<span class="line" id="L67"><a href="#L67">  67</a>     return np.c_[tile[:, :2] + fw * (rig[&quot;L&quot;] + T.YCR) - rt * rig[&quot;dX&quot;], psi]</span>
+<span class="line" id="L68"><a href="#L68">  68</a> </span>
+<span class="line" id="L69"><a href="#L69">  69</a> if __name__ == &quot;__main__&quot;:</span>
+<span class="line" id="L70"><a href="#L70">  70</a>     t0 = time.time()</span>
+<span class="line" id="L71"><a href="#L71">  71</a>     G = s24.manifest(&quot;ch2_front&quot;); n = len(G[&quot;ts&quot;])</span>
+<span class="line" id="L72"><a href="#L72">  72</a>     H = np.load(WORK + &quot;/f24_hmm.npz&quot;); ok = H[&quot;ok&quot;]</span>
+<span class="line" id="L73"><a href="#L73">  73</a>     RP = refpath.RefPath()</span>
+<span class="line" id="L74"><a href="#L74">  74</a>     INIT = np.full((n, 3), np.nan)</span>
+<span class="line" id="L75"><a href="#L75">  75</a>     for p in range(RP.NP):</span>
+<span class="line" id="L76"><a href="#L76">  76</a>         m = ok &amp; (H[&quot;pas&quot;] == p)</span>
+<span class="line" id="L77"><a href="#L77">  77</a>         if m.any():</span>
+<span class="line" id="L78"><a href="#L78">  78</a>             C, rpsi = RP.world(p, H[&quot;s&quot;][m], H[&quot;l&quot;][m]); INIT[m, :2] = C; INIT[m, 2] = rpsi</span>
+<span class="line" id="L79"><a href="#L79">  79</a>     L.ST = np.load(WORK + &quot;/f24_strips.u8.npy&quot;, mmap_mode=&quot;r&quot;); L.RDM = np.load(WORK + &quot;/f24_road.u8.npy&quot;, mmap_mode=&quot;r&quot;)</span>
+<span class="line" id="L80"><a href="#L80">  80</a>     ORT4 = omatch.Ortho(L.MRES)</span>
+<span class="line" id="L81"><a href="#L81">  81</a>     # ---------- 1. 前摄精配 ----------</span>
+<span class="line" id="L82"><a href="#L82">  82</a>     with Pool(56) as pool: res = pool.map(fine_one, np.flatnonzero(ok).tolist(), chunksize=8)</span>
+<span class="line" id="L83"><a href="#L83">  83</a>     F = np.full((n, 10), np.nan)</span>
+<span class="line" id="L84"><a href="#L84">  84</a>     for k, r in res:</span>
+<span class="line" id="L85"><a href="#L85">  85</a>         if r is not None: F[k] = r</span>
+<span class="line" id="L86"><a href="#L86">  86</a>     sc = F[:, 3]</span>
+<span class="line" id="L87"><a href="#L87">  87</a>     f_lat = np.isfinite(sc) &amp; (sc &gt;= 0.40) &amp; (F[:, 5] &gt;= 0.05) &amp; (F[:, 9] == 0)</span>
+<span class="line" id="L88"><a href="#L88">  88</a>     f_lon = f_lat &amp; (F[:, 4] &gt;= 0.06)</span>
+<span class="line" id="L89"><a href="#L89">  89</a>     print(&quot;前摄精配: %d 张有结果; 横向成峰 %d 张 (%.0f%%), 沿路也成峰 %d 张 (%.0f%%)  [%.0fs]&quot;</span>
+<span class="line" id="L90"><a href="#L90">  90</a>           % (np.isfinite(sc).sum(), f_lat.sum(), 100 * f_lat.sum() / ok.sum(), f_lon.sum(), 100 * f_lon.sum() / ok.sum(), time.time() - t0), flush=True)</span>
+<span class="line" id="L91"><a href="#L91">  91</a>     # 序列解 / 前摄精配 给的车身初值</span>
+<span class="line" id="L92"><a href="#L92">  92</a>     veh0 = np.full((n, 3), np.nan)</span>
+<span class="line" id="L93"><a href="#L93">  93</a>     for k in np.flatnonzero(ok):</span>
+<span class="line" id="L94"><a href="#L94">  94</a>         src = F[k] if f_lat[k] else INIT[k]</span>
+<span class="line" id="L95"><a href="#L95">  95</a>         veh0[k] = [src[0] - np.sin(src[2]) * L.YC, src[1] - np.cos(src[2]) * L.YC, src[2]]</span>
+<span class="line" id="L96"><a href="#L96">  96</a>     # ---------- 2. 后摄精配 ----------</span>
+<span class="line" id="L97"><a href="#L97">  97</a>     rows = T.load_rows(); nr = len(rows); T.NAMES = [r[&quot;bev&quot;] for r in rows]</span>
+<span class="line" id="L98"><a href="#L98">  98</a>     tsr = np.array([int(r[&quot;timestamp_ms&quot;]) for r in rows]) / 1000.0</span>
+<span class="line" id="L99"><a href="#L99">  99</a>     fi, jn = T.pair_front(tsr, G[&quot;ts&quot;]); rig = T.get_rig()</span>
+<span class="line" id="L100"><a href="#L100"> 100</a>     T.ORT = omatch.Ortho(T.RES)</span>
+<span class="line" id="L101"><a href="#L101"> 101</a>     paired = np.flatnonzero((fi &gt;= 0) &amp; ok[np.clip(fi, 0, n - 1)])</span>
+<span class="line" id="L102"><a href="#L102"> 102</a>     vr = np.full((nr, 3), np.nan); vr[paired] = veh0[fi[paired]]</span>
+<span class="line" id="L103"><a href="#L103"> 103</a>     pred1 = T.predict(vr, rig)</span>
+<span class="line" id="L104"><a href="#L104"> 104</a>     R1 = rear_match(pred1, (1.0, 2.2, [-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0]), paired)</span>
+<span class="line" id="L105"><a href="#L105"> 105</a>     r_lat, r_lon = rear_ok(R1)</span>
+<span class="line" id="L106"><a href="#L106"> 106</a>     print(&quot;后摄精配 (与前摄同时刻的 %d 张): 横向成峰 %d 张 (%.0f%%), 沿路也成峰 %d 张 (%.0f%%)  [%.0fs]&quot;</span>
+<span class="line" id="L107"><a href="#L107"> 107</a>           % (len(paired), r_lat.sum(), 100 * r_lat.sum() / len(paired), r_lon.sum(), 100 * r_lon.sum() / len(paired), time.time() - t0), flush=True)</span>
+<span class="line" id="L108"><a href="#L108"> 108</a>     # 车身几何复核: 前摄沿路/横向都定住的时刻, 后摄自己也二维成峰 -&gt; 残差的中位数应当是 0</span>
+<span class="line" id="L109"><a href="#L109"> 109</a>     chk = r_lon &amp; (fi &gt;= 0) &amp; f_lon[np.clip(fi, 0, n - 1)]</span>
+<span class="line" id="L110"><a href="#L110"> 110</a>     if chk.sum() &gt;= 20:</span>
+<span class="line" id="L111"><a href="#L111"> 111</a>         print(&quot;   车身几何复核 (%d 张): 后摄相对预测 向右 中位 %+.3f m, 向后 中位 %+.3f m, 转角 中位 %+.2f deg  (明显不为 0 说明 rig24.json 该重标)&quot;</span>
+<span class="line" id="L112"><a href="#L112"> 112</a>               % (chk.sum(), np.median(R1[chk, 1]), np.median(R1[chk, 2]), np.median(R1[chk, 3])))</span>
+<span class="line" id="L113"><a href="#L113"> 113</a>     veh_r = veh_from_tile(tile_from_match(pred1, R1, r_lat, r_lon), rig)</span>
+<span class="line" id="L114"><a href="#L114"> 114</a>     # ---------- 3. 位姿图 ----------</span>
+<span class="line" id="L115"><a href="#L115"> 115</a>     ids = np.flatnonzero(ok); K = len(ids); pos = np.full(n, -1); pos[ids] = np.arange(K)</span>
+<span class="line" id="L116"><a href="#L116"> 116</a>     x0 = veh0[ids].copy(); x0[:, 2] = np.unwrap(x0[:, 2])</span>
+<span class="line" id="L117"><a href="#L117"> 117</a>     def unw(i, a): return x0[i, 2] + ((a - x0[i, 2] + np.pi) % (2 * np.pi) - np.pi)</span>
+<span class="line" id="L118"><a href="#L118"> 118</a>     VOd = np.load(WORK + &quot;/f24_vo.npz&quot;); Rv = VOd[&quot;R&quot;]; vok = VOd[&quot;ok&quot;]</span>
+<span class="line" id="L119"><a href="#L119"> 119</a>     P0, _ = s24.prior_pose(G); dgp = np.r_[np.hypot(np.diff(P0[:, 0]), np.diff(P0[:, 1])), 0.0]</span>
+<span class="line" id="L120"><a href="#L120"> 120</a>     ea, eb, dx, dy, dth, sx, sy, sth = [], [], [], [], [], [], [], []; nvo = 0</span>
+<span class="line" id="L121"><a href="#L121"> 121</a>     for k in ids[:-1]:</span>
+<span class="line" id="L122"><a href="#L122"> 122</a>         if pos[k + 1] &lt; 0 or H[&quot;seg&quot;][k + 1] != H[&quot;seg&quot;][k]: continue</span>
+<span class="line" id="L123"><a href="#L123"> 123</a>         ea.append(pos[k]); eb.append(pos[k + 1])</span>
+<span class="line" id="L124"><a href="#L124"> 124</a>         if vok[k]:</span>
+<span class="line" id="L125"><a href="#L125"> 125</a>             q = np.sqrt(np.clip(40.0 / Rv[k, 3], 1.0, 4.0))</span>
+<span class="line" id="L126"><a href="#L126"> 126</a>             dx.append(Rv[k, 0]); dy.append(Rv[k, 1]); dth.append(Rv[k, 2]); sx.append(0.02 * q); sy.append(0.30); sth.append(np.radians(0.10) * q); nvo += 1</span>
+<span class="line" id="L127"><a href="#L127"> 127</a>         else:</span>
+<span class="line" id="L128"><a href="#L128"> 128</a>             dx.append(0.0); dy.append(dgp[k]); dth.append(-(x0[pos[k + 1], 2] - x0[pos[k], 2])); sx.append(0.25); sy.append(0.6 + 0.1 * dgp[k]); sth.append(np.radians(1.5))</span>
+<span class="line" id="L129"><a href="#L129"> 129</a>     edges = dict(a=np.array(ea), b=np.array(eb), dx=np.array(dx), dy=np.array(dy), dth=np.array(dth), sx=np.array(sx), sy=np.array(sy), sth=np.array(sth))</span>
+<span class="line" id="L130"><a href="#L130"> 130</a>     ui, uE, uN, uP, ul, uo, ut = [], [], [], [], [], [], []</span>
+<span class="line" id="L131"><a href="#L131"> 131</a>     for j, k in enumerate(ids):                                   # 前摄: 配上的给紧约束, 没配上的给松先验 (拴在序列解上)</span>
+<span class="line" id="L132"><a href="#L132"> 132</a>         ui.append(j); uE.append(x0[j, 0]); uN.append(x0[j, 1]); uP.append(x0[j, 2])</span>
+<span class="line" id="L133"><a href="#L133"> 133</a>         ul.append(0.04 if f_lat[k] else 0.5); uo.append(0.08 if f_lon[k] else (0.7 if f_lat[k] else 0.9)); ut.append(np.radians(0.3 if f_lat[k] else 2.0))</span>
+<span class="line" id="L134"><a href="#L134"> 134</a>     nru = 0</span>
+<span class="line" id="L135"><a href="#L135"> 135</a>     for i in np.flatnonzero(r_lat):                               # 后摄: 折算到车身位姿</span>
+<span class="line" id="L136"><a href="#L136"> 136</a>         j = pos[fi[i]]</span>
+<span class="line" id="L137"><a href="#L137"> 137</a>         if j &lt; 0: continue</span>
+<span class="line" id="L138"><a href="#L138"> 138</a>         ui.append(j); uE.append(veh_r[i, 0]); uN.append(veh_r[i, 1]); uP.append(unw(j, veh_r[i, 2]))</span>
+<span class="line" id="L139"><a href="#L139"> 139</a>         ul.append(0.04); uo.append(0.08 if r_lon[i] else 5.0); ut.append(np.radians(0.5)); nru += 1</span>
+<span class="line" id="L140"><a href="#L140"> 140</a>     unary = dict(i=np.array(ui), E=np.array(uE), N=np.array(uN), psi=np.array(uP), slat=np.array(ul), slon=np.array(uo), sth=np.array(ut))</span>
+<span class="line" id="L141"><a href="#L141"> 141</a>     print(&quot;位姿图: 节点 %d; 相邻边 %d (图像位移 %d, 定位间距 %d); 一元约束: 前摄 %d (紧 %d), 后摄 %d&quot; % (K, len(ea), nvo, len(ea) - nvo, K, f_lat[ids].sum(), nru), flush=True)</span>
+<span class="line" id="L142"><a href="#L142"> 142</a>     X, cost = pgraph.solve(x0, edges, unary, verbose=False)</span>
+<span class="line" id="L143"><a href="#L143"> 143</a>     Pc = np.full((n, 2), np.nan); psi = np.full(n, np.nan); Pc[ids] = X[:, :2]; psi[ids] = X[:, 2]</span>
+<span class="line" id="L144"><a href="#L144"> 144</a>     has_rear_lat = np.zeros(n, bool); has_rear_lon = np.zeros(n, bool)</span>
+<span class="line" id="L145"><a href="#L145"> 145</a>     has_rear_lat[fi[np.flatnonzero(r_lat)]] = True; has_rear_lon[fi[np.flatnonzero(r_lon)]] = True</span>
+<span class="line" id="L146"><a href="#L146"> 146</a>     cls_f = np.full(n, -1); cls_f[ids] = 0</span>
+<span class="line" id="L147"><a href="#L147"> 147</a>     cls_f[ok &amp; (f_lat | has_rear_lat)] = 1; cls_f[ok &amp; (f_lon | has_rear_lon)] = 2</span>
+<span class="line" id="L148"><a href="#L148"> 148</a>     d = X[:, :2] - x0[:, :2]; lat = d[:, 0] * np.cos(X[:, 2]) - d[:, 1] * np.sin(X[:, 2]); lon = d[:, 0] * np.sin(X[:, 2]) + d[:, 1] * np.cos(X[:, 2])</span>
+<span class="line" id="L149"><a href="#L149"> 149</a>     print(&quot;车身位姿: 沿路有依据 %d 时刻 (%.0f%%), 横向有依据 %d (%.0f%%), 都没有 %d (%.0f%%); 解算后相对前摄精配: 横向 |.| 中位 %.3f m (p95 %.3f)&quot;</span>
+<span class="line" id="L150"><a href="#L150"> 150</a>           % ((cls_f == 2).sum(), 100 * (cls_f == 2).sum() / K, (cls_f == 1).sum(), 100 * (cls_f == 1).sum() / K, (cls_f == 0).sum(), 100 * (cls_f == 0).sum() / K,</span>
+<span class="line" id="L151"><a href="#L151"> 151</a>              np.median(np.abs(lat[f_lat[ids]])), np.percentile(np.abs(lat[f_lat[ids]]), 95)))</span>
+<span class="line" id="L152"><a href="#L152"> 152</a>     np.savez(WORK + &quot;/f24_pose.npz&quot;, Pc=Pc, psi=psi, cls=cls_f, score=sc, fine=F, f_lat=f_lat, f_lon=f_lon, ts=G[&quot;ts&quot;], frame=G[&quot;frame&quot;], pas=H[&quot;pas&quot;], seg=H[&quot;seg&quot;])</span>
+<span class="line" id="L153"><a href="#L153"> 153</a>     # ---------- 4. 后摄俯视图的最终位置 ----------</span>
+<span class="line" id="L154"><a href="#L154"> 154</a>     okf = np.isfinite(psi)</span>
+<span class="line" id="L155"><a href="#L155"> 155</a>     veh = np.full((nr, 3), np.nan); fcls = np.full(nr, -1); how = np.zeros(nr, int)      # how: 1 = 同时刻前摄, 2 = 按邻近时刻的改正量推算</span>
+<span class="line" id="L156"><a href="#L156"> 156</a>     o = json.load(open(WORK + &quot;/origin.json&quot;))</span>
+<span class="line" id="L157"><a href="#L157"> 157</a>     Er, Nr = lonlat_to_en([float(r[&quot;lon&quot;]) for r in rows], [float(r[&quot;lat&quot;]) for r in rows], dict(lon0=o[&quot;lon0&quot;], lat0=o[&quot;lat0&quot;], m_lon=o[&quot;m_lon&quot;]))</span>
+<span class="line" id="L158"><a href="#L158"> 158</a>     vsp = np.array([float(r[&quot;speed_kmh&quot;] or 0) for r in rows]) / 3.6</span>
+<span class="line" id="L159"><a href="#L159"> 159</a>     # 每个解出的前摄时刻: 车身位姿相对&quot;它自己的先验&quot; (定位扣掉超前量, 天线 -&gt; 前摄落地点) 的改正量, 在车身坐标系里</span>
+<span class="line" id="L160"><a href="#L160"> 160</a>     _, psi0 = s24.prior_pose(G)</span>
+<span class="line" id="L161"><a href="#L161"> 161</a>     f0 = np.stack([np.sin(psi0), np.cos(psi0)], 1); r0 = np.stack([np.cos(psi0), -np.sin(psi0)], 1)</span>
+<span class="line" id="L162"><a href="#L162"> 162</a>     pri = P0 + f0 * s24.LEVER_FRONT</span>
+<span class="line" id="L163"><a href="#L163"> 163</a>     dfw = ((Pc - pri) * f0).sum(1); drt = ((Pc - pri) * r0).sum(1); dps = (psi - psi0 + np.pi) % (2 * np.pi) - np.pi</span>
+<span class="line" id="L164"><a href="#L164"> 164</a>     # 后摄记录自己的先验 (同一台设备的定位)</span>
+<span class="line" id="L165"><a href="#L165"> 165</a>     rang = np.radians(np.array([float(r[&quot;angle_deg&quot;] or 0) for r in rows]))</span>
+<span class="line" id="L166"><a href="#L166"> 166</a>     psir = s24.heading(Er, Nr, tsr, np.degrees(rang))</span>
+<span class="line" id="L167"><a href="#L167"> 167</a>     fr_ = np.stack([np.sin(psir), np.cos(psir)], 1); rr_ = np.stack([np.cos(psir), -np.sin(psir)], 1)</span>
+<span class="line" id="L168"><a href="#L168"> 168</a>     prir = np.c_[Er, Nr] - fr_ * (s24.LAG24 * vsp)[:, None] + fr_ * s24.LEVER_FRONT</span>
+<span class="line" id="L169"><a href="#L169"> 169</a>     tf = G[&quot;ts&quot;]; good_f = np.flatnonzero(okf)</span>
+<span class="line" id="L170"><a href="#L170"> 170</a>     for i in range(nr):</span>
+<span class="line" id="L171"><a href="#L171"> 171</a>         if fi[i] &gt;= 0 and okf[fi[i]]:</span>
+<span class="line" id="L172"><a href="#L172"> 172</a>             veh[i] = [Pc[fi[i], 0], Pc[fi[i], 1], psi[fi[i]]]; fcls[i] = cls_f[fi[i]]; how[i] = 1</span>
+<span class="line" id="L173"><a href="#L173"> 173</a>             continue</span>
+<span class="line" id="L174"><a href="#L174"> 174</a>         # 前后最近的两个解出的前摄时刻 (各自 10 s 以内); 朝向要与本张大体一致 (掉头处不跨过去)</span>
+<span class="line" id="L175"><a href="#L175"> 175</a>         q = np.searchsorted(tf[good_f], tsr[i]); cand = []</span>
+<span class="line" id="L176"><a href="#L176"> 176</a>         for kk in (q - 1, q):</span>
+<span class="line" id="L177"><a href="#L177"> 177</a>             if 0 &lt;= kk &lt; len(good_f):</span>
+<span class="line" id="L178"><a href="#L178"> 178</a>                 k = good_f[kk]</span>
+<span class="line" id="L179"><a href="#L179"> 179</a>                 if abs(tf[k] - tsr[i]) &lt; 10.0 and np.cos(psi0[k] - psir[i]) &gt; 0.7: cand.append(k)</span>
+<span class="line" id="L180"><a href="#L180"> 180</a>         if not cand: continue</span>
+<span class="line" id="L181"><a href="#L181"> 181</a>         if len(cand) == 2 and tf[cand[1]] &gt; tf[cand[0]]:</span>
+<span class="line" id="L182"><a href="#L182"> 182</a>             w = float(np.clip((tsr[i] - tf[cand[0]]) / (tf[cand[1]] - tf[cand[0]]), 0, 1)); ww = [1 - w, w]</span>
+<span class="line" id="L183"><a href="#L183"> 183</a>         else: cand = [min(cand, key=lambda k: abs(tf[k] - tsr[i]))]; ww = [1.0]</span>
+<span class="line" id="L184"><a href="#L184"> 184</a>         cf = sum(w_ * dfw[k] for w_, k in zip(ww, cand)); cr = sum(w_ * drt[k] for w_, k in zip(ww, cand)); cp = sum(w_ * dps[k] for w_, k in zip(ww, cand))</span>
+<span class="line" id="L185"><a href="#L185"> 185</a>         veh[i] = [prir[i, 0] + fr_[i, 0] * cf + rr_[i, 0] * cr, prir[i, 1] + fr_[i, 1] * cf + rr_[i, 1] * cr, psir[i] + cp]</span>
+<span class="line" id="L186"><a href="#L186"> 186</a>         fcls[i] = min(1, min(cls_f[k] for k in cand)); how[i] = 2      # 定位逐张有抖动, 沿路不算&quot;有依据&quot;</span>
+<span class="line" id="L187"><a href="#L187"> 187</a>     pred = T.predict(veh, rig); have = np.isfinite(pred[:, 0])</span>
+<span class="line" id="L188"><a href="#L188"> 188</a>     R2 = rear_match(pred, (0.4, 0.8, [-1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5]), np.flatnonzero(have &amp; (how == 1)))</span>
+<span class="line" id="L189"><a href="#L189"> 189</a>     Rb = rear_match(pred, (0.9, 2.0, [-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0]), np.flatnonzero(have &amp; (how == 2)))</span>
+<span class="line" id="L190"><a href="#L190"> 190</a>     R2[how == 2] = Rb[how == 2]</span>
+<span class="line" id="L191"><a href="#L191"> 191</a>     lat2, lon2 = rear_ok(R2, pk_min=0.38)</span>
+<span class="line" id="L192"><a href="#L192"> 192</a>     final = tile_from_match(pred, R2, lat2, lon2)</span>
+<span class="line" id="L193"><a href="#L193"> 193</a>     cls = np.full(nr, -1); cls[have] = 0</span>
+<span class="line" id="L194"><a href="#L194"> 194</a>     cls[have &amp; (fcls &gt;= 1)] = 1</span>
+<span class="line" id="L195"><a href="#L195"> 195</a>     cls[lat2] = 2</span>
+<span class="line" id="L196"><a href="#L196"> 196</a>     cls[lon2 | (lat2 &amp; (fcls == 2))] = 3</span>
+<span class="line" id="L197"><a href="#L197"> 197</a>     nh = max(have.sum(), 1)</span>
+<span class="line" id="L198"><a href="#L198"> 198</a>     print(&quot;后摄俯视图 %d 张: 有位置 %d 张 (同时刻前摄 %d, 按邻近时刻推算 %d)&quot; % (nr, have.sum(), (how == 1).sum(), (how == 2).sum()))</span>
+<span class="line" id="L199"><a href="#L199"> 199</a>     print(&quot;   最终微调: 横向成峰 %d 张 (%.0f%%), 沿路成峰 %d 张; 微调量 横向 |.| 中位 %.3f m (p90 %.3f), 沿路 |.| 中位 %.3f m&quot;</span>
+<span class="line" id="L200"><a href="#L200"> 200</a>           % (lat2.sum(), 100 * lat2.sum() / nh, lon2.sum(), np.nanmedian(np.abs(R2[lat2, 1])), np.nanpercentile(np.abs(R2[lat2, 1]), 90), np.nanmedian(np.abs(R2[lon2, 2])) if lon2.any() else 0))</span>
+<span class="line" id="L201"><a href="#L201"> 201</a>     print(&quot;   依据等级: 3 级 %d 张 (%.0f%%); 2 级 %d 张 (%.0f%%); 1 级 %d 张 (%.0f%%); 0 级 %d 张 (%.0f%%); 不在地图上 %d 张&quot;</span>
+<span class="line" id="L202"><a href="#L202"> 202</a>           % ((cls == 3).sum(), 100 * (cls == 3).sum() / nh, (cls == 2).sum(), 100 * (cls == 2).sum() / nh, (cls == 1).sum(), 100 * (cls == 1).sum() / nh,</span>
+<span class="line" id="L203"><a href="#L203"> 203</a>              (cls == 0).sum(), 100 * (cls == 0).sum() / nh, (cls &lt; 0).sum()))</span>
+<span class="line" id="L204"><a href="#L204"> 204</a>     np.savez(WORK + &quot;/r24_pose.npz&quot;, name=np.array(T.NAMES), src=np.array([r[&quot;src&quot;] for r in rows]), ts=tsr, pose=final, pred=pred, cls=cls, fcls=fcls, how=how,</span>
+<span class="line" id="L205"><a href="#L205"> 205</a>              match=R2, lat_ok=lat2, lon_ok=lon2, gnss=np.c_[Er, Nr], speed=vsp, geom=np.array([T.X_LO, T.X_HI, T.Y_LO, T.Y_HI, T.RES]))</span>
+<span class="line" id="L206"><a href="#L206"> 206</a>     print(&quot;写出 f24_pose.npz / r24_pose.npz, 用时 %.0fs&quot; % (time.time() - t0))</span></pre></html>

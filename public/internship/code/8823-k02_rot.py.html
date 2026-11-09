@@ -1,0 +1,62 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>k02_rot.py</title><style>body{margin:24px;font:15px system-ui;background:#faf8f3;color:#243342}pre{overflow:auto;line-height:1.6;background:white;padding:16px}.line{display:block}.line:target{background:#fff1a8}a{color:#58728a}header{overflow-wrap:anywhere}</style><header><a href="/notes/series/internship/">返回实习专栏</a><h1>k02_rot.py</h1><p>只读快照：2026-11-09 · /home/yjl/crack/viewer3d/build/k02_rot.py</p><p>SHA-256: 18ac25d82e149b950dac9e02328669a0e2f5c357ae6ceb6b3a468f8c1364d7ee</p></header><pre><span class="line" id="L1"><a href="#L1">   1</a> # -*- coding: utf-8 -*-</span>
+<span class="line" id="L2"><a href="#L2">   2</a> &quot;&quot;&quot;k02: 相邻两张照片之间的相对转角, 用整幅画面的特征点 + 本质矩阵来量 (而不是只看路面条带), 对 KITTI 真值检验。</span>
+<span class="line" id="L3"><a href="#L3">   3</a> </span>
+<span class="line" id="L4"><a href="#L4">   4</a> k01 的结论: 路面条带互相关把重叠区对齐到几厘米, 但转角只准到 0.4~0.8 度 (间距 2.5~4.6 m) —— 重叠区只有四米长, 又在画面远端。</span>
+<span class="line" id="L5"><a href="#L5">   5</a> 转角其实是单目相机最擅长量的东西: 远处的楼、树、杆子在两张照片里的方位变化几乎只由转角决定。</span>
+<span class="line" id="L6"><a href="#L6">   6</a> 这里对相邻站点做 SIFT 匹配 -&gt; 本质矩阵 (RANSAC) -&gt; 相对旋转与平移方向, 与真值比。车辆 (SAM 3) 上的特征点不要。</span>
+<span class="line" id="L7"><a href="#L7">   7</a> 用法: k02_rot.py [间距 m]      输出 work/kitti02/rot_S&lt;间距&gt;.npz</span>
+<span class="line" id="L8"><a href="#L8">   8</a> &quot;&quot;&quot;</span>
+<span class="line" id="L9"><a href="#L9">   9</a> import sys, time</span>
+<span class="line" id="L10"><a href="#L10">  10</a> import numpy as np, cv2</span>
+<span class="line" id="L11"><a href="#L11">  11</a> from multiprocessing import Pool</span>
+<span class="line" id="L12"><a href="#L12">  12</a> from common import *</span>
+<span class="line" id="L13"><a href="#L13">  13</a> import k01_kitti as K</span>
+<span class="line" id="L14"><a href="#L14">  14</a> </span>
+<span class="line" id="L15"><a href="#L15">  15</a> G = None; KM = None</span>
+<span class="line" id="L16"><a href="#L16">  16</a> def feats(i):</span>
+<span class="line" id="L17"><a href="#L17">  17</a>     im = cv2.imread(&quot;%s/%06d.png&quot; % (K.IMG, i), 0)</span>
+<span class="line" id="L18"><a href="#L18">  18</a>     lab = cv2.imread(&quot;%s/seg/%06d.png&quot; % (K.KW, i), 0)</span>
+<span class="line" id="L19"><a href="#L19">  19</a>     mask = None</span>
+<span class="line" id="L20"><a href="#L20">  20</a>     if lab is not None: mask = (cv2.dilate((lab == 2).astype(np.uint8), np.ones((9, 9), np.uint8)) == 0).astype(np.uint8) * 255</span>
+<span class="line" id="L21"><a href="#L21">  21</a>     kp, des = cv2.SIFT_create(nfeatures=4000, contrastThreshold=0.02).detectAndCompute(im, mask)</span>
+<span class="line" id="L22"><a href="#L22">  22</a>     return np.array([k.pt for k in kp], np.float32), des</span>
+<span class="line" id="L23"><a href="#L23">  23</a> </span>
+<span class="line" id="L24"><a href="#L24">  24</a> def two_view(job):</span>
+<span class="line" id="L25"><a href="#L25">  25</a>     &quot;&quot;&quot;返回 (a, b, alpha, tx/tz 的方位角, 内点数, 匹配数); alpha = b 的光轴相对 a 顺时针转过的角 (rad)&quot;&quot;&quot;</span>
+<span class="line" id="L26"><a href="#L26">  26</a>     a, b = job</span>
+<span class="line" id="L27"><a href="#L27">  27</a>     pa, da = feats(a); pb, db = feats(b)</span>
+<span class="line" id="L28"><a href="#L28">  28</a>     if da is None or db is None or len(pa) &lt; 50 or len(pb) &lt; 50: return None</span>
+<span class="line" id="L29"><a href="#L29">  29</a>     mm = cv2.BFMatcher(cv2.NORM_L2).knnMatch(da, db, k=2)</span>
+<span class="line" id="L30"><a href="#L30">  30</a>     good = [m for m, n_ in mm if m.distance &lt; 0.75 * n_.distance]</span>
+<span class="line" id="L31"><a href="#L31">  31</a>     if len(good) &lt; 40: return None</span>
+<span class="line" id="L32"><a href="#L32">  32</a>     xa = pa[[m.queryIdx for m in good]]; xb = pb[[m.trainIdx for m in good]]</span>
+<span class="line" id="L33"><a href="#L33">  33</a>     Emat, inl = cv2.findEssentialMat(xa, xb, KM, method=cv2.RANSAC, prob=0.999, threshold=0.8)</span>
+<span class="line" id="L34"><a href="#L34">  34</a>     if Emat is None or Emat.shape != (3, 3): return None</span>
+<span class="line" id="L35"><a href="#L35">  35</a>     ninl, R, t, inl2 = cv2.recoverPose(Emat, xa, xb, KM, mask=inl)</span>
+<span class="line" id="L36"><a href="#L36">  36</a>     if ninl &lt; 30: return None</span>
+<span class="line" id="L37"><a href="#L37">  37</a>     Rab = R.T; tab = (-R.T @ t).ravel()                         # recoverPose: x_b = R x_a + t  -&gt;  b 在 a 系里的姿态与平移方向</span>
+<span class="line" id="L38"><a href="#L38">  38</a>     if tab[2] &lt; 0: tab = -tab</span>
+<span class="line" id="L39"><a href="#L39">  39</a>     return (a, b, float(np.arctan2(Rab[0, 2], Rab[2, 2])), float(np.arctan2(tab[0], tab[2])), int(ninl), len(good),</span>
+<span class="line" id="L40"><a href="#L40">  40</a>             float(np.degrees(np.arcsin(-Rab[1, 2]))), float(np.degrees(np.arctan2(Rab[1, 0], Rab[1, 1]))))</span>
+<span class="line" id="L41"><a href="#L41">  41</a> </span>
+<span class="line" id="L42"><a href="#L42">  42</a> if __name__ == &quot;__main__&quot;:</span>
+<span class="line" id="L43"><a href="#L43">  43</a>     t0 = time.time(); SP = float(sys.argv[1]) if len(sys.argv) &gt; 1 else 4.0</span>
+<span class="line" id="L44"><a href="#L44">  44</a>     G = K.load_gt(); n = len(G[&quot;t&quot;]); KM = np.array([[G[&quot;fx&quot;], 0, G[&quot;cx&quot;]], [0, G[&quot;fy&quot;], G[&quot;cy&quot;]], [0, 0, 1.0]])</span>
+<span class="line" id="L45"><a href="#L45">  45</a>     step = np.r_[0, np.cumsum(np.hypot(np.diff(G[&quot;E&quot;]), np.diff(G[&quot;N&quot;])))]</span>
+<span class="line" id="L46"><a href="#L46">  46</a>     sta = [0]</span>
+<span class="line" id="L47"><a href="#L47">  47</a>     for i in range(1, n):</span>
+<span class="line" id="L48"><a href="#L48">  48</a>         if step[i] - step[sta[-1]] &gt;= SP: sta.append(i)</span>
+<span class="line" id="L49"><a href="#L49">  49</a>     sta = np.array(sta); jobs = [(int(sta[k]), int(sta[k + 1])) for k in range(len(sta) - 1)]</span>
+<span class="line" id="L50"><a href="#L50">  50</a>     with Pool(56) as pool: res = pool.map(two_view, jobs, chunksize=4)</span>
+<span class="line" id="L51"><a href="#L51">  51</a>     R = np.full((len(jobs), 8), np.nan)</span>
+<span class="line" id="L52"><a href="#L52">  52</a>     for k, r in enumerate(res):</span>
+<span class="line" id="L53"><a href="#L53">  53</a>         if r is not None: R[k] = r</span>
+<span class="line" id="L54"><a href="#L54">  54</a>     ok = np.isfinite(R[:, 2])</span>
+<span class="line" id="L55"><a href="#L55">  55</a>     gt = np.array([K.rel_gt(G, a, b) for a, b in jobs])</span>
+<span class="line" id="L56"><a href="#L56">  56</a>     ea = np.degrees(K.wrap(R[:, 2] - gt[:, 2])); ed = np.degrees(K.wrap(R[:, 3] - np.arctan2(gt[:, 0], gt[:, 1])))</span>
+<span class="line" id="L57"><a href="#L57">  57</a>     print(&quot;KITTI %s, 间距 %.1f m: 相邻站点 %d 对, 量出来的 %d 对 (%.0f%%); 内点数中位 %d&quot; % (K.SEQ, SP, len(jobs), ok.sum(), 100 * ok.mean(), np.nanmedian(R[:, 4])))</span>
+<span class="line" id="L58"><a href="#L58">  58</a>     print(&quot;相对转角对真值: |.| 中位 %.3f 度, p90 %.3f, &gt;0.3 度的占 %.1f%%, 带符号中位 %+.3f&quot; % (np.median(np.abs(ea[ok])), np.percentile(np.abs(ea[ok]), 90), 100 * (np.abs(ea[ok]) &gt; 0.3).mean(), np.median(ea[ok])))</span>
+<span class="line" id="L59"><a href="#L59">  59</a>     print(&quot;平移方向 (行进方向相对 a 光轴的偏角) 对真值: |.| 中位 %.3f 度, p90 %.3f  (乘以步长 %.1f m -&gt; 横移 |.| 中位 %.3f m, p90 %.3f)&quot;</span>
+<span class="line" id="L60"><a href="#L60">  60</a>           % (np.median(np.abs(ed[ok])), np.percentile(np.abs(ed[ok]), 90), np.median(gt[:, 1]), np.median(np.abs(np.tan(np.radians(ed[ok])) * gt[ok, 1])), np.percentile(np.abs(np.tan(np.radians(ed[ok])) * gt[ok, 1]), 90)))</span>
+<span class="line" id="L61"><a href="#L61">  61</a>     np.savez(K.KW + &quot;/rot_S%g.npz&quot; % SP, sta=sta, R=R, ok=ok, ea=ea, ed=ed)</span>
+<span class="line" id="L62"><a href="#L62">  62</a>     print(&quot;用时 %.0fs&quot; % (time.time() - t0))</span></pre></html>

@@ -1,0 +1,388 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>u01_run24.py</title><style>body{margin:24px;font:15px system-ui;background:#faf8f3;color:#243342}pre{overflow:auto;line-height:1.6;background:white;padding:16px}.line{display:block}.line:target{background:#fff1a8}a{color:#58728a}header{overflow-wrap:anywhere}</style><header><a href="/notes/series/internship/">返回实习专栏</a><h1>u01_run24.py</h1><p>只读快照：2026-11-09 · /home/yjl/crack/viewer3d/build/u01_run24.py</p><p>SHA-256: f72702f96952524f53e9eb911d137a6c254e06146689958be5a902a4675929d8</p></header><pre><span class="line" id="L1"><a href="#L1">   1</a> # -*- coding: utf-8 -*-</span>
+<span class="line" id="L2"><a href="#L2">   2</a> &quot;&quot;&quot;u01: 0924 这一趟**自己**的轨迹 —— 只用当趟的数据, 不经过 0903 地图。</span>
+<span class="line" id="L3"><a href="#L3">   3</a> </span>
+<span class="line" id="L4"><a href="#L4">   4</a> 站点式展示 (u02/u03) 需要的是: 每个抓拍时刻的车身位姿在&quot;几十米范围内&quot;互相自洽 (横向厘米~分米、朝向零点几度),</span>
+<span class="line" id="L5"><a href="#L5">   5</a> 这样才能把前方几张俯视图的范围准确地画进一张前摄照片里; 绝对位置只要定位那个量级 (米) 就够了。</span>
+<span class="line" id="L6"><a href="#L6">   6</a> 所以这里解一个位姿图, 约束全部来自当趟:</span>
+<span class="line" id="L7"><a href="#L7">   7</a>   节点     每个抓拍时刻的车身位姿 (前摄落地点 E, N + 车头方位角)。前摄照片 2712 个 + 没有同时刻前摄的后摄俯视图各占一个。</span>
+<span class="line" id="L8"><a href="#L8">   8</a>   相邻两张前摄之间 (一条边, 三个分量各取最可靠的来源):</span>
+<span class="line" id="L9"><a href="#L9">   9</a>      转角、横移   整幅画面的两视几何 (t03i: SIFT + 本质矩阵)。KITTI 真值检验 (k01/k02): 转角误差中位 0.04 度, 每步横移 3 cm, 每一对都量得出。</span>
+<span class="line" id="L10"><a href="#L10">  10</a>                   量不出来时退到条带互相关 / 特征点里程计 (转角只准到 0.6~0.8 度, 横移折到车身原点约 0.13 m), 再退到定位。</span>
+<span class="line" id="L11"><a href="#L11">  11</a>      前进量       两张条带互相关沿路成峰的 (61% 的相邻对) &gt; 条带特征点里程计 (t03e, 筛过) &gt; 定位间距。两视几何不给尺度。</span>
+<span class="line" id="L12"><a href="#L12">  12</a>      内容完全相同的两张 (同一张照片记了两次, 占相邻对的 14%) = 零位移, 给死约束。</span>
+<span class="line" id="L13"><a href="#L13">  13</a>   配准边   俯视图直接对&quot;一两秒前拍的&quot;前摄条带做图像配准 (同一天同一光照): 给出俯视图中心在那张照片地面系里的位置。</span>
+<span class="line" id="L14"><a href="#L14">  14</a>            横向与沿路分开判 (只有实线时沿路是一条脊, 只采用横向)。折算到车身位姿时朝向取轨迹上的 (两视几何给的, 0.1 度),</span>
+<span class="line" id="L15"><a href="#L15">  15</a>            不取配准自己的转角 (俯视图只有 3.5 m 长, 转角只准到 1 度左右, 乘上 6 m 力臂就是 10 cm)。</span>
+<span class="line" id="L16"><a href="#L16">  16</a>   一元约束 照片自带定位 (已扣掉 0.56 s x 车速的超前量), 给得松: 它只负责把整条轨迹拴在地图上。</span>
+<span class="line" id="L17"><a href="#L17">  17</a>   为什么这样配权重: 2026-10-02 用 KITTI 02 的真值位姿检验过 (见 k01_kitti.py)。第一版把条带互相关的 横移/转角 当成 3 cm / 0.15 度喂给位姿图,</span>
+<span class="line" id="L18"><a href="#L18">  18</a>   实际是 13 cm / 0.7 度且两者完全相关 (都来自&quot;重叠区在十米开外&quot;); 换成两视几何后, KITTI 上站点间相对横向误差 0.26 -&gt; 0.11 m, 相对朝向 1.8 -&gt; 0.09 度。</span>
+<span class="line" id="L19"><a href="#L19">  19</a> 输出 work/run24.npz: 节点位姿、里程、俯视图位姿与依据 (3 = 图像定了横向和沿路, 2 = 图像定了横向, 1 = 由车身轨迹推得, 0 = 只有定位)。</span>
+<span class="line" id="L20"><a href="#L20">  20</a> 用法: u01_run24.py [check]     check: 另外用&quot;经 0903 地图各自定位&quot;的结果做独立核对 (只是核对, 不参与求解)</span>
+<span class="line" id="L21"><a href="#L21">  21</a> &quot;&quot;&quot;</span>
+<span class="line" id="L22"><a href="#L22">  22</a> import sys, time</span>
+<span class="line" id="L23"><a href="#L23">  23</a> import numpy as np, cv2</span>
+<span class="line" id="L24"><a href="#L24">  24</a> from multiprocessing import Pool</span>
+<span class="line" id="L25"><a href="#L25">  25</a> from common import *</span>
+<span class="line" id="L26"><a href="#L26">  26</a> sys.path.insert(0, STITCH)</span>
+<span class="line" id="L27"><a href="#L27">  27</a> from bev_core import BEVRenderer</span>
+<span class="line" id="L28"><a href="#L28">  28</a> import s24, omatch, pgraph, t03g_rear24 as T</span>
+<span class="line" id="L29"><a href="#L29">  29</a> from t03b_loc24 import FC, CAL24F</span>
+<span class="line" id="L30"><a href="#L30">  30</a> </span>
+<span class="line" id="L31"><a href="#L31">  31</a> HW, HL = 0.5 * (T.X_HI - T.X_LO), 0.5 * (T.Y_HI - T.Y_LO)</span>
+<span class="line" id="L32"><a href="#L32">  32</a> YC = 0.5 * (STRIP_YR[0] + STRIP_YR[1])</span>
+<span class="line" id="L33"><a href="#L33">  33</a> PK_MIN, SHARP = 0.38, 0.06                                   # 成峰判据, 与跨天配准 (t03f.rear_ok) 相同</span>
+<span class="line" id="L34"><a href="#L34">  34</a> </span>
+<span class="line" id="L35"><a href="#L35">  35</a> def wrap(a): return (a + np.pi) % (2 * np.pi) - np.pi</span>
+<span class="line" id="L36"><a href="#L36">  36</a> </span>
+<span class="line" id="L37"><a href="#L37">  37</a> def to_local(W, O, a):</span>
+<span class="line" id="L38"><a href="#L38">  38</a>     &quot;&quot;&quot;世界点 -&gt; 以 O 为原点、方位角 a 为前向的地面系 (x 右, y 前)&quot;&quot;&quot;</span>
+<span class="line" id="L39"><a href="#L39">  39</a>     d = np.atleast_2d(W) - O</span>
+<span class="line" id="L40"><a href="#L40">  40</a>     return np.c_[d @ np.array([np.cos(a), -np.sin(a)]), d @ np.array([np.sin(a), np.cos(a)])]</span>
+<span class="line" id="L41"><a href="#L41">  41</a> </span>
+<span class="line" id="L42"><a href="#L42">  42</a> def veh_from_tile(c, a, rig):</span>
+<span class="line" id="L43"><a href="#L43">  43</a>     &quot;&quot;&quot;俯视图中心与&quot;上方&quot;方位角 -&gt; 车身位姿 (T.predict 的逆); 在任意平面系里都成立&quot;&quot;&quot;</span>
+<span class="line" id="L44"><a href="#L44">  44</a>     psi = a - np.pi - np.radians(rig[&quot;dpsi&quot;])</span>
+<span class="line" id="L45"><a href="#L45">  45</a>     fw = np.array([np.sin(psi), np.cos(psi)]); rt = np.array([np.cos(psi), -np.sin(psi)])</span>
+<span class="line" id="L46"><a href="#L46">  46</a>     v = np.asarray(c) + fw * (rig[&quot;L&quot;] + T.YCR) - rt * rig[&quot;dX&quot;]</span>
+<span class="line" id="L47"><a href="#L47">  47</a>     return v[0], v[1], psi</span>
+<span class="line" id="L48"><a href="#L48">  48</a> </span>
+<span class="line" id="L49"><a href="#L49">  49</a> class StripRef:</span>
+<span class="line" id="L50"><a href="#L50">  50</a>     &quot;&quot;&quot;把一张前摄条带当作&quot;地图&quot;: 世界系 = 该照片的地面系 (E = 向右 x, N = 向前 y)。接口同 omatch.Ortho&quot;&quot;&quot;</span>
+<span class="line" id="L51"><a href="#L51">  51</a>     res = STRIP_RES</span>
+<span class="line" id="L52"><a href="#L52">  52</a>     def __init__(self, gray, ok): self.g = gray; self.ok = ok</span>
+<span class="line" id="L53"><a href="#L53">  53</a>     def sample(self, E, N):</span>
+<span class="line" id="L54"><a href="#L54">  54</a>         col = np.floor((E - STRIP_XR[0]) / self.res).astype(np.int64); row = np.floor((STRIP_YR[1] - N) / self.res).astype(np.int64)</span>
+<span class="line" id="L55"><a href="#L55">  55</a>         h, w = self.g.shape</span>
+<span class="line" id="L56"><a href="#L56">  56</a>         m = (col &gt;= 0) &amp; (col &lt; w) &amp; (row &gt;= 0) &amp; (row &lt; h)</span>
+<span class="line" id="L57"><a href="#L57">  57</a>         out = np.zeros(E.shape, np.float32); ok = np.zeros(E.shape, bool)</span>
+<span class="line" id="L58"><a href="#L58">  58</a>         out[m] = self.g[row[m], col[m]]; ok[m] = self.ok[row[m], col[m]]</span>
+<span class="line" id="L59"><a href="#L59">  59</a>         return out, ok</span>
+<span class="line" id="L60"><a href="#L60">  60</a> </span>
+<span class="line" id="L61"><a href="#L61">  61</a> ST = None; RDM = None; WIN = (1.2, 2.5, [-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0])</span>
+<span class="line" id="L62"><a href="#L62">  62</a> def reg_one(job):</span>
+<span class="line" id="L63"><a href="#L63">  63</a>     &quot;&quot;&quot;俯视图 k 对前摄条带 j。返回 (k, j, c0x, c0y, a0, pk, du, dv, th, lon_sharp, lat_sharp, lat_edge)&quot;&quot;&quot;</span>
+<span class="line" id="L64"><a href="#L64">  64</a>     k, j, c0x, c0y, a0, name = job</span>
+<span class="line" id="L65"><a href="#L65">  65</a>     ft, mk, _ = T.tile_feature(name)</span>
+<span class="line" id="L66"><a href="#L66">  66</a>     if ft is None or mk.sum() &lt; 6000: return None</span>
+<span class="line" id="L67"><a href="#L67">  67</a>     ref = StripRef(cv2.cvtColor(np.asarray(ST[j]), cv2.COLOR_BGR2GRAY).astype(np.float32), np.asarray(RDM[j]) &gt; 0)</span>
+<span class="line" id="L68"><a href="#L68">  68</a>     sx, sy, ths = WIN</span>
+<span class="line" id="L69"><a href="#L69">  69</a>     S, dus, dvs = omatch.match(ref, ft, mk, np.array([c0x, c0y]), a0, ths, sx, sy, min_cover=0.6)</span>
+<span class="line" id="L70"><a href="#L70">  70</a>     if S.max() &lt; 0.05: return None</span>
+<span class="line" id="L71"><a href="#L71">  71</a>     q = omatch.analyse(S, dus, dvs, ths, lat_off=0.25, lon_off=0.50)</span>
+<span class="line" id="L72"><a href="#L72">  72</a>     return (k, j, c0x, c0y, a0, q[&quot;pk&quot;], q[&quot;du&quot;], q[&quot;dv&quot;], q[&quot;th&quot;], q[&quot;lon_sharp&quot;] if q[&quot;lon_in&quot;] else 0.0, q[&quot;lat_sharp&quot;], float(not q[&quot;lat_in&quot;]))</span>
+<span class="line" id="L73"><a href="#L73">  73</a> </span>
+<span class="line" id="L74"><a href="#L74">  74</a> SRES = 0.04</span>
+<span class="line" id="L75"><a href="#L75">  75</a> def strip4(j):</span>
+<span class="line" id="L76"><a href="#L76">  76</a>     &quot;&quot;&quot;前摄条带降到 4 cm 的灰度与路面掩膜&quot;&quot;&quot;</span>
+<span class="line" id="L77"><a href="#L77">  77</a>     f = int(round(SRES / STRIP_RES))</span>
+<span class="line" id="L78"><a href="#L78">  78</a>     g = cv2.cvtColor(np.asarray(ST[j]), cv2.COLOR_BGR2GRAY); rd = np.asarray(RDM[j])</span>
+<span class="line" id="L79"><a href="#L79">  79</a>     h, w = g.shape[0] // f, g.shape[1] // f</span>
+<span class="line" id="L80"><a href="#L80">  80</a>     gs = cv2.resize(g.astype(np.float32) * rd, (w, h), interpolation=cv2.INTER_AREA); rs = cv2.resize(rd.astype(np.float32), (w, h), interpolation=cv2.INTER_AREA)</span>
+<span class="line" id="L81"><a href="#L81">  81</a>     ok = rs &gt; 0.6</span>
+<span class="line" id="L82"><a href="#L82">  82</a>     return np.where(ok, gs / np.maximum(rs, 1e-3), 0).astype(np.float32), ok</span>
+<span class="line" id="L83"><a href="#L83">  83</a> </span>
+<span class="line" id="L84"><a href="#L84">  84</a> class StripRef4(StripRef):</span>
+<span class="line" id="L85"><a href="#L85">  85</a>     res = SRES</span>
+<span class="line" id="L86"><a href="#L86">  86</a> </span>
+<span class="line" id="L87"><a href="#L87">  87</a> STH1 = [-2.0, -1.0, 0.0, 1.0, 2.0]</span>
+<span class="line" id="L88"><a href="#L88">  88</a> def sreg_one(job):</span>
+<span class="line" id="L89"><a href="#L89">  89</a>     &quot;&quot;&quot;前摄条带 b 对条带 a (a 在前)。job = (a, b, dx, dy, alpha): 按预测, b 的车身在 a 地面系里的位置与相对方位角。</span>
+<span class="line" id="L90"><a href="#L90">  90</a>     返回 (a, b, vx, vy, alpha&#x27;, pk, lon_sharp, lat_sharp, lat_edge, du, dv): 配准后 b 的车身在 a 地面系里的位置 (沿路不成峰时沿路 = 预测值)&quot;&quot;&quot;</span>
+<span class="line" id="L91"><a href="#L91">  91</a>     a, b, dx, dy, al = job</span>
+<span class="line" id="L92"><a href="#L92">  92</a>     gb, okb = strip4(b); ft, mk = omatch.feature(gb, okb, SRES)</span>
+<span class="line" id="L93"><a href="#L93">  93</a>     if mk.sum() &lt; 2500: return None</span>
+<span class="line" id="L94"><a href="#L94">  94</a>     ga, oka = strip4(a); ref = StripRef4(ga, oka)</span>
+<span class="line" id="L95"><a href="#L95">  95</a>     c0 = np.array([dx + YC * np.sin(al), dy + YC * np.cos(al)])</span>
+<span class="line" id="L96"><a href="#L96">  96</a>     S, dus, dvs = omatch.match(ref, ft, mk, c0, al, STH1, 0.6, 2.4, min_cover=0.2)</span>
+<span class="line" id="L97"><a href="#L97">  97</a>     if S.max() &lt; 0.05: return None</span>
+<span class="line" id="L98"><a href="#L98">  98</a>     th0 = STH1[int(np.argmax(S.reshape(len(STH1), -1).max(1)))]</span>
+<span class="line" id="L99"><a href="#L99">  99</a>     TH2 = [th0 - 0.5, th0 - 0.25, th0, th0 + 0.25, th0 + 0.5]</span>
+<span class="line" id="L100"><a href="#L100"> 100</a>     S2, _, _ = omatch.match(ref, ft, mk, c0, al, TH2, 0.6, 2.4, min_cover=0.2)</span>
+<span class="line" id="L101"><a href="#L101"> 101</a>     q = omatch.analyse(S2, dus, dvs, TH2, lat_off=0.30, lon_off=0.60)</span>
+<span class="line" id="L102"><a href="#L102"> 102</a>     lon_good = q[&quot;lon_in&quot;] and q[&quot;lon_sharp&quot;] &gt;= SHARP</span>
+<span class="line" id="L103"><a href="#L103"> 103</a>     a2 = al + np.radians(q[&quot;th&quot;])</span>
+<span class="line" id="L104"><a href="#L104"> 104</a>     fw = np.array([np.sin(al), np.cos(al)]); rt = np.array([np.cos(al), -np.sin(al)])</span>
+<span class="line" id="L105"><a href="#L105"> 105</a>     c = c0 + rt * q[&quot;du&quot;] - fw * (q[&quot;dv&quot;] if lon_good else 0.0)</span>
+<span class="line" id="L106"><a href="#L106"> 106</a>     v = c - YC * np.array([np.sin(a2), np.cos(a2)])</span>
+<span class="line" id="L107"><a href="#L107"> 107</a>     return (a, b, v[0], v[1], a2, q[&quot;pk&quot;], q[&quot;lon_sharp&quot;] if q[&quot;lon_in&quot;] else 0.0, q[&quot;lat_sharp&quot;], float(not q[&quot;lat_in&quot;]), q[&quot;du&quot;], q[&quot;dv&quot;])</span>
+<span class="line" id="L108"><a href="#L108"> 108</a> </span>
+<span class="line" id="L109"><a href="#L109"> 109</a> def reg_apply(r, lon):</span>
+<span class="line" id="L110"><a href="#L110"> 110</a>     &quot;&quot;&quot;配准结果 -&gt; 俯视图在该前摄地面系里的 (中心 x, y, &quot;上方&quot;方位角)。沿路不成峰时沿路保持预测值&quot;&quot;&quot;</span>
+<span class="line" id="L111"><a href="#L111"> 111</a>     fw = np.array([np.sin(r[4]), np.cos(r[4])]); rt = np.array([np.cos(r[4]), -np.sin(r[4])])</span>
+<span class="line" id="L112"><a href="#L112"> 112</a>     c = np.array([r[2], r[3]]) + rt * r[6] - fw * (r[7] if lon else 0.0)</span>
+<span class="line" id="L113"><a href="#L113"> 113</a>     return c, r[4] + np.radians(r[8])</span>
+<span class="line" id="L114"><a href="#L114"> 114</a> </span>
+<span class="line" id="L115"><a href="#L115"> 115</a> def _thumb(p):</span>
+<span class="line" id="L116"><a href="#L116"> 116</a>     im = cv2.imread(p, cv2.IMREAD_REDUCED_GRAYSCALE_4)</span>
+<span class="line" id="L117"><a href="#L117"> 117</a>     return None if im is None else im[8:].astype(np.int16)</span>
+<span class="line" id="L118"><a href="#L118"> 118</a> </span>
+<span class="line" id="L119"><a href="#L119"> 119</a> def front_dups(G):</span>
+<span class="line" id="L120"><a href="#L120"> 120</a>     &quot;&quot;&quot;相邻两张前摄照片内容是否完全相同 (缩小后平均绝对差 &lt; 1): 返回长 n-1 的 bool。结果缓存在 work/f24_dup.npy&quot;&quot;&quot;</span>
+<span class="line" id="L121"><a href="#L121"> 121</a>     fn = WORK + &quot;/f24_dup.npy&quot;; n = len(G[&quot;ts&quot;])</span>
+<span class="line" id="L122"><a href="#L122"> 122</a>     if os.path.exists(fn):</span>
+<span class="line" id="L123"><a href="#L123"> 123</a>         d = np.load(fn)</span>
+<span class="line" id="L124"><a href="#L124"> 124</a>         if len(d) == n - 1: return d</span>
+<span class="line" id="L125"><a href="#L125"> 125</a>     with Pool(48) as pool: th = pool.map(_thumb, list(G[&quot;path&quot;]), chunksize=16)</span>
+<span class="line" id="L126"><a href="#L126"> 126</a>     d = np.zeros(n - 1, bool)</span>
+<span class="line" id="L127"><a href="#L127"> 127</a>     for j in range(n - 1):</span>
+<span class="line" id="L128"><a href="#L128"> 128</a>         if th[j] is not None and th[j + 1] is not None and th[j].shape == th[j + 1].shape: d[j] = np.abs(th[j] - th[j + 1]).mean() &lt; 1.0</span>
+<span class="line" id="L129"><a href="#L129"> 129</a>     np.save(fn, d); return d</span>
+<span class="line" id="L130"><a href="#L130"> 130</a> </span>
+<span class="line" id="L131"><a href="#L131"> 131</a> def load_all():</span>
+<span class="line" id="L132"><a href="#L132"> 132</a>     &quot;&quot;&quot;节点表: 前摄照片在前 (下标 = 照片序号), 没有同时刻前摄的俯视图排在后面&quot;&quot;&quot;</span>
+<span class="line" id="L133"><a href="#L133"> 133</a>     G = s24.manifest(&quot;ch2_front&quot;); n = len(G[&quot;ts&quot;])</span>
+<span class="line" id="L134"><a href="#L134"> 134</a>     P0, psi0 = s24.prior_pose(G)</span>
+<span class="line" id="L135"><a href="#L135"> 135</a>     f0 = np.stack([np.sin(psi0), np.cos(psi0)], 1)</span>
+<span class="line" id="L136"><a href="#L136"> 136</a>     rows = T.load_rows(); nr = len(rows)</span>
+<span class="line" id="L137"><a href="#L137"> 137</a>     tsr = np.array([int(r[&quot;timestamp_ms&quot;]) for r in rows]) / 1000.0</span>
+<span class="line" id="L138"><a href="#L138"> 138</a>     o = json.load(open(WORK + &quot;/origin.json&quot;))</span>
+<span class="line" id="L139"><a href="#L139"> 139</a>     Er, Nr = lonlat_to_en([float(r[&quot;lon&quot;]) for r in rows], [float(r[&quot;lat&quot;]) for r in rows], dict(lon0=o[&quot;lon0&quot;], lat0=o[&quot;lat0&quot;], m_lon=o[&quot;m_lon&quot;]))</span>
+<span class="line" id="L140"><a href="#L140"> 140</a>     vr = np.array([float(r[&quot;speed_kmh&quot;] or 0) for r in rows]) / 3.6</span>
+<span class="line" id="L141"><a href="#L141"> 141</a>     psir = s24.heading(Er, Nr, tsr, np.array([float(r[&quot;angle_deg&quot;] or 0) for r in rows]))</span>
+<span class="line" id="L142"><a href="#L142"> 142</a>     fr = np.stack([np.sin(psir), np.cos(psir)], 1)</span>
+<span class="line" id="L143"><a href="#L143"> 143</a>     jf, _ = T.pair_front(tsr, G[&quot;ts&quot;])</span>
+<span class="line" id="L144"><a href="#L144"> 144</a>     extra = np.flatnonzero(jf &lt; 0)</span>
+<span class="line" id="L145"><a href="#L145"> 145</a>     node = jf.copy(); node[extra] = n + np.arange(len(extra))</span>
+<span class="line" id="L146"><a href="#L146"> 146</a>     pri = np.vstack([P0 + f0 * s24.LEVER_FRONT, (np.c_[Er, Nr] - fr * (s24.LAG24 * vr)[:, None] + fr * s24.LEVER_FRONT)[extra]])</span>
+<span class="line" id="L147"><a href="#L147"> 147</a>     raw = np.vstack([np.c_[G[&quot;E&quot;], G[&quot;N&quot;]], np.c_[Er, Nr][extra]])                 # 未扣超前量的原始定位 (判&quot;定位卡住&quot;用)</span>
+<span class="line" id="L148"><a href="#L148"> 148</a>     return dict(G=G, n=n, rows=rows, nr=nr, tsr=tsr, jf=jf, node=node, K=n + len(extra),</span>
+<span class="line" id="L149"><a href="#L149"> 149</a>                 ts=np.r_[G[&quot;ts&quot;], tsr[extra]], pri=pri, psi=np.r_[psi0, psir[extra]], v=np.r_[G[&quot;speed&quot;], vr[extra]], raw=raw)</span>
+<span class="line" id="L150"><a href="#L150"> 150</a> </span>
+<span class="line" id="L151"><a href="#L151"> 151</a> if __name__ == &quot;__main__&quot;:</span>
+<span class="line" id="L152"><a href="#L152"> 152</a>     t0 = time.time(); check = &quot;check&quot; in sys.argv</span>
+<span class="line" id="L153"><a href="#L153"> 153</a>     D = load_all(); G, n, rows, nr, tsr, jf, node, K = D[&quot;G&quot;], D[&quot;n&quot;], D[&quot;rows&quot;], D[&quot;nr&quot;], D[&quot;tsr&quot;], D[&quot;jf&quot;], D[&quot;node&quot;], D[&quot;K&quot;]</span>
+<span class="line" id="L154"><a href="#L154"> 154</a>     ts, pri, psi0, vv, raw = D[&quot;ts&quot;], D[&quot;pri&quot;], D[&quot;psi&quot;], D[&quot;v&quot;], D[&quot;raw&quot;]</span>
+<span class="line" id="L155"><a href="#L155"> 155</a>     rig = T.get_rig(); names = [r[&quot;bev&quot;] for r in rows]</span>
+<span class="line" id="L156"><a href="#L156"> 156</a>     order = np.argsort(ts, kind=&quot;stable&quot;); rank = np.empty(K, int); rank[order] = np.arange(K)</span>
+<span class="line" id="L157"><a href="#L157"> 157</a>     # ---- 连续段: 只在&quot;真的断了&quot;的地方断开 (位置跳 &gt; 40 m, 或隔了 2 分钟以上); 红灯前停几十秒不算断 ----</span>
+<span class="line" id="L158"><a href="#L158"> 158</a>     dpos = np.hypot(*np.diff(pri[order], axis=0).T); dts = np.diff(ts[order])</span>
+<span class="line" id="L159"><a href="#L159"> 159</a>     brk = (dpos &gt; 40.0) | (dts &gt; 120.0)</span>
+<span class="line" id="L160"><a href="#L160"> 160</a>     seg = np.empty(K, int); seg[order] = np.r_[0, np.cumsum(brk)]</span>
+<span class="line" id="L161"><a href="#L161"> 161</a>     print(&quot;节点 %d (前摄 %d + 无同时刻前摄的俯视图 %d); 连续段 %d 个 (断点处: 位置跳 中位 %.0f m, 时间隔 中位 %.0f s)&quot;</span>
+<span class="line" id="L162"><a href="#L162"> 162</a>           % (K, n, K - n, seg.max() + 1, np.median(dpos[brk]) if brk.any() else 0, np.median(dts[brk]) if brk.any() else 0))</span>
+<span class="line" id="L163"><a href="#L163"> 163</a>     # ---- 出隧道后头几个定位是设备推算出来的: 真定位一回来, 位置沿路往回跳十几二十米 ----</span>
+<span class="line" id="L164"><a href="#L164"> 164</a>     # (0924 全程只有去程出洞那一处: 头 3 张前摄的定位比随后的超前约 19 m, 不处理的话这 3 个站点的位置和朝向都是反的。)</span>
+<span class="line" id="L165"><a href="#L165"> 165</a>     # 每段开头 12 步里若有 &gt; 5 m 的倒退, 倒退之前的那几个节点不信定位: 位置从倒退之后的第一个节点按&quot;车速 x 时间差&quot;往回推, 约束放到很松。</span>
+<span class="line" id="L166"><a href="#L166"> 166</a>     bad_gnss = np.zeros(K, bool)</span>
+<span class="line" id="L167"><a href="#L167"> 167</a>     for g in range(seg.max() + 1):</span>
+<span class="line" id="L168"><a href="#L168"> 168</a>         rr = np.flatnonzero(seg[order] == g)</span>
+<span class="line" id="L169"><a href="#L169"> 169</a>         if len(rr) &lt; 24: continue</span>
+<span class="line" id="L170"><a href="#L170"> 170</a>         nd = order[rr]</span>
+<span class="line" id="L171"><a href="#L171"> 171</a>         d = pri[nd[22]] - pri[nd[10]]; L = np.hypot(*d)</span>
+<span class="line" id="L172"><a href="#L172"> 172</a>         if L &lt; 8: continue</span>
+<span class="line" id="L173"><a href="#L173"> 173</a>         d = d / L</span>
+<span class="line" id="L174"><a href="#L174"> 174</a>         f = (np.diff(pri[nd[:13]], axis=0) * d).sum(1)</span>
+<span class="line" id="L175"><a href="#L175"> 175</a>         if f.min() &gt; -5.0: continue</span>
+<span class="line" id="L176"><a href="#L176"> 176</a>         q = int(np.argmin(f))                                         # 倒退发生在 nd[q] -&gt; nd[q+1]</span>
+<span class="line" id="L177"><a href="#L177"> 177</a>         for i in range(q, -1, -1):</span>
+<span class="line" id="L178"><a href="#L178"> 178</a>             step = float(np.clip(vv[nd[i]] * (ts[nd[i + 1]] - ts[nd[i]]), 0.3, 8.0))</span>
+<span class="line" id="L179"><a href="#L179"> 179</a>             pri[nd[i]] = pri[nd[i + 1]] - d * step; psi0[nd[i]] = psi0[nd[q + 1]]; bad_gnss[nd[i]] = True</span>
+<span class="line" id="L180"><a href="#L180"> 180</a>         print(&quot;段 %d 开头 %d 个节点的定位是推算的 (随后倒退 %.1f m): 改为从第 %d 个节点往回推&quot; % (g, q + 1, -f[q], q + 2))</span>
+<span class="line" id="L181"><a href="#L181"> 181</a>     dpos = np.hypot(*np.diff(pri[order], axis=0).T)</span>
+<span class="line" id="L182"><a href="#L182"> 182</a>     # ---- 相邻边 ----</span>
+<span class="line" id="L183"><a href="#L183"> 183</a>     VO = np.load(WORK + &quot;/f24_vo.npz&quot;); Rv, vok = VO[&quot;R&quot;], VO[&quot;ok&quot;]</span>
+<span class="line" id="L184"><a href="#L184"> 184</a>     RT = np.load(WORK + &quot;/f24_rot.npz&quot;); Rr = RT[&quot;R&quot;]; rok = RT[&quot;ok&quot;] &amp; (np.nan_to_num(Rr[:, 2]) &gt;= 40)       # 两视几何 (t03i): alpha, dir, 内点数, 匹配数, 像移, 俯仰变化</span>
+<span class="line" id="L185"><a href="#L185"> 185</a>     dup = front_dups(G); dgn = np.hypot(*np.diff(pri[:n], axis=0).T)</span>
+<span class="line" id="L186"><a href="#L186"> 186</a>     vo_use = np.zeros(n, bool); nrej = 0</span>
+<span class="line" id="L187"><a href="#L187"> 187</a>     for j in range(n - 1):</span>
+<span class="line" id="L188"><a href="#L188"> 188</a>         if vok[j] and not dup[j]:</span>
+<span class="line" id="L189"><a href="#L189"> 189</a>             if Rv[j, 1] &lt; 0.3 or Rv[j, 1] &lt; dgn[j] - 1.5: nrej += 1          # 步长 &gt; 5 m 时特征点里程计会错成偏小的值 (见 README)</span>
+<span class="line" id="L190"><a href="#L190"> 190</a>             else: vo_use[j] = True</span>
+<span class="line" id="L191"><a href="#L191"> 191</a>     U = dict(i=np.arange(K), E=pri[:, 0].copy(), N=pri[:, 1].copy(), psi=psi0.copy(), slat=np.where(bad_gnss, 5.0, 0.8), slon=np.where(bad_gnss, 30.0, 1.5), sth=np.where(bad_gnss, np.radians(30.0), np.radians(4.0)))</span>
+<span class="line" id="L192"><a href="#L192"> 192</a>     fo = order[order &lt; n]; tf_ = ts[fo]                              # 前摄节点 (按时间)</span>
+<span class="line" id="L193"><a href="#L193"> 193</a>     onpath = np.zeros(K, bool)</span>
+<span class="line" id="L194"><a href="#L194"> 194</a>     def front_edges(SRd, Xc=None):</span>
+<span class="line" id="L195"><a href="#L195"> 195</a>         &quot;&quot;&quot;相邻前摄 (j, j+1) 的边 + &quot;无同时刻前摄的俯视图&quot;节点的边。SRd: {j: (vx, vy, alpha, 沿路成峰?)} 条带互相关的结果。</span>
+<span class="line" id="L196"><a href="#L196"> 196</a>         Xc: 当前的解。给了的话, 无同时刻前摄的节点用&quot;它在前后两张前摄之间的那段轨迹上&quot;来约束 (横向几厘米, 沿路仍只有定位那个量级):</span>
+<span class="line" id="L197"><a href="#L197"> 197</a>         车是连续开过去的, 这一刻的位置必然落在前后两个前摄时刻之间的轨迹上, 只是不知道在这段上的哪里。&quot;&quot;&quot;</span>
+<span class="line" id="L198"><a href="#L198"> 198</a>         Ed = dict(a=[], b=[], dx=[], dy=[], dth=[], sx=[], sy=[], sth=[]); cnt = dict(dup=0, rot=0, strip=0, vo=0, gnss=0, f_strip=0, f_vo=0, f_gnss=0)</span>
+<span class="line" id="L199"><a href="#L199"> 199</a>         def add(*v):</span>
+<span class="line" id="L200"><a href="#L200"> 200</a>             for k_, v_ in zip((&quot;a&quot;, &quot;b&quot;, &quot;dx&quot;, &quot;dy&quot;, &quot;dth&quot;, &quot;sx&quot;, &quot;sy&quot;, &quot;sth&quot;), v): Ed[k_].append(v_)</span>
+<span class="line" id="L201"><a href="#L201"> 201</a>         covered = np.zeros(n, bool)</span>
+<span class="line" id="L202"><a href="#L202"> 202</a>         for j in range(n - 1):</span>
+<span class="line" id="L203"><a href="#L203"> 203</a>             if seg[j] != seg[j + 1]: continue</span>
+<span class="line" id="L204"><a href="#L204"> 204</a>             covered[j] = True</span>
+<span class="line" id="L205"><a href="#L205"> 205</a>             if dup[j]: add(j, j + 1, 0.0, 0.0, 0.0, 0.01, 0.01, np.radians(0.02)); cnt[&quot;dup&quot;] += 1; continue</span>
+<span class="line" id="L206"><a href="#L206"> 206</a>             d = pri[j + 1] - pri[j]; ca, sa = np.cos(psi0[j]), np.sin(psi0[j]); lat0, fw0 = d[0] * ca - d[1] * sa, d[0] * sa + d[1] * ca</span>
+<span class="line" id="L207"><a href="#L207"> 207</a>             sr = SRd.get(j)</span>
+<span class="line" id="L208"><a href="#L208"> 208</a>             if sr is not None and sr[3]: fy, sy = sr[1], 0.20; cnt[&quot;f_strip&quot;] += 1</span>
+<span class="line" id="L209"><a href="#L209"> 209</a>             elif vo_use[j]: fy, sy = Rv[j, 1], 0.30; cnt[&quot;f_vo&quot;] += 1</span>
+<span class="line" id="L210"><a href="#L210"> 210</a>             else: fy, sy = fw0, 0.6 + 0.1 * abs(fw0); cnt[&quot;f_gnss&quot;] += 1</span>
+<span class="line" id="L211"><a href="#L211"> 211</a>             if rok[j]:</span>
+<span class="line" id="L212"><a href="#L212"> 212</a>                 moving = Rr[j, 4] &gt;= 8.0 and fy &gt;= 0.8                       # 几乎没动 (像移 &lt; 8 px) 时平移方向不可信, 只用转角</span>
+<span class="line" id="L213"><a href="#L213"> 213</a>                 add(j, j + 1, fy * np.tan(Rr[j, 1]) if moving else 0.0, fy, -wrap(Rr[j, 0]), (0.04 + 0.01 * abs(fy)) if moving else 0.15, sy, np.radians(0.12)); cnt[&quot;rot&quot;] += 1</span>
+<span class="line" id="L214"><a href="#L214"> 214</a>             elif sr is not None: add(j, j + 1, sr[0], fy, -wrap(sr[2]), 0.13, sy, np.radians(0.8)); cnt[&quot;strip&quot;] += 1</span>
+<span class="line" id="L215"><a href="#L215"> 215</a>             elif vo_use[j]: add(j, j + 1, Rv[j, 0], fy, Rv[j, 2], 0.10, sy, np.radians(0.6)); cnt[&quot;vo&quot;] += 1</span>
+<span class="line" id="L216"><a href="#L216"> 216</a>             else: add(j, j + 1, lat0, fy, -wrap(psi0[j + 1] - psi0[j]), 0.25, sy, np.radians(1.5)); cnt[&quot;gnss&quot;] += 1</span>
+<span class="line" id="L217"><a href="#L217"> 217</a>         onpath[:] = False</span>
+<span class="line" id="L218"><a href="#L218"> 218</a>         if Xc is not None:</span>
+<span class="line" id="L219"><a href="#L219"> 219</a>             for m in range(n, K):</span>
+<span class="line" id="L220"><a href="#L220"> 220</a>                 i1 = int(np.searchsorted(tf_, ts[m]))</span>
+<span class="line" id="L221"><a href="#L221"> 221</a>                 if i1 &lt; 1 or i1 &gt;= len(fo): continue</span>
+<span class="line" id="L222"><a href="#L222"> 222</a>                 a, b_ = fo[i1 - 1], fo[i1]</span>
+<span class="line" id="L223"><a href="#L223"> 223</a>                 if seg[a] != seg[m] or seg[b_] != seg[m] or ts[b_] - ts[a] &gt; 6.0: continue</span>
+<span class="line" id="L224"><a href="#L224"> 224</a>                 d = Xc[b_, :2] - Xc[a, :2]; ca, sa = np.cos(Xc[a, 2]), np.sin(Xc[a, 2]); dxab, dyab = d[0] * ca - d[1] * sa, d[0] * sa + d[1] * ca; dthab = -wrap(Xc[b_, 2] - Xc[a, 2])</span>
+<span class="line" id="L225"><a href="#L225"> 225</a>                 if dyab &lt; 0.3 or dyab &gt; 12.0: continue</span>
+<span class="line" id="L226"><a href="#L226"> 226</a>                 ch = pri[b_] - pri[a]; L2 = float(ch @ ch)</span>
+<span class="line" id="L227"><a href="#L227"> 227</a>                 w = float(np.clip(((pri[m] - pri[a]) @ ch) / L2, -0.3, 1.3)) if L2 &gt; 0.25 else 0.5</span>
+<span class="line" id="L228"><a href="#L228"> 228</a>                 add(a, m, w * w * dxab, w * dyab, w * dthab, 0.05, 1.2, np.radians(0.3)); onpath[m] = True     # 圆弧近似: 横移随 w 平方, 前进量和转角随 w 线性</span>
+<span class="line" id="L229"><a href="#L229"> 229</a>         for i in range(K - 1):                                           # 时间上相邻、但不是&quot;相邻两张前摄&quot;的节点对 (夹着后摄单独节点, 或停车后)</span>
+<span class="line" id="L230"><a href="#L230"> 230</a>             a, b_ = order[i], order[i + 1]</span>
+<span class="line" id="L231"><a href="#L231"> 231</a>             if brk[i] or (a &lt; n and b_ == a + 1 and covered[a]): continue</span>
+<span class="line" id="L232"><a href="#L232"> 232</a>             if (a &gt;= n and onpath[a]) or (b_ &gt;= n and onpath[b_]): continue  # 已经用&quot;在轨迹上&quot;约束了</span>
+<span class="line" id="L233"><a href="#L233"> 233</a>             d = pri[b_] - pri[a]; ca, sa = np.cos(psi0[a]), np.sin(psi0[a])</span>
+<span class="line" id="L234"><a href="#L234"> 234</a>             wait = 2.0 if dts[i] &gt; 8.0 else 1.0                          # 停过车: 定位可能漂了, 放宽</span>
+<span class="line" id="L235"><a href="#L235"> 235</a>             add(a, b_, d[0] * ca - d[1] * sa, d[0] * sa + d[1] * ca, -wrap(psi0[b_] - psi0[a]), 0.25 * wait, (0.6 + 0.1 * dpos[i]) * wait, np.radians(1.5))</span>
+<span class="line" id="L236"><a href="#L236"> 236</a>         return {k_: np.array(v_) for k_, v_ in Ed.items()}, cnt</span>
+<span class="line" id="L237"><a href="#L237"> 237</a>     x0 = np.c_[pri, np.unwrap(psi0)]</span>
+<span class="line" id="L238"><a href="#L238"> 238</a>     EB, cnt = front_edges({})</span>
+<span class="line" id="L239"><a href="#L239"> 239</a>     X1, c1 = pgraph.solve(x0, EB, U, verbose=False)</span>
+<span class="line" id="L240"><a href="#L240"> 240</a>     print(&quot;第一遍: 相邻前摄 转角/横移 来自 两视几何 %d 对 / 特征点里程计 %d / 定位 %d, 重复照片 %d 对; 前进量来自 里程计 %d (另 %d 条因偏小被筛掉) / 定位 %d  [%.0fs]&quot;</span>
+<span class="line" id="L241"><a href="#L241"> 241</a>           % (cnt[&quot;rot&quot;], cnt[&quot;vo&quot;], cnt[&quot;gnss&quot;], cnt[&quot;dup&quot;], cnt[&quot;f_vo&quot;], nrej, cnt[&quot;f_gnss&quot;], time.time() - t0), flush=True)</span>
+<span class="line" id="L242"><a href="#L242"> 242</a>     # 没有同时刻前摄的俯视图节点: 朝向取前后前摄节点解出的朝向按时间内插 (车头朝向变化是平滑的), 比它自己那一下定位航向可靠</span>
+<span class="line" id="L243"><a href="#L243"> 243</a>     for m in range(n, K):</span>
+<span class="line" id="L244"><a href="#L244"> 244</a>         i1 = int(np.searchsorted(tf_, ts[m])); c_ = [fo[i] for i in (i1 - 1, i1) if 0 &lt;= i &lt; len(fo) and seg[fo[i]] == seg[m] and abs(ts[fo[i]] - ts[m]) &lt; 6.0]</span>
+<span class="line" id="L245"><a href="#L245"> 245</a>         if not c_: continue</span>
+<span class="line" id="L246"><a href="#L246"> 246</a>         if len(c_) == 2 and ts[c_[1]] &gt; ts[c_[0]]:</span>
+<span class="line" id="L247"><a href="#L247"> 247</a>             w = float(np.clip((ts[m] - ts[c_[0]]) / (ts[c_[1]] - ts[c_[0]]), 0, 1)); U[&quot;psi&quot;][m] = X1[c_[0], 2] + w * wrap(X1[c_[1], 2] - X1[c_[0], 2])</span>
+<span class="line" id="L248"><a href="#L248"> 248</a>         else: U[&quot;psi&quot;][m] = X1[min(c_, key=lambda q_: abs(ts[q_] - ts[m])), 2]</span>
+<span class="line" id="L249"><a href="#L249"> 249</a>         U[&quot;sth&quot;][m] = np.radians(0.5)</span>
+<span class="line" id="L250"><a href="#L250"> 250</a>     # ---- 条带互相关: 相邻两张前摄条带 (内容不同的每一对)。现在主要用它的前进量; 两视几何量不出来的那 1% 才用它的横移和转角 ----</span>
+<span class="line" id="L251"><a href="#L251"> 251</a>     ST = np.load(WORK + &quot;/f24_strips.u8.npy&quot;, mmap_mode=&quot;r&quot;); RDM = np.load(WORK + &quot;/f24_road.u8.npy&quot;, mmap_mode=&quot;r&quot;)</span>
+<span class="line" id="L252"><a href="#L252"> 252</a>     jobs = []</span>
+<span class="line" id="L253"><a href="#L253"> 253</a>     for j in range(n - 1):</span>
+<span class="line" id="L254"><a href="#L254"> 254</a>         if seg[j] != seg[j + 1] or dup[j]: continue</span>
+<span class="line" id="L255"><a href="#L255"> 255</a>         d = X1[j + 1, :2] - X1[j, :2]; c_, s_ = np.cos(X1[j, 2]), np.sin(X1[j, 2])</span>
+<span class="line" id="L256"><a href="#L256"> 256</a>         fwd = d[0] * s_ + d[1] * c_</span>
+<span class="line" id="L257"><a href="#L257"> 257</a>         if not (-0.3 &lt; fwd &lt; 7.5): continue</span>
+<span class="line" id="L258"><a href="#L258"> 258</a>         jobs.append((j, j + 1, float(d[0] * c_ - d[1] * s_), float(fwd), float(wrap(X1[j + 1, 2] - X1[j, 2]))))</span>
+<span class="line" id="L259"><a href="#L259"> 259</a>     with Pool(56) as pool: SR = np.array([r for r in pool.map(sreg_one, jobs, chunksize=8) if r is not None])</span>
+<span class="line" id="L260"><a href="#L260"> 260</a>     s_lat = (SR[:, 5] &gt;= 0.40) &amp; (SR[:, 7] &gt;= 0.05) &amp; (SR[:, 8] == 0); s_lon = s_lat &amp; (SR[:, 6] &gt;= SHARP)</span>
+<span class="line" id="L261"><a href="#L261"> 261</a>     SRd = {int(r[0]): (r[2], r[3], r[4], bool(l_)) for r, l_ in zip(SR[s_lat], s_lon[s_lat])}</span>
+<span class="line" id="L262"><a href="#L262"> 262</a>     # 条带的转角 对 两视几何的转角: 两者独立, 差值就是条带转角的误差 (两视几何的误差小一个量级)</span>
+<span class="line" id="L263"><a href="#L263"> 263</a>     jj = SR[s_lat, 0].astype(int); both = rok[jj]</span>
+<span class="line" id="L264"><a href="#L264"> 264</a>     dd = np.degrees(wrap(SR[s_lat, 4][both] - Rr[jj[both], 0]))</span>
+<span class="line" id="L265"><a href="#L265"> 265</a>     EB, cnt = front_edges(SRd, X1)</span>
+<span class="line" id="L266"><a href="#L266"> 266</a>     Xs, _ = pgraph.solve(X1, EB, U, verbose=False)</span>
+<span class="line" id="L267"><a href="#L267"> 267</a>     EB, cnt = front_edges(SRd, Xs)                                   # 用新解再生成一遍 (在轨迹上的约束依赖前摄之间的相对位姿)</span>
+<span class="line" id="L268"><a href="#L268"> 268</a>     Xs, _ = pgraph.solve(Xs, EB, U, verbose=False)</span>
+<span class="line" id="L269"><a href="#L269"> 269</a>     onp = onpath.copy()</span>
+<span class="line" id="L270"><a href="#L270"> 270</a>     has_vo = np.zeros(K, bool); has_vo[np.flatnonzero(vo_use)] = True; has_vo[np.flatnonzero(vo_use) + 1] = True</span>
+<span class="line" id="L271"><a href="#L271"> 271</a>     has_rot = np.zeros(K, bool); has_rot[np.flatnonzero(rok[:n - 1])] = True; has_rot[np.flatnonzero(rok[:n - 1]) + 1] = True</span>
+<span class="line" id="L272"><a href="#L272"> 272</a>     has_sr = np.zeros(K, bool); has_sr[SR[s_lat, 0].astype(int)] = True; has_sr[SR[s_lat, 1].astype(int)] = True</span>
+<span class="line" id="L273"><a href="#L273"> 273</a>     print(&quot;条带互相关: 内容不同的相邻前摄 %d 对, 横向成峰 %d 对 (%.0f%%), 沿路也成峰 %d 对 (%.0f%%); 条带转角 - 两视几何转角: |.| 中位 %.2f 度, p90 %.2f (%d 对)&quot;</span>
+<span class="line" id="L274"><a href="#L274"> 274</a>           % (len(jobs), s_lat.sum(), 100 * s_lat.sum() / len(jobs), s_lon.sum(), 100 * s_lon.sum() / len(jobs), np.median(np.abs(dd)), np.percentile(np.abs(dd), 90), both.sum()))</span>
+<span class="line" id="L275"><a href="#L275"> 275</a>     print(&quot;第二遍: 转角/横移 来自 两视几何 %d 对 / 条带 %d / 里程计 %d / 定位 %d; 前进量来自 条带 %d / 里程计 %d / 定位 %d; 无同时刻前摄的 %d 个节点里 %d 个按\&quot;在轨迹上\&quot;约束  [%.0fs]&quot;</span>
+<span class="line" id="L276"><a href="#L276"> 276</a>           % (cnt[&quot;rot&quot;], cnt[&quot;strip&quot;], cnt[&quot;vo&quot;], cnt[&quot;gnss&quot;], cnt[&quot;f_strip&quot;], cnt[&quot;f_vo&quot;], cnt[&quot;f_gnss&quot;], K - n, onp.sum(), time.time() - t0), flush=True)</span>
+<span class="line" id="L277"><a href="#L277"> 277</a>     X1 = Xs</span>
+<span class="line" id="L278"><a href="#L278"> 278</a>     def pack(): return dict(EB)</span>
+<span class="line" id="L279"><a href="#L279"> 279</a>     # ---- 配准边: 每张俯视图对它前方一两张前摄条带 ----</span>
+<span class="line" id="L280"><a href="#L280"> 280</a>     def make_jobs(X, targets, lo, hi):</span>
+<span class="line" id="L281"><a href="#L281"> 281</a>         TP = T.predict(X[node], rig); jobs = []</span>
+<span class="line" id="L282"><a href="#L282"> 282</a>         for k in range(nr):</span>
+<span class="line" id="L283"><a href="#L283"> 283</a>             m = node[k]; j1 = min(n - 1, int(np.searchsorted(G[&quot;ts&quot;], tsr[k]))); got = {}</span>
+<span class="line" id="L284"><a href="#L284"> 284</a>             for j in range(j1, max(-1, j1 - 16), -1):</span>
+<span class="line" id="L285"><a href="#L285"> 285</a>                 if j == m or G[&quot;ts&quot;][j] &gt;= tsr[k] or seg[j] != seg[m]: continue</span>
+<span class="line" id="L286"><a href="#L286"> 286</a>                 x, y = to_local(TP[k, :2], X[j, :2], X[j, 2])[0]</span>
+<span class="line" id="L287"><a href="#L287"> 287</a>                 if y &gt; hi + 8: break</span>
+<span class="line" id="L288"><a href="#L288"> 288</a>                 if not (lo &lt;= y &lt;= hi) or abs(x) &gt; 3.0: continue</span>
+<span class="line" id="L289"><a href="#L289"> 289</a>                 for ti, tg in enumerate(targets):</span>
+<span class="line" id="L290"><a href="#L290"> 290</a>                     if ti not in got or abs(y - tg) &lt; abs(got[ti][2] - tg): got[ti] = (j, x, y)</span>
+<span class="line" id="L291"><a href="#L291"> 291</a>             for j, x, y in {v_[0]: v_ for v_ in got.values()}.values():</span>
+<span class="line" id="L292"><a href="#L292"> 292</a>                 jobs.append((k, int(j), float(x), float(y), float(TP[k, 2] - X[j, 2]), names[k]))</span>
+<span class="line" id="L293"><a href="#L293"> 293</a>         return jobs</span>
+<span class="line" id="L294"><a href="#L294"> 294</a>     def run_reg(X, targets, lo, hi, win):</span>
+<span class="line" id="L295"><a href="#L295"> 295</a>         global WIN</span>
+<span class="line" id="L296"><a href="#L296"> 296</a>         WIN = win; jobs = make_jobs(X, targets, lo, hi)</span>
+<span class="line" id="L297"><a href="#L297"> 297</a>         with Pool(56) as pool: res = [r for r in pool.map(reg_one, jobs, chunksize=8) if r is not None]</span>
+<span class="line" id="L298"><a href="#L298"> 298</a>         R = np.array(res)</span>
+<span class="line" id="L299"><a href="#L299"> 299</a>         lat = (R[:, 5] &gt;= PK_MIN) &amp; (R[:, 10] &gt;= SHARP) &amp; (R[:, 11] == 0); lon = lat &amp; (R[:, 9] &gt;= SHARP)</span>
+<span class="line" id="L300"><a href="#L300"> 300</a>         return R, lat, lon, len(jobs)</span>
+<span class="line" id="L301"><a href="#L301"> 301</a>     def reg_edges(R, lat, lon, X):</span>
+<span class="line" id="L302"><a href="#L302"> 302</a>         out = []</span>
+<span class="line" id="L303"><a href="#L303"> 303</a>         for i in np.flatnonzero(lat):</span>
+<span class="line" id="L304"><a href="#L304"> 304</a>             j, m = int(R[i, 1]), int(node[int(R[i, 0])])</span>
+<span class="line" id="L305"><a href="#L305"> 305</a>             c, _ = reg_apply(R[i], bool(lon[i]))                             # 俯视图中心在照片 j 地面系里的位置 (配准量得准的就是它)</span>
+<span class="line" id="L306"><a href="#L306"> 306</a>             pr = wrap(X[m, 2] - X[j, 2])                                     # 车头朝向差取轨迹上的, 不取配准自己的转角 (见文件头)</span>
+<span class="line" id="L307"><a href="#L307"> 307</a>             vx, vy, _ = veh_from_tile(c, pr + np.pi + np.radians(rig[&quot;dpsi&quot;]), rig)</span>
+<span class="line" id="L308"><a href="#L308"> 308</a>             out.append((j, m, vx, vy, -pr, 0.05, 0.15 if lon[i] else 2.5, np.radians(2.0)))</span>
+<span class="line" id="L309"><a href="#L309"> 309</a>         return out</span>
+<span class="line" id="L310"><a href="#L310"> 310</a>     def solve_with(extra, xinit):</span>
+<span class="line" id="L311"><a href="#L311"> 311</a>         Ed = pack()</span>
+<span class="line" id="L312"><a href="#L312"> 312</a>         if extra:</span>
+<span class="line" id="L313"><a href="#L313"> 313</a>             ex = np.array(extra)</span>
+<span class="line" id="L314"><a href="#L314"> 314</a>             for c_, k_ in enumerate((&quot;a&quot;, &quot;b&quot;, &quot;dx&quot;, &quot;dy&quot;, &quot;dth&quot;, &quot;sx&quot;, &quot;sy&quot;, &quot;sth&quot;)):</span>
+<span class="line" id="L315"><a href="#L315"> 315</a>                 Ed[k_] = np.r_[Ed[k_], ex[:, c_].astype(int) if k_ in (&quot;a&quot;, &quot;b&quot;) else ex[:, c_]]</span>
+<span class="line" id="L316"><a href="#L316"> 316</a>         return pgraph.solve(xinit, Ed, U, verbose=False)</span>
+<span class="line" id="L317"><a href="#L317"> 317</a>     R, lat, lon, nj = run_reg(X1, (7.6, 10.6), 6.3, 12.2, (1.2, 2.5, [-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0]))</span>
+<span class="line" id="L318"><a href="#L318"> 318</a>     X2, c2 = solve_with(reg_edges(R, lat, lon, X1), X1)</span>
+<span class="line" id="L319"><a href="#L319"> 319</a>     tl = np.zeros(nr, bool); tl[R[lat, 0].astype(int)] = True; to = np.zeros(nr, bool); to[R[lon, 0].astype(int)] = True</span>
+<span class="line" id="L320"><a href="#L320"> 320</a>     print(&quot;配准第一轮: %d 次尝试, 横向成峰 %d 次 / 沿路也成峰 %d 次; 俯视图 %d 张里 横向有依据 %d 张 (%.0f%%), 沿路也有 %d 张 (%.0f%%)  [%.0fs]&quot;</span>
+<span class="line" id="L321"><a href="#L321"> 321</a>           % (nj, lat.sum(), lon.sum(), nr, tl.sum(), 100 * tl.mean(), to.sum(), 100 * to.mean(), time.time() - t0), flush=True)</span>
+<span class="line" id="L322"><a href="#L322"> 322</a>     # 第二轮: 用解出的位姿重新预测, 小窗口重配 (预测准了, 之前因为偏出搜索窗/转角不够而没配上的能补回来)</span>
+<span class="line" id="L323"><a href="#L323"> 323</a>     R, lat, lon, nj = run_reg(X2, (7.6, 10.6), 6.3, 12.2, (0.6, 2.5, [-1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5]))</span>
+<span class="line" id="L324"><a href="#L324"> 324</a>     ED = reg_edges(R, lat, lon, X2)</span>
+<span class="line" id="L325"><a href="#L325"> 325</a>     X, c3 = solve_with(ED, X2)</span>
+<span class="line" id="L326"><a href="#L326"> 326</a>     tl = np.zeros(nr, bool); tl[R[lat, 0].astype(int)] = True; to = np.zeros(nr, bool); to[R[lon, 0].astype(int)] = True</span>
+<span class="line" id="L327"><a href="#L327"> 327</a>     print(&quot;配准第二轮: %d 次尝试, 横向成峰 %d 次 / 沿路也成峰 %d 次; 俯视图 横向有依据 %d 张 (%.0f%%), 沿路也有 %d 张 (%.0f%%); 改正量 横向 |.| 中位 %.3f m (p90 %.3f)  [%.0fs]&quot;</span>
+<span class="line" id="L328"><a href="#L328"> 328</a>           % (nj, lat.sum(), lon.sum(), tl.sum(), 100 * tl.mean(), to.sum(), 100 * to.mean(), np.median(np.abs(R[lat, 6])), np.percentile(np.abs(R[lat, 6]), 90), time.time() - t0), flush=True)</span>
+<span class="line" id="L329"><a href="#L329"> 329</a>     # 配准边在解里的残差 (横向): 大的说明那次配准与前后不一致</span>
+<span class="line" id="L330"><a href="#L330"> 330</a>     ex = np.array(ED); a_, b_ = ex[:, 0].astype(int), ex[:, 1].astype(int)</span>
+<span class="line" id="L331"><a href="#L331"> 331</a>     d = X[b_, :2] - X[a_, :2]; rl = d[:, 0] * np.cos(X[a_, 2]) - d[:, 1] * np.sin(X[a_, 2]) - ex[:, 2]</span>
+<span class="line" id="L332"><a href="#L332"> 332</a>     print(&quot;   配准边残差 (横向): |.| 中位 %.3f m, p90 %.3f, &gt;0.15 m 的占 %.1f%%&quot; % (np.median(np.abs(rl)), np.percentile(np.abs(rl), 90), 100 * (np.abs(rl) &gt; 0.15).mean()))</span>
+<span class="line" id="L333"><a href="#L333"> 333</a>     # 一张俯视图&quot;有依据&quot; = 它至少有一条残差小的配准边</span>
+<span class="line" id="L334"><a href="#L334"> 334</a>     good = np.abs(rl) &lt;= 0.15; kk = R[lat, 0].astype(int)</span>
+<span class="line" id="L335"><a href="#L335"> 335</a>     # 依据: 3 = 自己的图像配准定了横向和沿路; 2 = 图像配准定了横向; 1 = 没有自己的配准, 位置由车身轨迹推得</span>
+<span class="line" id="L336"><a href="#L336"> 336</a>     #      (同一时刻的前摄在两视几何链上, 或这一刻落在前后两张前摄之间的轨迹上: 横向几厘米, 沿路仍是定位那个量级); 0 = 只有照片自带定位</span>
+<span class="line" id="L337"><a href="#L337"> 337</a>     q = np.zeros(nr, int)</span>
+<span class="line" id="L338"><a href="#L338"> 338</a>     q[(node &lt; n) &amp; has_rot[np.minimum(node, K - 1)]] = 1; q[(node &gt;= n) &amp; onp[node]] = 1</span>
+<span class="line" id="L339"><a href="#L339"> 339</a>     q[np.unique(kk[good])] = 2</span>
+<span class="line" id="L340"><a href="#L340"> 340</a>     q[np.unique(kk[good &amp; (ex[:, 6] &lt; 1.0)])] = 3</span>
+<span class="line" id="L341"><a href="#L341"> 341</a>     img_node = np.zeros(K, bool); img_node[a_[good]] = True; img_node[b_[good]] = True</span>
+<span class="line" id="L342"><a href="#L342"> 342</a>     # ---- 里程: 每段内沿解出的轨迹、按&quot;前进方向上的分量&quot;累加 (时间戳先后与实际先后偶尔颠倒, 取绝对值会把来回抖动都算进去) ----</span>
+<span class="line" id="L343"><a href="#L343"> 343</a>     Xo = X[order]; dP = np.diff(Xo[:, :2], axis=0); am = Xo[:-1, 2]</span>
+<span class="line" id="L344"><a href="#L344"> 344</a>     step = dP[:, 0] * np.sin(am) + dP[:, 1] * np.cos(am)</span>
+<span class="line" id="L345"><a href="#L345"> 345</a>     length = float(step[~brk].sum())</span>
+<span class="line" id="L346"><a href="#L346"> 346</a>     step[brk] = 30.0                                                 # 段与段之间留一个固定间隔</span>
+<span class="line" id="L347"><a href="#L347"> 347</a>     s = np.empty(K); s[order] = np.r_[0, np.cumsum(step)]</span>
+<span class="line" id="L348"><a href="#L348"> 348</a>     # ---- 俯视图位置: 车身位姿 + 车身几何; 自己有配准的, 再按配准结果落位 (配准结果是在那张前摄照片自己的地面系里量的) ----</span>
+<span class="line" id="L349"><a href="#L349"> 349</a>     # 朝向: 取轨迹上的车头朝向 (+ 车身几何), 不取配准自己的转角 —— 同上, 俯视图太短, 自己的转角只准到 1 度</span>
+<span class="line" id="L350"><a href="#L350"> 350</a>     TILE_HEADING = &quot;reg&quot; if &quot;regheading&quot; in sys.argv else &quot;track&quot;</span>
+<span class="line" id="L351"><a href="#L351"> 351</a>     tile = T.predict(X[node], rig); acc = {}</span>
+<span class="line" id="L352"><a href="#L352"> 352</a>     for i, e_ok in zip(np.flatnonzero(lat), good):</span>
+<span class="line" id="L353"><a href="#L353"> 353</a>         if not e_ok: continue</span>
+<span class="line" id="L354"><a href="#L354"> 354</a>         k, j = int(R[i, 0]), int(R[i, 1])</span>
+<span class="line" id="L355"><a href="#L355"> 355</a>         c, a = reg_apply(R[i], bool(lon[i]))</span>
+<span class="line" id="L356"><a href="#L356"> 356</a>         if not lon[i]: c[1] = to_local(tile[k, :2], X[j, :2], X[j, 2])[0][1]       # 沿路没成峰: 沿路位置听轨迹的</span>
+<span class="line" id="L357"><a href="#L357"> 357</a>         cj, sj = np.cos(X[j, 2]), np.sin(X[j, 2])</span>
+<span class="line" id="L358"><a href="#L358"> 358</a>         acc.setdefault(k, []).append((X[j, 0] + cj * c[0] + sj * c[1], X[j, 1] - sj * c[0] + cj * c[1], tile[k, 2] if TILE_HEADING == &quot;track&quot; else X[j, 2] + a))</span>
+<span class="line" id="L359"><a href="#L359"> 359</a>     moved = []</span>
+<span class="line" id="L360"><a href="#L360"> 360</a>     for k, v in acc.items():</span>
+<span class="line" id="L361"><a href="#L361"> 361</a>         v = np.array(v); new_ = np.array([v[:, 0].mean(), v[:, 1].mean(), np.arctan2(np.sin(v[:, 2]).mean(), np.cos(v[:, 2]).mean())])</span>
+<span class="line" id="L362"><a href="#L362"> 362</a>         moved.append(np.hypot(*(new_[:2] - tile[k, :2]))); tile[k] = new_</span>
+<span class="line" id="L363"><a href="#L363"> 363</a>     print(&quot;俯视图按自己的配准落位 %d 张: 相对\&quot;车身位姿 + 车身几何\&quot;挪动 中位 %.3f m (p90 %.3f)&quot; % (len(acc), np.median(moved), np.percentile(moved, 90)))</span>
+<span class="line" id="L364"><a href="#L364"> 364</a>     np.savez(WORK + &quot;/run24.npz&quot;, X=X, ts=ts, seg=seg, s=s, pri=pri, psi0=psi0, v=vv, is_front=np.arange(K) &lt; n, has_vo=has_vo, has_sr=has_sr, has_rot=has_rot, img_node=img_node,</span>
+<span class="line" id="L365"><a href="#L365"> 365</a>              dup=dup, bad_gnss=bad_gnss, tile=tile, tile_node=node, tile_q=q, tile_s=s[node] - (rig[&quot;L&quot;] + T.YCR), tile_name=np.array(names), tile_ts=tsr, jf=jf, R=R, lat=lat, lon=lon,</span>
+<span class="line" id="L366"><a href="#L366"> 366</a>              geom=np.array([T.X_LO, T.X_HI, T.Y_LO, T.Y_HI]))</span>
+<span class="line" id="L367"><a href="#L367"> 367</a>     print(&quot;俯视图 %d 张: 图像定了横向和沿路 %d (%.0f%%), 图像定了横向 %d (%.0f%%), 由车身轨迹推得 %d (%.0f%%), 只有定位 %d (%.0f%%); 总里程 %.2f km; 用时 %.0fs&quot;</span>
+<span class="line" id="L368"><a href="#L368"> 368</a>           % (nr, (q == 3).sum(), 100 * (q == 3).mean(), (q == 2).sum(), 100 * (q == 2).mean(), (q == 1).sum(), 100 * (q == 1).mean(), (q == 0).sum(), 100 * (q == 0).mean(), length / 1000, time.time() - t0))</span>
+<span class="line" id="L369"><a href="#L369"> 369</a>     if check:</span>
+<span class="line" id="L370"><a href="#L370"> 370</a>         # 独立核对: 经 0903 地图各自定位的 (俯视图 3 级, 前摄沿路有依据) 给出的&quot;相对位置&quot;当参照</span>
+<span class="line" id="L371"><a href="#L371"> 371</a>         Z = np.load(WORK + &quot;/r24_pose.npz&quot;, allow_pickle=True); F = np.load(WORK + &quot;/f24_pose.npz&quot;, allow_pickle=True)</span>
+<span class="line" id="L372"><a href="#L372"> 372</a>         tp0 = T.predict(np.c_[pri, psi0][node], rig)</span>
+<span class="line" id="L373"><a href="#L373"> 373</a>         rows_ = []</span>
+<span class="line" id="L374"><a href="#L374"> 374</a>         for k in np.flatnonzero(Z[&quot;cls&quot;] == 3):</span>
+<span class="line" id="L375"><a href="#L375"> 375</a>             j1 = min(n - 1, int(np.searchsorted(G[&quot;ts&quot;], tsr[k])))</span>
+<span class="line" id="L376"><a href="#L376"> 376</a>             for j in range(j1, max(-1, j1 - 12), -1):</span>
+<span class="line" id="L377"><a href="#L377"> 377</a>                 if G[&quot;ts&quot;][j] &gt;= tsr[k] or seg[j] != seg[node[k]] or F[&quot;cls&quot;][j] &lt; 2 or not np.isfinite(F[&quot;psi&quot;][j]): continue</span>
+<span class="line" id="L378"><a href="#L378"> 378</a>                 b = to_local(Z[&quot;pose&quot;][k, :2], F[&quot;Pc&quot;][j], F[&quot;psi&quot;][j])[0]</span>
+<span class="line" id="L379"><a href="#L379"> 379</a>                 if not (5.5 &lt;= b[1] &lt;= 25): continue</span>
+<span class="line" id="L380"><a href="#L380"> 380</a>                 a0 = to_local(tp0[k, :2], pri[j], psi0[j])[0]; a1 = to_local(tile[k, :2], X[j, :2], X[j, 2])[0]</span>
+<span class="line" id="L381"><a href="#L381"> 381</a>                 rows_.append((k, j, b[1], a0[0] - b[0], a0[1] - b[1], a1[0] - b[0], a1[1] - b[1], q[k]))</span>
+<span class="line" id="L382"><a href="#L382"> 382</a>         C = np.array(rows_)</span>
+<span class="line" id="L383"><a href="#L383"> 383</a>         print(&quot;独立核对 (%d 对; 参照 = 两边经 0903 地图各自定出的相对位置):&quot; % len(C))</span>
+<span class="line" id="L384"><a href="#L384"> 384</a>         for nm, m in ((&quot;全部&quot;, np.ones(len(C), bool)), (&quot;俯视图自己有图像配准&quot;, C[:, 7] &gt;= 2), (&quot;俯视图由轨迹推得&quot;, C[:, 7] == 1), (&quot;俯视图只有定位&quot;, C[:, 7] == 0)):</span>
+<span class="line" id="L385"><a href="#L385"> 385</a>             if m.sum() &lt; 10: continue</span>
+<span class="line" id="L386"><a href="#L386"> 386</a>             print(&quot;   %-12s %4d 对: 只用定位 横向差 |.| 中位 %.3f (p90 %.3f), 沿路 %.3f (p90 %.3f)  -&gt;  解算后 横向 %.3f (p90 %.3f), 沿路 %.3f (p90 %.3f)&quot;</span>
+<span class="line" id="L387"><a href="#L387"> 387</a>                   % (nm, m.sum(), np.median(np.abs(C[m, 3])), np.percentile(np.abs(C[m, 3]), 90), np.median(np.abs(C[m, 4])), np.percentile(np.abs(C[m, 4]), 90),</span>
+<span class="line" id="L388"><a href="#L388"> 388</a>                      np.median(np.abs(C[m, 5])), np.percentile(np.abs(C[m, 5]), 90), np.median(np.abs(C[m, 6])), np.percentile(np.abs(C[m, 6]), 90)))</span></pre></html>

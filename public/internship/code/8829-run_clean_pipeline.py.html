@@ -1,0 +1,168 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>run_clean_pipeline.py</title><style>body{margin:24px;font:15px system-ui;background:#faf8f3;color:#243342}pre{overflow:auto;line-height:1.6;background:white;padding:16px}.line{display:block}.line:target{background:#fff1a8}a{color:#58728a}header{overflow-wrap:anywhere}</style><header><a href="/notes/series/internship/">返回实习专栏</a><h1>run_clean_pipeline.py</h1><p>只读快照：2026-11-09 · /home/yjl/crack/snap1012/build/run_clean_pipeline.py</p><p>SHA-256: 9f9edc1a7a8ba89776b0f9cf2dfa069bc5e8166c6fba8cfaa87206580b2473e3</p></header><pre><span class="line" id="L1"><a href="#L1">   1</a> &quot;&quot;&quot;Isolated full-route rerun: cleaning -&gt; fresh geometry -&gt; optimization -&gt; tiles.</span>
+<span class="line" id="L2"><a href="#L2">   2</a> </span>
+<span class="line" id="L3"><a href="#L3">   3</a> Requires --run-root to contain a frozen copy of build/. Never modifies the source</span>
+<span class="line" id="L4"><a href="#L4">   4</a> CSV, images, old geometry, or the live 8829 site. Resume only within the same run.</span>
+<span class="line" id="L5"><a href="#L5">   5</a> &quot;&quot;&quot;</span>
+<span class="line" id="L6"><a href="#L6">   6</a> import argparse</span>
+<span class="line" id="L7"><a href="#L7">   7</a> from concurrent.futures import ThreadPoolExecutor</span>
+<span class="line" id="L8"><a href="#L8">   8</a> import hashlib</span>
+<span class="line" id="L9"><a href="#L9">   9</a> import json</span>
+<span class="line" id="L10"><a href="#L10">  10</a> import os</span>
+<span class="line" id="L11"><a href="#L11">  11</a> from pathlib import Path</span>
+<span class="line" id="L12"><a href="#L12">  12</a> import shutil</span>
+<span class="line" id="L13"><a href="#L13">  13</a> import subprocess</span>
+<span class="line" id="L14"><a href="#L14">  14</a> import threading</span>
+<span class="line" id="L15"><a href="#L15">  15</a> import time</span>
+<span class="line" id="L16"><a href="#L16">  16</a> </span>
+<span class="line" id="L17"><a href="#L17">  17</a> import numpy as np</span>
+<span class="line" id="L18"><a href="#L18">  18</a> </span>
+<span class="line" id="L19"><a href="#L19">  19</a> from clean_common import source_hash, write_json</span>
+<span class="line" id="L20"><a href="#L20">  20</a> </span>
+<span class="line" id="L21"><a href="#L21">  21</a> </span>
+<span class="line" id="L22"><a href="#L22">  22</a> def main():</span>
+<span class="line" id="L23"><a href="#L23">  23</a>     ap = argparse.ArgumentParser(description=__doc__)</span>
+<span class="line" id="L24"><a href="#L24">  24</a>     ap.add_argument(&#x27;--source-root&#x27;, default=&#x27;/home/yjl/crack/snap1012&#x27;)</span>
+<span class="line" id="L25"><a href="#L25">  25</a>     ap.add_argument(&#x27;--csv&#x27;, default=&#x27;/home/yjl/data/1012-new/paoche2.csv&#x27;)</span>
+<span class="line" id="L26"><a href="#L26">  26</a>     ap.add_argument(&#x27;--run-root&#x27;, required=True)</span>
+<span class="line" id="L27"><a href="#L27">  27</a>     ap.add_argument(&#x27;--gpus&#x27;, nargs=&#x27;+&#x27;, required=True, help=&#x27;Explicit GPU UUIDs&#x27;)</span>
+<span class="line" id="L28"><a href="#L28">  28</a>     ap.add_argument(&#x27;--cpu-workers&#x27;, type=int, default=8)</span>
+<span class="line" id="L29"><a href="#L29">  29</a>     args = ap.parse_args()</span>
+<span class="line" id="L30"><a href="#L30">  30</a>     root = Path(args.run_root).resolve(); source = Path(args.source_root).resolve()</span>
+<span class="line" id="L31"><a href="#L31">  31</a>     build = root / &#x27;build&#x27;; work = root / &#x27;work&#x27;; logs = root / &#x27;logs&#x27;</span>
+<span class="line" id="L32"><a href="#L32">  32</a>     if root == source or source in root.parents or build.resolve() != Path(__file__).parent.resolve():</span>
+<span class="line" id="L33"><a href="#L33">  33</a>         raise ValueError(&#x27;Run the frozen build copy in an independent run root&#x27;)</span>
+<span class="line" id="L34"><a href="#L34">  34</a>     if not args.gpus or any(not g.startswith(&#x27;GPU-&#x27;) for g in args.gpus):</span>
+<span class="line" id="L35"><a href="#L35">  35</a>         raise ValueError(&#x27;Use GPU UUIDs, not numeric device indices&#x27;)</span>
+<span class="line" id="L36"><a href="#L36">  36</a>     if shutil.disk_usage(root).free &lt; 15 * 1024**3:</span>
+<span class="line" id="L37"><a href="#L37">  37</a>         raise RuntimeError(&#x27;Need at least 15 GiB free output space&#x27;)</span>
+<span class="line" id="L38"><a href="#L38">  38</a>     # Prevent two drivers from writing the same run.</span>
+<span class="line" id="L39"><a href="#L39">  39</a>     import fcntl</span>
+<span class="line" id="L40"><a href="#L40">  40</a>     lockfile = open(root / &#x27;driver.lock&#x27;, &#x27;a&#x27;)</span>
+<span class="line" id="L41"><a href="#L41">  41</a>     fcntl.flock(lockfile, fcntl.LOCK_EX | fcntl.LOCK_NB)</span>
+<span class="line" id="L42"><a href="#L42">  42</a>     logs.mkdir(exist_ok=True); (work / &#x27;line&#x27;).mkdir(parents=True, exist_ok=True)</span>
+<span class="line" id="L43"><a href="#L43">  43</a>     pg = &#x27;/home/yjl/3dgs/.venvs/geometry/bin/python&#x27;</span>
+<span class="line" id="L44"><a href="#L44">  44</a>     pt = &#x27;/home/yjl/crack/along_track/.venv/bin/python&#x27;</span>
+<span class="line" id="L45"><a href="#L45">  45</a>     ps = &#x27;/home/yjl/3dgs/.venvs/perception/bin/python&#x27;</span>
+<span class="line" id="L46"><a href="#L46">  46</a>     env = dict(os.environ, SNAP_ROOT=str(root), SNAP_WORK=str(work), SNAP_DATA=str(source / &#x27;data&#x27;),</span>
+<span class="line" id="L47"><a href="#L47">  47</a>                SNAP_CSV=args.csv, SNAP_CLEAN_DIR=str(root / &#x27;clean&#x27;), SNAP_CPU_WORKERS=str(args.cpu_workers),</span>
+<span class="line" id="L48"><a href="#L48">  48</a>                OMP_NUM_THREADS=&#x27;1&#x27;, OPENBLAS_NUM_THREADS=&#x27;1&#x27;, MKL_NUM_THREADS=&#x27;1&#x27;, PYTHONUNBUFFERED=&#x27;1&#x27;,</span>
+<span class="line" id="L49"><a href="#L49">  49</a>                CUDA_DEVICE_ORDER=&#x27;PCI_BUS_ID&#x27;, TMPDIR=str(root / &#x27;tmp&#x27;))</span>
+<span class="line" id="L50"><a href="#L50">  50</a>     (root / &#x27;tmp&#x27;).mkdir(exist_ok=True)</span>
+<span class="line" id="L51"><a href="#L51">  51</a>     freeze = dict(csv_sha256=source_hash(args.csv), code={p.name: source_hash(p) for p in sorted(build.glob(&#x27;*.py&#x27;))},</span>
+<span class="line" id="L52"><a href="#L52">  52</a>                   arguments=vars(args))</span>
+<span class="line" id="L53"><a href="#L53">  53</a>     frozen_file = root / &#x27;run_manifest.json&#x27;</span>
+<span class="line" id="L54"><a href="#L54">  54</a>     if frozen_file.exists() and json.loads(frozen_file.read_text()) != freeze:</span>
+<span class="line" id="L55"><a href="#L55">  55</a>         raise RuntimeError(&#x27;Run inputs/code changed: choose a new run root to avoid mixed caches&#x27;)</span>
+<span class="line" id="L56"><a href="#L56">  56</a>     write_json(frozen_file, freeze)</span>
+<span class="line" id="L57"><a href="#L57">  57</a>     status = dict(state=&#x27;running&#x27;, pid=os.getpid(), started=time.strftime(&#x27;%FT%T%z&#x27;), stages={}, segments={})</span>
+<span class="line" id="L58"><a href="#L58">  58</a>     mutex = threading.Lock(); gpu_locks = [threading.Lock() for _ in args.gpus]</span>
+<span class="line" id="L59"><a href="#L59">  59</a> </span>
+<span class="line" id="L60"><a href="#L60">  60</a>     def update(group, key, value):</span>
+<span class="line" id="L61"><a href="#L61">  61</a>         with mutex:</span>
+<span class="line" id="L62"><a href="#L62">  62</a>             status[group][key] = value</span>
+<span class="line" id="L63"><a href="#L63">  63</a>             status[&#x27;updated&#x27;] = time.strftime(&#x27;%FT%T%z&#x27;)</span>
+<span class="line" id="L64"><a href="#L64">  64</a>             write_json(root / &#x27;status.json&#x27;, status)</span>
+<span class="line" id="L65"><a href="#L65">  65</a> </span>
+<span class="line" id="L66"><a href="#L66">  66</a>     def step(key, interpreter, script, argv, gpu=None, output=None):</span>
+<span class="line" id="L67"><a href="#L67">  67</a>         command = [interpreter, str(build / script), *map(str, argv)]</span>
+<span class="line" id="L68"><a href="#L68">  68</a>         done = logs / (key + &#x27;.done.json&#x27;)</span>
+<span class="line" id="L69"><a href="#L69">  69</a>         if done.exists():</span>
+<span class="line" id="L70"><a href="#L70">  70</a>             previous = json.loads(done.read_text())</span>
+<span class="line" id="L71"><a href="#L71">  71</a>             if previous[&#x27;command&#x27;] == command and (output is None or Path(output).exists()):</span>
+<span class="line" id="L72"><a href="#L72">  72</a>                 update(&#x27;stages&#x27;, key, dict(state=&#x27;complete&#x27;, resumed=True)); return</span>
+<span class="line" id="L73"><a href="#L73">  73</a>         update(&#x27;stages&#x27;, key, dict(state=&#x27;running&#x27;, log=str(logs / (key + &#x27;.log&#x27;))))</span>
+<span class="line" id="L74"><a href="#L74">  74</a>         start = time.time(); process_env = env.copy()</span>
+<span class="line" id="L75"><a href="#L75">  75</a>         if gpu is not None:</span>
+<span class="line" id="L76"><a href="#L76">  76</a>             process_env[&#x27;CUDA_VISIBLE_DEVICES&#x27;] = gpu</span>
+<span class="line" id="L77"><a href="#L77">  77</a>         with open(logs / (key + &#x27;.log&#x27;), &#x27;w&#x27;) as log:</span>
+<span class="line" id="L78"><a href="#L78">  78</a>             result = subprocess.run(command, env=process_env, cwd=str(root), stdout=log, stderr=subprocess.STDOUT)</span>
+<span class="line" id="L79"><a href="#L79">  79</a>         if result.returncode or (output is not None and not Path(output).exists()):</span>
+<span class="line" id="L80"><a href="#L80">  80</a>             update(&#x27;stages&#x27;, key, dict(state=&#x27;failed&#x27;, returncode=result.returncode))</span>
+<span class="line" id="L81"><a href="#L81">  81</a>             raise RuntimeError(f&#x27;{key} failed; inspect {logs / (key + &quot;.log&quot;)}&#x27;)</span>
+<span class="line" id="L82"><a href="#L82">  82</a>         record = dict(command=command, seconds=round(time.time()-start, 2), state=&#x27;complete&#x27;)</span>
+<span class="line" id="L83"><a href="#L83">  83</a>         write_json(done, record); update(&#x27;stages&#x27;, key, record)</span>
+<span class="line" id="L84"><a href="#L84">  84</a> </span>
+<span class="line" id="L85"><a href="#L85">  85</a>     try:</span>
+<span class="line" id="L86"><a href="#L86">  86</a>         if not (root / &#x27;clean/input_summary.json&#x27;).exists():</span>
+<span class="line" id="L87"><a href="#L87">  87</a>             step(&#x27;prepare&#x27;, pg, &#x27;prepare_clean_inputs.py&#x27;, [&#x27;--source-root&#x27;, source, &#x27;--run-root&#x27;, root, &#x27;--csv&#x27;, args.csv],</span>
+<span class="line" id="L88"><a href="#L88">  88</a>                  output=root / &#x27;clean/input_summary.json&#x27;)</span>
+<span class="line" id="L89"><a href="#L89">  89</a>         # Stale values are a retained hypothesis, explicitly recorded in input_summary.</span>
+<span class="line" id="L90"><a href="#L90">  90</a>         st = root / &#x27;research/out/r02c_stale.npy&#x27;; st.parent.mkdir(parents=True, exist_ok=True)</span>
+<span class="line" id="L91"><a href="#L91">  91</a>         if not st.exists():</span>
+<span class="line" id="L92"><a href="#L92">  92</a>             shutil.copy2(source / &#x27;research/out/r02c_stale.npy&#x27;, st)</span>
+<span class="line" id="L93"><a href="#L93">  93</a>         chunks_file = work / &#x27;line/chunks.txt&#x27;</span>
+<span class="line" id="L94"><a href="#L94">  94</a>         if not chunks_file.exists():</span>
+<span class="line" id="L95"><a href="#L95">  95</a>             shutil.copy2(source / &#x27;work/line/chunks.txt&#x27;, chunks_file)</span>
+<span class="line" id="L96"><a href="#L96">  96</a>         chunks = [line.split() for line in chunks_file.read_text().splitlines() if line.strip()]</span>
+<span class="line" id="L97"><a href="#L97">  97</a>         if len(chunks) != 24:</span>
+<span class="line" id="L98"><a href="#L98">  98</a>             raise RuntimeError(&#x27;Expected the complete 24-segment route&#x27;)</span>
+<span class="line" id="L99"><a href="#L99">  99</a> </span>
+<span class="line" id="L100"><a href="#L100"> 100</a>         def segment_masks():</span>
+<span class="line" id="L101"><a href="#L101"> 101</a>             missing = root / &#x27;clean/missing_seg_rows.txt&#x27;</span>
+<span class="line" id="L102"><a href="#L102"> 102</a>             if missing.read_text().strip():</span>
+<span class="line" id="L103"><a href="#L103"> 103</a>                 with gpu_locks[-1]:</span>
+<span class="line" id="L104"><a href="#L104"> 104</a>                     step(&#x27;seg_missing&#x27;, ps, &#x27;p06_seg.py&#x27;, [missing, work / &#x27;seg&#x27;], gpu=args.gpus[-1])</span>
+<span class="line" id="L105"><a href="#L105"> 105</a> </span>
+<span class="line" id="L106"><a href="#L106"> 106</a>         render_args = [&#x27;--bands&#x27;, 2, &#x27;--lowpow&#x27;, 1, &#x27;--low_rear&#x27;, .15, &#x27;--seam&#x27;, &#x27;--feather_m&#x27;, 1.0,</span>
+<span class="line" id="L107"><a href="#L107"> 107</a>                        &#x27;--margin_px&#x27;, 100, &#x27;--low_nomarks&#x27;, 18]</span>
+<span class="line" id="L108"><a href="#L108"> 108</a>         with ThreadPoolExecutor(max_workers=2) as auxiliaries:</span>
+<span class="line" id="L109"><a href="#L109"> 109</a>             segmentation = auxiliaries.submit(segment_masks)</span>
+<span class="line" id="L110"><a href="#L110"> 110</a>             motion = auxiliaries.submit(step, &#x27;q02_front&#x27;, pg, &#x27;q02_twoview.py&#x27;, [&#x27;front&#x27;], None, work / &#x27;q02_front.npz&#x27;)</span>
+<span class="line" id="L111"><a href="#L111"> 111</a> </span>
+<span class="line" id="L112"><a href="#L112"> 112</a>             def reconstruct(chunk, worker):</span>
+<span class="line" id="L113"><a href="#L113"> 113</a>                 tag, lo, hi = chunk; lo, hi = int(lo), int(hi); out = work / tag</span>
+<span class="line" id="L114"><a href="#L114"> 114</a>                 update(&#x27;segments&#x27;, tag, dict(state=&#x27;sfm&#x27;, rows=[lo, hi]))</span>
+<span class="line" id="L115"><a href="#L115"> 115</a>                 step(&#x27;p02_&#x27; + tag, pg, &#x27;p02_sfm.py&#x27;, [&#x27;--rows&#x27;, lo, hi, &#x27;--tag&#x27;, tag, &#x27;--only&#x27;, &#x27;front&#x27;, &#x27;--noprior&#x27;], output=out / &#x27;frames.json&#x27;)</span>
+<span class="line" id="L116"><a href="#L116"> 116</a>                 step(&#x27;p19_&#x27; + tag, pg, &#x27;p19_galign.py&#x27;, [tag], output=out / &#x27;gal_poses.npz&#x27;)</span>
+<span class="line" id="L117"><a href="#L117"> 117</a>                 gal = np.load(out / &#x27;gal_poses.npz&#x27;); count = len(gal[&#x27;names&#x27;]); gal.close()</span>
+<span class="line" id="L118"><a href="#L118"> 118</a>                 frames = json.loads((out / &#x27;frames.json&#x27;).read_text())[&#x27;frames&#x27;]</span>
+<span class="line" id="L119"><a href="#L119"> 119</a>                 model = &#x27;gal&#x27;</span>
+<span class="line" id="L120"><a href="#L120"> 120</a>                 if count &lt; max(12, .5 * len(frames)):</span>
+<span class="line" id="L121"><a href="#L121"> 121</a>                     motion.result()</span>
+<span class="line" id="L122"><a href="#L122"> 122</a>                     step(&#x27;p18_&#x27; + tag, pg, &#x27;p18_gpsvo.py&#x27;, [tag, lo, hi], output=out / &#x27;aligned_poses.npz&#x27;)</span>
+<span class="line" id="L123"><a href="#L123"> 123</a>                     model = &#x27;aligned&#x27;</span>
+<span class="line" id="L124"><a href="#L124"> 124</a>                 segmentation.result()</span>
+<span class="line" id="L125"><a href="#L125"> 125</a>                 update(&#x27;segments&#x27;, tag, dict(state=&#x27;rear_registration&#x27;, model=model, sfm_registered=count, source_fronts=len(frames)))</span>
+<span class="line" id="L126"><a href="#L126"> 126</a>                 step(&#x27;p05_&#x27; + tag, pg, &#x27;p05_ortho.py&#x27;, [tag, &#x27;--model&#x27;, model, &#x27;--name&#x27;, &#x27;v2f&#x27;, &#x27;--cams&#x27;, &#x27;front&#x27;, &#x27;--seg&#x27;, work / &#x27;seg&#x27;, &#x27;--pow&#x27;, 8, &#x27;--frange&#x27;, &#x27;4.5,14&#x27;], output=out / &#x27;ortho_v2f/index.json&#x27;)</span>
+<span class="line" id="L127"><a href="#L127"> 127</a>                 step(&#x27;p09_&#x27; + tag, pg, &#x27;p09_rearreg.py&#x27;, [tag, &#x27;v2f&#x27;, model], output=out / &#x27;rear_shift.npz&#x27;)</span>
+<span class="line" id="L128"><a href="#L128"> 128</a>                 with gpu_locks[worker]:</span>
+<span class="line" id="L129"><a href="#L129"> 129</a>                     update(&#x27;segments&#x27;, tag, dict(state=&#x27;joint_optimization&#x27;, model=model))</span>
+<span class="line" id="L130"><a href="#L130"> 130</a>                     step(&#x27;p13_&#x27; + tag, pt, &#x27;p13_joint.py&#x27;, [tag, &#x27;NS&#x27;, &#x27;--model&#x27;, model, &#x27;--iters&#x27;, 16, &#x27;--hres&#x27;, 2.0,</span>
+<span class="line" id="L131"><a href="#L131"> 131</a>                          &#x27;--no_height&#x27;, &#x27;--zbase&#x27;, &#x27;contact&#x27;, &#x27;--zb_prior&#x27;, &#x27;roll&#x27;, &#x27;--zb_ridge&#x27;, 4,</span>
+<span class="line" id="L132"><a href="#L132"> 132</a>                          &#x27;--nonrigid&#x27;, &#x27;6x4&#x27;, &#x27;--lam_nr&#x27;, .3], gpu=args.gpus[worker], output=out / &#x27;joint_NS.npz&#x27;)</span>
+<span class="line" id="L133"><a href="#L133"> 133</a>                     step(&#x27;p14_&#x27; + tag, pt, &#x27;p14_render.py&#x27;, [tag, &#x27;NS&#x27;, &#x27;v7&#x27;, *render_args], gpu=args.gpus[worker], output=out / &#x27;ortho_v7/index.json&#x27;)</span>
+<span class="line" id="L134"><a href="#L134"> 134</a>                 update(&#x27;segments&#x27;, tag, dict(state=&#x27;reconstructed&#x27;, model=model, sfm_registered=count, source_fronts=len(frames)))</span>
+<span class="line" id="L135"><a href="#L135"> 135</a> </span>
+<span class="line" id="L136"><a href="#L136"> 136</a>             def worker_loop(worker):</span>
+<span class="line" id="L137"><a href="#L137"> 137</a>                 for chunk in chunks[worker::len(args.gpus)]:</span>
+<span class="line" id="L138"><a href="#L138"> 138</a>                     reconstruct(chunk, worker)</span>
+<span class="line" id="L139"><a href="#L139"> 139</a> </span>
+<span class="line" id="L140"><a href="#L140"> 140</a>             with ThreadPoolExecutor(max_workers=len(args.gpus)) as workers:</span>
+<span class="line" id="L141"><a href="#L141"> 141</a>                 futures = [workers.submit(worker_loop, i) for i in range(len(args.gpus))]</span>
+<span class="line" id="L142"><a href="#L142"> 142</a>                 for future in futures:</span>
+<span class="line" id="L143"><a href="#L143"> 143</a>                     future.result()</span>
+<span class="line" id="L144"><a href="#L144"> 144</a>             motion.result(); segmentation.result()</span>
+<span class="line" id="L145"><a href="#L145"> 145</a> </span>
+<span class="line" id="L146"><a href="#L146"> 146</a>         xf = work / &#x27;line/chunkfix_NS.json&#x27;</span>
+<span class="line" id="L147"><a href="#L147"> 147</a>         step(&#x27;p20&#x27;, pg, &#x27;p20_chunkfix.py&#x27;, [chunks_file, &#x27;NS&#x27;, &#x27;--mode&#x27;, &#x27;lin&#x27;], output=xf)</span>
+<span class="line" id="L148"><a href="#L148"> 148</a> </span>
+<span class="line" id="L149"><a href="#L149"> 149</a>         def final_worker(worker):</span>
+<span class="line" id="L150"><a href="#L150"> 150</a>             for tag, lo, hi in chunks[worker::len(args.gpus)]:</span>
+<span class="line" id="L151"><a href="#L151"> 151</a>                 step(&#x27;p14x_&#x27; + tag, pt, &#x27;p14_render.py&#x27;, [tag, &#x27;NS&#x27;, &#x27;v7x&#x27;, *render_args, &#x27;--xform&#x27;, xf],</span>
+<span class="line" id="L152"><a href="#L152"> 152</a>                      gpu=args.gpus[worker], output=work / tag / &#x27;ortho_v7x/index.json&#x27;)</span>
+<span class="line" id="L153"><a href="#L153"> 153</a>         with ThreadPoolExecutor(max_workers=len(args.gpus)) as workers:</span>
+<span class="line" id="L154"><a href="#L154"> 154</a>             for result in workers.map(final_worker, range(len(args.gpus))):</span>
+<span class="line" id="L155"><a href="#L155"> 155</a>                 pass</span>
+<span class="line" id="L156"><a href="#L156"> 156</a>         step(&#x27;p17&#x27;, pg, &#x27;p17_merge.py&#x27;, [&#x27;v7x&#x27;, &#x27;NS&#x27;, chunks_file, &#x27;line&#x27;, xf], output=work / &#x27;line/ortho_v7x/index.json&#x27;)</span>
+<span class="line" id="L157"><a href="#L157"> 157</a>         step(&#x27;p11&#x27;, pg, &#x27;p11_line.py&#x27;, [&#x27;v7x&#x27;, &#x27;NS&#x27;, chunks_file, xf], output=root / &#x27;site/index.json&#x27;)</span>
+<span class="line" id="L158"><a href="#L158"> 158</a>         step(&#x27;verify&#x27;, pg, &#x27;verify_clean_run.py&#x27;, [&#x27;--run-root&#x27;, root, &#x27;--csv&#x27;, args.csv], output=root / &#x27;verification.json&#x27;)</span>
+<span class="line" id="L159"><a href="#L159"> 159</a>         status[&#x27;state&#x27;] = &#x27;complete&#x27;</span>
+<span class="line" id="L160"><a href="#L160"> 160</a>     except BaseException as exc:</span>
+<span class="line" id="L161"><a href="#L161"> 161</a>         status[&#x27;state&#x27;] = &#x27;failed&#x27;; status[&#x27;error&#x27;] = repr(exc)</span>
+<span class="line" id="L162"><a href="#L162"> 162</a>         raise</span>
+<span class="line" id="L163"><a href="#L163"> 163</a>     finally:</span>
+<span class="line" id="L164"><a href="#L164"> 164</a>         status[&#x27;updated&#x27;] = time.strftime(&#x27;%FT%T%z&#x27;); write_json(root / &#x27;status.json&#x27;, status)</span>
+<span class="line" id="L165"><a href="#L165"> 165</a> </span>
+<span class="line" id="L166"><a href="#L166"> 166</a> </span>
+<span class="line" id="L167"><a href="#L167"> 167</a> if __name__ == &#x27;__main__&#x27;:</span>
+<span class="line" id="L168"><a href="#L168"> 168</a>     main()</span></pre></html>

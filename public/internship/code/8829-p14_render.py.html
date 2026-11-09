@@ -1,0 +1,425 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>p14_render.py</title><style>body{margin:24px;font:15px system-ui;background:#faf8f3;color:#243342}pre{overflow:auto;line-height:1.6;background:white;padding:16px}.line{display:block}.line:target{background:#fff1a8}a{color:#58728a}header{overflow-wrap:anywhere}</style><header><a href="/notes/series/internship/">返回实习专栏</a><h1>p14_render.py</h1><p>只读快照：2026-11-09 · /home/yjl/crack/snap1012/build/p14_render.py</p><p>SHA-256: b09198ddfae4bb792bcc07debf1ba62cbe5a816ebb74c86f4bb710411803e41d</p></header><pre><span class="line" id="L1"><a href="#L1">   1</a> # -*- coding: utf-8 -*-</span>
+<span class="line" id="L2"><a href="#L2">   2</a> &quot;&quot;&quot;P14 用联合优化（p13）的参数出 2 cm 正射瓦片（格式同 p05 / 8828 ortho2）。</span>
+<span class="line" id="L3"><a href="#L3">   3</a> 每块 20 m：格点高度取优化后的高度场；每张照片投影取色（原图、不模糊），按 (I − 10·b)/(a·V·exp(s·S)) 还原到统一亮度</span>
+<span class="line" id="L4"><a href="#L4">   4</a> （S = 后摄本车影子软掩膜，s = 该张影子增益 → 影子区提亮还原）；权重 = (3/d)^POW × 掩膜边缘羽化；加权平均。</span>
+<span class="line" id="L5"><a href="#L5">   5</a> 输出 work/&lt;tag&gt;/ortho_&lt;out&gt;/{gx}_{gn}.png、index.json。</span>
+<span class="line" id="L6"><a href="#L6">   6</a> 用法: CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=2 ~/crack/along_track/.venv/bin/python p14_render.py &lt;tag&gt; &lt;joint_name&gt; &lt;out_name&gt; [--pow 6] [--no_shadow_fill]</span>
+<span class="line" id="L7"><a href="#L7">   7</a> &quot;&quot;&quot;</span>
+<span class="line" id="L8"><a href="#L8">   8</a> import argparse</span>
+<span class="line" id="L9"><a href="#L9">   9</a> import json</span>
+<span class="line" id="L10"><a href="#L10">  10</a> import math</span>
+<span class="line" id="L11"><a href="#L11">  11</a> import os</span>
+<span class="line" id="L12"><a href="#L12">  12</a> import sys</span>
+<span class="line" id="L13"><a href="#L13">  13</a> import time</span>
+<span class="line" id="L14"><a href="#L14">  14</a> </span>
+<span class="line" id="L15"><a href="#L15">  15</a> import cv2</span>
+<span class="line" id="L16"><a href="#L16">  16</a> import numpy as np</span>
+<span class="line" id="L17"><a href="#L17">  17</a> import torch</span>
+<span class="line" id="L18"><a href="#L18">  18</a> import torch.nn.functional as Fnn</span>
+<span class="line" id="L19"><a href="#L19">  19</a> from scipy.spatial import cKDTree</span>
+<span class="line" id="L20"><a href="#L20">  20</a> </span>
+<span class="line" id="L21"><a href="#L21">  21</a> sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))</span>
+<span class="line" id="L22"><a href="#L22">  22</a> from sn_common import *  # noqa</span>
+<span class="line" id="L23"><a href="#L23">  23</a> </span>
+<span class="line" id="L24"><a href="#L24">  24</a> try:</span>
+<span class="line" id="L25"><a href="#L25">  25</a>     import maxflow   # PyMaxflow，装在 third_party/pylib（--seam 用）</span>
+<span class="line" id="L26"><a href="#L26">  26</a> except ImportError:</span>
+<span class="line" id="L27"><a href="#L27">  27</a>     sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), &quot;third_party&quot;, &quot;pylib&quot;))</span>
+<span class="line" id="L28"><a href="#L28">  28</a>     try:</span>
+<span class="line" id="L29"><a href="#L29">  29</a>         import maxflow</span>
+<span class="line" id="L30"><a href="#L30">  30</a>     except ImportError:</span>
+<span class="line" id="L31"><a href="#L31">  31</a>         maxflow = None</span>
+<span class="line" id="L32"><a href="#L32">  32</a> </span>
+<span class="line" id="L33"><a href="#L33">  33</a> ap = argparse.ArgumentParser()</span>
+<span class="line" id="L34"><a href="#L34">  34</a> ap.add_argument(&quot;tag&quot;); ap.add_argument(&quot;joint&quot;); ap.add_argument(&quot;out&quot;)</span>
+<span class="line" id="L35"><a href="#L35">  35</a> ap.add_argument(&quot;--pow&quot;, type=float, default=6.0)</span>
+<span class="line" id="L36"><a href="#L36">  36</a> ap.add_argument(&quot;--frange&quot;, default=&quot;4.5,14&quot;); ap.add_argument(&quot;--rrange&quot;, default=&quot;1.2,10&quot;); ap.add_argument(&quot;--latcam&quot;, default=&quot;7,5&quot;)</span>
+<span class="line" id="L37"><a href="#L37">  37</a> ap.add_argument(&quot;--lat&quot;, type=float, default=9.0)</span>
+<span class="line" id="L38"><a href="#L38">  38</a> ap.add_argument(&quot;--no_shadow_fill&quot;, action=&quot;store_true&quot;, help=&quot;不用影子区（影子区像素权重置 0）&quot;)</span>
+<span class="line" id="L39"><a href="#L39">  39</a> ap.add_argument(&quot;--tiles&quot;, default=&quot;&quot;)</span>
+<span class="line" id="L40"><a href="#L40">  40</a> ap.add_argument(&quot;--bands&quot;, type=int, default=1, help=&quot;2 = 两频段融合：低频用 (3/d)^LOWPOW 宽权重，高频用 (3/d)^POW 陡权重&quot;)</span>
+<span class="line" id="L41"><a href="#L41">  41</a> ap.add_argument(&quot;--lowpow&quot;, type=float, default=2.0)</span>
+<span class="line" id="L42"><a href="#L42">  42</a> ap.add_argument(&quot;--sigma&quot;, type=float, default=8.0, help=&quot;两频段分界（像素，2 cm/像素）&quot;)</span>
+<span class="line" id="L43"><a href="#L43">  43</a> ap.add_argument(&quot;--low_shadow&quot;, type=float, default=0.02, help=&quot;两频段时影子区像素在低频里的权重系数&quot;)</span>
+<span class="line" id="L44"><a href="#L44">  44</a> ap.add_argument(&quot;--low_rear&quot;, type=float, default=0.5, help=&quot;两频段时后摄在低频里的权重系数&quot;)</span>
+<span class="line" id="L45"><a href="#L45">  45</a> ap.add_argument(&quot;--cams&quot;, default=&quot;front,rear&quot;, help=&quot;用哪路相机&quot;)</span>
+<span class="line" id="L46"><a href="#L46">  46</a> ap.add_argument(&quot;--exclude_json&quot;, default=&quot;&quot;, help=&quot;json 里的 bad_rear 列表：这些后摄不参与融合（前后摄错位过大）&quot;)</span>
+<span class="line" id="L47"><a href="#L47">  47</a> ap.add_argument(&quot;--robust_px&quot;, type=float, default=25.0, help=&quot;稳健融合时算偏差用的平滑尺度（像素，2 cm/px）&quot;)</span>
+<span class="line" id="L48"><a href="#L48">  48</a> ap.add_argument(&quot;--only_rows&quot;, default=&quot;&quot;, help=&quot;只用这些 CSV 行（逗号分隔），调试单张投影用&quot;)</span>
+<span class="line" id="L49"><a href="#L49">  49</a> ap.add_argument(&quot;--ipm&quot;, action=&quot;store_true&quot;, help=&quot;调试：每张照片投到它自己的车体平面（不用优化后的高度场）&quot;)</span>
+<span class="line" id="L50"><a href="#L50">  50</a> ap.add_argument(&quot;--no_nrg&quot;, action=&quot;store_true&quot;, help=&quot;调试：不用每张照片的画面形变&quot;)</span>
+<span class="line" id="L51"><a href="#L51">  51</a> ap.add_argument(&quot;--feather_m&quot;, type=float, default=0.0, help=&quot;&gt;0：地面上距离上下限、横向上限处的权重渐变宽度（m），去掉取用范围硬截断造成的梯形明暗边&quot;)</span>
+<span class="line" id="L52"><a href="#L52">  52</a> ap.add_argument(&quot;--seam&quot;, action=&quot;store_true&quot;, help=&quot;两频段时高频不混合：4 cm 网格上 α 扩展图割给每处挑一张照片（数据项 = 清晰度，接缝代价 = 两张高频之差），2 cm 上羽化&quot;)</span>
+<span class="line" id="L53"><a href="#L53">  53</a> ap.add_argument(&quot;--margin_px&quot;, type=int, default=0, help=&quot;每块四周多算的像素（偶数）：图割和模糊在块边不再各自为政，输出时裁回 1000×1000&quot;)</span>
+<span class="line" id="L54"><a href="#L54">  54</a> ap.add_argument(&quot;--seam_shadow&quot;, type=float, default=0.0, help=&quot;图割数据项：后摄本车影子区的额外代价（乘软影子掩膜，灰度单位）&quot;)</span>
+<span class="line" id="L55"><a href="#L55">  55</a> ap.add_argument(&quot;--low_nomarks&quot;, type=float, default=0.0, help=&quot;&gt;0：算每张低频时扣掉白漆像素（比 50 cm 尺度均值亮这么多灰度），标线对比度全进高频、只取图割选中的那张 → 低频里没有标线残影&quot;)</span>
+<span class="line" id="L56"><a href="#L56">  56</a> ap.add_argument(&quot;--save_labels&quot;, action=&quot;store_true&quot;, help=&quot;调试：每块写出图割选中的照片编号图 labels_&lt;块&gt;.png（值 = 本块候选序号+1）与 labels_&lt;块&gt;.json（序号 → 行号/路）&quot;)</span>
+<span class="line" id="L57"><a href="#L57">  57</a> ap.add_argument(&quot;--low_adapt&quot;, default=&quot;&quot;, help=&quot;&#x27;s0,s1&#x27;：各张低频亮度的加权标准差超过 s0 灰度起、到 s0+s1 时完全改用图割选中那张的低频（对不齐的标线处不再混出残影；普通沥青照旧混合）&quot;)</span>
+<span class="line" id="L58"><a href="#L58">  58</a> ap.add_argument(&quot;--xform&quot;, default=&quot;&quot;, help=&quot;段间修正 json（p20_chunkfix）：按本段 tag 取 [dE, dN, θ, 轴心E, 轴心N]，输出坐标 = 修正后坐标（像素先反变换回本段原坐标再取色）&quot;)</span>
+<span class="line" id="L59"><a href="#L59">  59</a> ap.add_argument(&quot;--seam_k&quot;, type=float, default=4.0, help=&quot;图割数据项系数：κ·(log w_max − log w)，w = (3/d)^POW&quot;)</span>
+<span class="line" id="L60"><a href="#L60">  60</a> ap.add_argument(&quot;--seam_c0&quot;, type=float, default=1.0, help=&quot;每段接缝的固定代价（灰度）&quot;)</span>
+<span class="line" id="L61"><a href="#L61">  61</a> ap.add_argument(&quot;--seam_cycles&quot;, type=int, default=2)</span>
+<span class="line" id="L62"><a href="#L62">  62</a> ap.add_argument(&quot;--robust&quot;, type=float, default=0.0, help=&quot;&gt;0：两遍稳健融合，按各张低频与共识的 RGB 偏差做柯西降权（σ，灰度）——压眩光&quot;)</span>
+<span class="line" id="L63"><a href="#L63">  63</a> args = ap.parse_args()</span>
+<span class="line" id="L64"><a href="#L64">  64</a> dev = &quot;cuda&quot;</span>
+<span class="line" id="L65"><a href="#L65">  65</a> OUT = f&quot;{WORK}/{args.tag}&quot;; OD = f&quot;{OUT}/ortho_{args.out}&quot;; os.makedirs(OD, exist_ok=True)</span>
+<span class="line" id="L66"><a href="#L66">  66</a> J = np.load(f&quot;{OUT}/joint_{args.joint}.npz&quot;)</span>
+<span class="line" id="L67"><a href="#L67">  67</a> views = [tuple(int(x) for x in v) for v in J[&quot;views&quot;]]; W0 = J[&quot;W0&quot;]; NF = len(W0); NV = len(views)</span>
+<span class="line" id="L68"><a href="#L68">  68</a> omega, delta, rear_d = J[&quot;omega&quot;], J[&quot;delta&quot;], J[&quot;rear_d&quot;]</span>
+<span class="line" id="L69"><a href="#L69">  69</a> ROTC = bool(J[&quot;rot_center&quot;]) if &quot;rot_center&quot; in J.files else False   # 转角绕相机中心（新）/ 绕世界原点（旧）</span>
+<span class="line" id="L70"><a href="#L70">  70</a> loga, bb, vig, shad = (torch.tensor(J[k], device=dev) for k in (&quot;loga&quot;, &quot;bb&quot;, &quot;vig&quot;, &quot;shad&quot;))</span>
+<span class="line" id="L71"><a href="#L71">  71</a> E0g, N1g, HR, GW, GH = J[&quot;grid&quot;]; GW, GH = int(GW), int(GH)</span>
+<span class="line" id="L72"><a href="#L72">  72</a> RS = J[&quot;rs&quot;] if &quot;rs&quot; in J.files else np.zeros(2); VEL = J[&quot;VEL&quot;] if &quot;VEL&quot; in J.files else np.zeros((NF, 3))</span>
+<span class="line" id="L73"><a href="#L73">  73</a> NRG = torch.tensor(J[&quot;nrg&quot;], device=dev) if (&quot;nonrigid&quot; in J.files and str(J[&quot;nonrigid&quot;])) else None</span>
+<span class="line" id="L74"><a href="#L74">  74</a> if args.no_nrg:</span>
+<span class="line" id="L75"><a href="#L75">  75</a>     NRG = None</span>
+<span class="line" id="L76"><a href="#L76">  76</a> BOTV = {2: 700, 1: 690}</span>
+<span class="line" id="L77"><a href="#L77">  77</a> print(&quot;rolling shutter readout (ms):&quot;, np.round(RS * 1e3, 2).tolist())</span>
+<span class="line" id="L78"><a href="#L78">  78</a> Zg = torch.tensor(J[&quot;Zg&quot;], device=dev, dtype=torch.float32)[None, None]</span>
+<span class="line" id="L79"><a href="#L79">  79</a> K = K_scaled(); fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]; k1, k2, p1, p2 = DIST[:4]</span>
+<span class="line" id="L80"><a href="#L80">  80</a> R_vf, t_vf = cam_in_vehicle(&quot;front&quot;); R_vr, t_vr = cam_in_vehicle(&quot;rear&quot;); R_rf = R_vr.T @ R_vf; t_rf = R_vr.T @ (t_vf - t_vr)</span>
+<span class="line" id="L81"><a href="#L81">  81</a> FR_ = tuple(map(float, args.frange.split(&quot;,&quot;))); RR_ = tuple(map(float, args.rrange.split(&quot;,&quot;))); LC = tuple(map(float, args.latcam.split(&quot;,&quot;)))</span>
+<span class="line" id="L82"><a href="#L82">  82</a> BOT = {2: 700, 1: 690}</span>
+<span class="line" id="L83"><a href="#L83">  83</a> </span>
+<span class="line" id="L84"><a href="#L84">  84</a> </span>
+<span class="line" id="L85"><a href="#L85">  85</a> def rot(w):</span>
+<span class="line" id="L86"><a href="#L86">  86</a>     th = np.linalg.norm(w)</span>
+<span class="line" id="L87"><a href="#L87">  87</a>     if th &lt; 1e-12:</span>
+<span class="line" id="L88"><a href="#L88">  88</a>         return np.eye(3)</span>
+<span class="line" id="L89"><a href="#L89">  89</a>     k = w / th; Kx = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])</span>
+<span class="line" id="L90"><a href="#L90">  90</a>     return np.eye(3) + math.sin(th) * Kx + (1 - math.cos(th)) * Kx @ Kx</span>
+<span class="line" id="L91"><a href="#L91">  91</a> </span>
+<span class="line" id="L92"><a href="#L92">  92</a> </span>
+<span class="line" id="L93"><a href="#L93">  93</a> # 每张照片的最终位姿（后摄的平移/偏航修正折算成一个&quot;作用在世界点上的变换&quot;）</span>
+<span class="line" id="L94"><a href="#L94">  94</a> VP = []</span>
+<span class="line" id="L95"><a href="#L95">  95</a> for vi, (r, ch, fi) in enumerate(views):</span>
+<span class="line" id="L96"><a href="#L96">  96</a>     S_ = rot(omega[fi]); Rf = S_ @ W0[fi][:3, :3]; tf = (S_ @ W0[fi][:3, 3] if ROTC else W0[fi][:3, 3]) + delta[fi]</span>
+<span class="line" id="L97"><a href="#L97">  97</a>     if ch == 2:</span>
+<span class="line" id="L98"><a href="#L98">  98</a>         VP.append((Rf, tf, None))</span>
+<span class="line" id="L99"><a href="#L99">  99</a>     else:</span>
+<span class="line" id="L100"><a href="#L100"> 100</a>         R = R_rf @ Rf; t = R_rf @ tf + t_rf</span>
+<span class="line" id="L101"><a href="#L101"> 101</a>         if &quot;rear_ext&quot; in J.files and bool(J[&quot;rear_ext&quot;]):     # 所有后摄共用的外参修正（p13 --rear_ext）</span>
+<span class="line" id="L102"><a href="#L102"> 102</a>             Rx_ = rot(J[&quot;rext_w&quot;]); R = Rx_ @ R; t = Rx_ @ t + J[&quot;rext_t&quot;]</span>
+<span class="line" id="L103"><a href="#L103"> 103</a>         VP.append((R, t, rear_d[vi]))</span>
+<span class="line" id="L104"><a href="#L104"> 104</a> centers = np.array([-R.T @ t for R, t, _ in VP])</span>
+<span class="line" id="L105"><a href="#L105"> 105</a> Pk = np.array([-(R_vf @ VP[i][0]).T @ (R_vf @ VP[i][1] + t_vf) for i in range(NV) if views[i][1] == 2])</span>
+<span class="line" id="L106"><a href="#L106"> 106</a> dense = []</span>
+<span class="line" id="L107"><a href="#L107"> 107</a> for a, b in zip(Pk[:-1, :2], Pk[1:, :2]):</span>
+<span class="line" id="L108"><a href="#L108"> 108</a>     m = max(1, int(np.linalg.norm(b - a) / 0.5)); dense.append(a[None] + (b - a)[None] * (np.arange(m)[:, None] / m))</span>
+<span class="line" id="L109"><a href="#L109"> 109</a> dtree = cKDTree(np.vstack(dense + [Pk[-1:, :2]]))</span>
+<span class="line" id="L110"><a href="#L110"> 110</a> cache = {}</span>
+<span class="line" id="L111"><a href="#L111"> 111</a> </span>
+<span class="line" id="L112"><a href="#L112"> 112</a> </span>
+<span class="line" id="L113"><a href="#L113"> 113</a> def load(vi):</span>
+<span class="line" id="L114"><a href="#L114"> 114</a>     if vi in cache:</span>
+<span class="line" id="L115"><a href="#L115"> 115</a>         return cache[vi]</span>
+<span class="line" id="L116"><a href="#L116"> 116</a>     r, ch, fi = views[vi]</span>
+<span class="line" id="L117"><a href="#L117"> 117</a>     im = torch.tensor(cv2.imread(photo_path(r, ch))[:, :, ::-1].copy(), device=dev).permute(2, 0, 1).float()</span>
+<span class="line" id="L118"><a href="#L118"> 118</a>     lab = cv2.resize(cv2.imread(f&quot;{WORK}/seg/ch{ch}/r{r:05d}.png&quot;, 0), (IMG_W, IMG_H), interpolation=cv2.INTER_NEAREST)</span>
+<span class="line" id="L119"><a href="#L119"> 119</a>     good = (lab == 1) | ((lab == 3) &amp; (not args.no_shadow_fill))</span>
+<span class="line" id="L120"><a href="#L120"> 120</a>     good[:OSD_ROWS + 3] = False; good[BOT[ch]:] = False</span>
+<span class="line" id="L121"><a href="#L121"> 121</a>     dist = cv2.distanceTransform(good.astype(np.uint8), cv2.DIST_L2, 5)</span>
+<span class="line" id="L122"><a href="#L122"> 122</a>     fea = np.clip(dist / 30.0, 0, 1).astype(np.float32)</span>
+<span class="line" id="L123"><a href="#L123"> 123</a>     if ch == 1:   # 影子边界（半影）两侧 12 像素权重压到 0：边缘的亮度突变不能当纹理进高频</span>
+<span class="line" id="L124"><a href="#L124"> 124</a>         shm = (lab == 3).astype(np.uint8)</span>
+<span class="line" id="L125"><a href="#L125"> 125</a>         if shm.any():</span>
+<span class="line" id="L126"><a href="#L126"> 126</a>             edge = cv2.morphologyEx(shm, cv2.MORPH_GRADIENT, np.ones((3, 3), np.uint8))</span>
+<span class="line" id="L127"><a href="#L127"> 127</a>             de = cv2.distanceTransform((1 - edge).astype(np.uint8), cv2.DIST_L2, 5)</span>
+<span class="line" id="L128"><a href="#L128"> 128</a>             fea *= np.clip((de - 4) / 8.0, 0, 1).astype(np.float32)</span>
+<span class="line" id="L129"><a href="#L129"> 129</a>     sm = cv2.GaussianBlur(((lab == 3) &amp; (ch == 1)).astype(np.float32), (0, 0), 6.0)</span>
+<span class="line" id="L130"><a href="#L130"> 130</a>     cache[vi] = (im, torch.tensor(fea, device=dev)[None], torch.tensor(sm, device=dev)[None])</span>
+<span class="line" id="L131"><a href="#L131"> 131</a>     if len(cache) &gt; 60:</span>
+<span class="line" id="L132"><a href="#L132"> 132</a>         cache.pop(next(iter(cache)))</span>
+<span class="line" id="L133"><a href="#L133"> 133</a>     return cache[vi]</span>
+<span class="line" id="L134"><a href="#L134"> 134</a> </span>
+<span class="line" id="L135"><a href="#L135"> 135</a> </span>
+<span class="line" id="L136"><a href="#L136"> 136</a> def seam_select(st):</span>
+<span class="line" id="L137"><a href="#L137"> 137</a>     &quot;&quot;&quot;α 扩展图割挑图（4 cm 网格）。st: [(idx, hi(N×3, half), w)]。返回 2 cm 上羽化后的高频 (TP²×3) 与覆盖权重 (TP²)。&quot;&quot;&quot;</span>
+<span class="line" id="L138"><a href="#L138"> 138</a>     L = len(st); G = TPI // 2; NG = G * G; BIG = 1e4</span>
+<span class="line" id="L139"><a href="#L139"> 139</a>     HI = torch.zeros((L, NG, 3), device=dev); LW = torch.full((L, NG), -1e9, device=dev); SH = torch.zeros((L, NG), device=dev)</span>
+<span class="line" id="L140"><a href="#L140"> 140</a>     for l, (idx_, hi_, w_, s_, *_r) in enumerate(st):</span>
+<span class="line" id="L141"><a href="#L141"> 141</a>         c = (idx_ // TPI // 2) * G + (idx_ % TPI) // 2</span>
+<span class="line" id="L142"><a href="#L142"> 142</a>         sh_ = torch.zeros((NG, 3), device=dev).index_add_(0, c, hi_.float()); cn = torch.zeros(NG, device=dev).index_add_(0, c, torch.ones_like(w_))</span>
+<span class="line" id="L143"><a href="#L143"> 143</a>         sw = torch.zeros(NG, device=dev).index_add_(0, c, w_); ss = torch.zeros(NG, device=dev).index_add_(0, c, s_)</span>
+<span class="line" id="L144"><a href="#L144"> 144</a>         v = cn &gt;= 3</span>
+<span class="line" id="L145"><a href="#L145"> 145</a>         HI[l, v] = sh_[v] / cn[v, None]; LW[l, v] = torch.log(sw[v] / cn[v]); SH[l, v] = ss[v] / cn[v]</span>
+<span class="line" id="L146"><a href="#L146"> 146</a>     VAL = LW &gt; -1e8</span>
+<span class="line" id="L147"><a href="#L147"> 147</a>     D = torch.where(VAL, args.seam_k * (LW.max(0).values[None] - LW) + args.seam_shadow * SH, torch.full_like(LW, BIG))</span>
+<span class="line" id="L148"><a href="#L148"> 148</a>     lab = D.argmin(0)</span>
+<span class="line" id="L149"><a href="#L149"> 149</a>     anyv = VAL.any(0)</span>
+<span class="line" id="L150"><a href="#L150"> 150</a>     ar = torch.arange(NG, device=dev)</span>
+<span class="line" id="L151"><a href="#L151"> 151</a> </span>
+<span class="line" id="L152"><a href="#L152"> 152</a>     def S(la, lb, pos):   # 位置 pos 上两张照片高频之差（灰度，三通道平均）；任一张没覆盖 → 大代价</span>
+<span class="line" id="L153"><a href="#L153"> 153</a>         d = (HI[la, pos] - HI[lb, pos]).abs().mean(1)</span>
+<span class="line" id="L154"><a href="#L154"> 154</a>         return torch.where(VAL[la, pos] &amp; VAL[lb, pos], d, torch.full_like(d, 200.0))</span>
+<span class="line" id="L155"><a href="#L155"> 155</a> </span>
+<span class="line" id="L156"><a href="#L156"> 156</a>     pR = ar.view(G, G)[:, :-1].reshape(-1); qR = pR + 1</span>
+<span class="line" id="L157"><a href="#L157"> 157</a>     pD = ar.view(G, G)[:-1, :].reshape(-1); qD = pD + G</span>
+<span class="line" id="L158"><a href="#L158"> 158</a>     for cyc in range(args.seam_cycles):</span>
+<span class="line" id="L159"><a href="#L159"> 159</a>         changed = 0</span>
+<span class="line" id="L160"><a href="#L160"> 160</a>         for a in range(L):</span>
+<span class="line" id="L161"><a href="#L161"> 161</a>             if not VAL[a].any():</span>
+<span class="line" id="L162"><a href="#L162"> 162</a>                 continue</span>
+<span class="line" id="L163"><a href="#L163"> 163</a>             aa = torch.full_like(lab, a)</span>
+<span class="line" id="L164"><a href="#L164"> 164</a>             u = D[a] - D[lab, ar]</span>
+<span class="line" id="L165"><a href="#L165"> 165</a>             u = torch.where(VAL[a], u, torch.full_like(u, 1e6))</span>
+<span class="line" id="L166"><a href="#L166"> 166</a>             u = torch.where(lab == a, torch.zeros_like(u), u)</span>
+<span class="line" id="L167"><a href="#L167"> 167</a>             wR = torch.zeros(NG, device=dev); wD = torch.zeros(NG, device=dev)</span>
+<span class="line" id="L168"><a href="#L168"> 168</a>             for (p_, q_, wE) in ((pR, qR, wR), (pD, qD, wD)):</span>
+<span class="line" id="L169"><a href="#L169"> 169</a>                 lp, lq = lab[p_], lab[q_]</span>
+<span class="line" id="L170"><a href="#L170"> 170</a>                 A = (S(lp, lq, p_) + S(lp, lq, q_)) * (lp != lq) + args.seam_c0 * (lp != lq)</span>
+<span class="line" id="L171"><a href="#L171"> 171</a>                 B = (S(lp, aa[p_], p_) + S(lp, aa[p_], q_)) * (lp != a) + args.seam_c0 * (lp != a)</span>
+<span class="line" id="L172"><a href="#L172"> 172</a>                 C = (S(aa[p_], lq, p_) + S(aa[p_], lq, q_)) * (lq != a) + args.seam_c0 * (lq != a)</span>
+<span class="line" id="L173"><a href="#L173"> 173</a>                 u.index_add_(0, p_, C - A); u.index_add_(0, q_, -C)</span>
+<span class="line" id="L174"><a href="#L174"> 174</a>                 wE[p_] = (B + C - A).clamp_min(0)</span>
+<span class="line" id="L175"><a href="#L175"> 175</a>             g = maxflow.Graph[float](); nodes = g.add_grid_nodes((G, G))</span>
+<span class="line" id="L176"><a href="#L176"> 176</a>             un = u.view(G, G).cpu().numpy().astype(np.float64)</span>
+<span class="line" id="L177"><a href="#L177"> 177</a>             g.add_grid_tedges(nodes, np.clip(un, 0, None), np.clip(-un, 0, None))</span>
+<span class="line" id="L178"><a href="#L178"> 178</a>             stR = np.zeros((3, 3)); stR[1, 2] = 1; stD = np.zeros((3, 3)); stD[2, 1] = 1</span>
+<span class="line" id="L179"><a href="#L179"> 179</a>             g.add_grid_edges(nodes, weights=wR.view(G, G).cpu().numpy().astype(np.float64), structure=stR, symmetric=False)</span>
+<span class="line" id="L180"><a href="#L180"> 180</a>             g.add_grid_edges(nodes, weights=wD.view(G, G).cpu().numpy().astype(np.float64), structure=stD, symmetric=False)</span>
+<span class="line" id="L181"><a href="#L181"> 181</a>             g.maxflow()</span>
+<span class="line" id="L182"><a href="#L182"> 182</a>             sw_ = torch.tensor(g.get_grid_segments(nodes).reshape(-1), device=dev) &amp; VAL[a]</span>
+<span class="line" id="L183"><a href="#L183"> 183</a>             changed += int((sw_ &amp; (lab != a)).sum()); lab = torch.where(sw_, aa, lab)</span>
+<span class="line" id="L184"><a href="#L184"> 184</a>         print(f&quot;    seam cycle {cyc}: labels changed {changed}&quot;, flush=True)</span>
+<span class="line" id="L185"><a href="#L185"> 185</a>     # 回到 2 cm：每张照片的独热掩膜羽化（σ 1.5 px）后加权</span>
+<span class="line" id="L186"><a href="#L186"> 186</a>     lab2 = lab.view(G, G).repeat_interleave(2, 0).repeat_interleave(2, 1).reshape(-1)</span>
+<span class="line" id="L187"><a href="#L187"> 187</a>     ks = 7; gk = torch.exp(-0.5 * ((torch.arange(ks, device=dev) - 3) / 1.5) ** 2); gk = gk / gk.sum()</span>
+<span class="line" id="L188"><a href="#L188"> 188</a>     out = torch.zeros((TPI * TPI, 3), device=dev); wo = torch.zeros(TPI * TPI, device=dev); outL = torch.zeros((TPI * TPI, 3), device=dev)</span>
+<span class="line" id="L189"><a href="#L189"> 189</a>     for l, (idx_, hi_, w_, s_, *rest_) in enumerate(st):</span>
+<span class="line" id="L190"><a href="#L190"> 190</a>         oh = (lab2 == l).float().view(1, 1, TPI, TPI)</span>
+<span class="line" id="L191"><a href="#L191"> 191</a>         if oh.sum() == 0:</span>
+<span class="line" id="L192"><a href="#L192"> 192</a>             continue</span>
+<span class="line" id="L193"><a href="#L193"> 193</a>         oh = Fnn.conv2d(Fnn.conv2d(oh, gk.view(1, 1, 1, -1), padding=(0, 3)), gk.view(1, 1, -1, 1), padding=(3, 0)).reshape(-1)</span>
+<span class="line" id="L194"><a href="#L194"> 194</a>         ww = oh[idx_]</span>
+<span class="line" id="L195"><a href="#L195"> 195</a>         out.index_add_(0, idx_, hi_.float() * ww[:, None]); wo.index_add_(0, idx_, ww)</span>
+<span class="line" id="L196"><a href="#L196"> 196</a>         if rest_:</span>
+<span class="line" id="L197"><a href="#L197"> 197</a>             outL.index_add_(0, idx_, rest_[0].float() * ww[:, None])</span>
+<span class="line" id="L198"><a href="#L198"> 198</a>     seam_select.last_lab = lab2</span>
+<span class="line" id="L199"><a href="#L199"> 199</a>     seam_select.last_low = outL / wo.clamp_min(1e-6)[:, None]</span>
+<span class="line" id="L200"><a href="#L200"> 200</a>     return out / wo.clamp_min(1e-6)[:, None], wo</span>
+<span class="line" id="L201"><a href="#L201"> 201</a> </span>
+<span class="line" id="L202"><a href="#L202"> 202</a> </span>
+<span class="line" id="L203"><a href="#L203"> 203</a> TP = 1000; RES = 0.02</span>
+<span class="line" id="L204"><a href="#L204"> 204</a> LUMW = torch.tensor([0.299, 0.587, 0.114], device=dev)</span>
+<span class="line" id="L205"><a href="#L205"> 205</a> MG = args.margin_px // 2 * 2; TPI = TP + 2 * MG   # 内部计算用的块边长（含边距）</span>
+<span class="line" id="L206"><a href="#L206"> 206</a> EXCL = set(json.load(open(args.exclude_json))[&quot;bad_rear&quot;]) if args.exclude_json else set()</span>
+<span class="line" id="L207"><a href="#L207"> 207</a> if EXCL: print(&quot;excluded rear rows:&quot;, sorted(EXCL))</span>
+<span class="line" id="L208"><a href="#L208"> 208</a> tiles = set()</span>
+<span class="line" id="L209"><a href="#L209"> 209</a> from sn_chunkfix import ChunkFix</span>
+<span class="line" id="L210"><a href="#L210"> 210</a> XF = ChunkFix(args.xform, args.tag) if args.xform else None</span>
+<span class="line" id="L211"><a href="#L211"> 211</a> if XF is not None and XF.ok:</span>
+<span class="line" id="L212"><a href="#L212"> 212</a>     print(&quot;xform&quot;, XF.mode)</span>
+<span class="line" id="L213"><a href="#L213"> 213</a> </span>
+<span class="line" id="L214"><a href="#L214"> 214</a> </span>
+<span class="line" id="L215"><a href="#L215"> 215</a> def xf_fwd(e, n):       # 原坐标 → 修正后坐标</span>
+<span class="line" id="L216"><a href="#L216"> 216</a>     return XF.fwd(e, n) if (XF is not None and XF.ok) else (e, n)</span>
+<span class="line" id="L217"><a href="#L217"> 217</a> </span>
+<span class="line" id="L218"><a href="#L218"> 218</a> </span>
+<span class="line" id="L219"><a href="#L219"> 219</a> def xf_inv(e, n):       # 修正后坐标 → 原坐标</span>
+<span class="line" id="L220"><a href="#L220"> 220</a>     return XF.inv(e, n) if (XF is not None and XF.ok) else (e, n)</span>
+<span class="line" id="L221"><a href="#L221"> 221</a> </span>
+<span class="line" id="L222"><a href="#L222"> 222</a> </span>
+<span class="line" id="L223"><a href="#L223"> 223</a> for e, n in dtree.data:</span>
+<span class="line" id="L224"><a href="#L224"> 224</a>     e, n = xf_fwd(e, n)</span>
+<span class="line" id="L225"><a href="#L225"> 225</a>     for de in (-args.lat, 0, args.lat):</span>
+<span class="line" id="L226"><a href="#L226"> 226</a>         for dn in (-args.lat, 0, args.lat):</span>
+<span class="line" id="L227"><a href="#L227"> 227</a>             tiles.add((int(math.floor((e + de) / 20)), int(math.floor((n + dn) / 20))))</span>
+<span class="line" id="L228"><a href="#L228"> 228</a> if args.tiles:</span>
+<span class="line" id="L229"><a href="#L229"> 229</a>     tiles = {tuple(map(int, t.split(&quot;_&quot;))) for t in args.tiles.split(&quot;,&quot;)}</span>
+<span class="line" id="L230"><a href="#L230"> 230</a> q = (np.arange(TPI) - MG + 0.5) * RES</span>
+<span class="line" id="L231"><a href="#L231"> 231</a> index = []; t0 = time.time(); area = 0</span>
+<span class="line" id="L232"><a href="#L232"> 232</a> for (gx, gn) in sorted(tiles):</span>
+<span class="line" id="L233"><a href="#L233"> 233</a>     e0, n0 = gx * 20.0, gn * 20.0</span>
+<span class="line" id="L234"><a href="#L234"> 234</a>     E, N = np.meshgrid(e0 + q, n0 + 20 - q)</span>
+<span class="line" id="L235"><a href="#L235"> 235</a>     E, N = xf_inv(E, N)                 # 修正后的输出网格 → 本段原坐标</span>
+<span class="line" id="L236"><a href="#L236"> 236</a>     near = (dtree.query(np.c_[E.ravel(), N.ravel()])[0] &lt;= args.lat)</span>
+<span class="line" id="L237"><a href="#L237"> 237</a>     if near.sum() &lt; 400:</span>
+<span class="line" id="L238"><a href="#L238"> 238</a>         continue</span>
+<span class="line" id="L239"><a href="#L239"> 239</a>     gxn = torch.tensor(((E.ravel() - E0g) / HR) / (GW - 1) * 2 - 1, device=dev, dtype=torch.float32)</span>
+<span class="line" id="L240"><a href="#L240"> 240</a>     gyn = torch.tensor(((N1g - N.ravel()) / HR) / (GH - 1) * 2 - 1, device=dev, dtype=torch.float32)</span>
+<span class="line" id="L241"><a href="#L241"> 241</a>     Zt = Fnn.grid_sample(Zg, torch.stack([gxn, gyn], -1)[None, :, None, :], mode=&quot;bilinear&quot;, align_corners=True)[0, 0, :, 0]</span>
+<span class="line" id="L242"><a href="#L242"> 242</a>     X = torch.stack([torch.tensor(E.ravel(), device=dev), torch.tensor(N.ravel(), device=dev), Zt.double()], -1)</span>
+<span class="line" id="L243"><a href="#L243"> 243</a>     nearT = torch.tensor(near, device=dev)</span>
+<span class="line" id="L244"><a href="#L244"> 244</a>     acc = torch.zeros((TPI * TPI, 3), device=dev); ws = torch.zeros(TPI * TPI, device=dev)</span>
+<span class="line" id="L245"><a href="#L245"> 245</a>     accL = torch.zeros((TPI * TPI, 3), device=dev); wsL = torch.zeros(TPI * TPI, device=dev)</span>
+<span class="line" id="L246"><a href="#L246"> 246</a>     store = []; seam_store = []; seam_vi = []</span>
+<span class="line" id="L247"><a href="#L247"> 247</a>     accM1 = torch.zeros(TPI * TPI, device=dev); accM2 = torch.zeros(TPI * TPI, device=dev); paintA = torch.zeros(TPI * TPI, device=dev)</span>
+<span class="line" id="L248"><a href="#L248"> 248</a>     ctr = np.array([e0 + 10, n0 + 10])</span>
+<span class="line" id="L249"><a href="#L249"> 249</a>     cand = [vi for vi in range(NV) if np.linalg.norm(centers[vi][:2] - ctr) &lt; (FR_ if views[vi][1] == 2 else RR_)[1] + 15]</span>
+<span class="line" id="L250"><a href="#L250"> 250</a>     cam_ok = {2} if args.cams == &quot;front&quot; else ({1} if args.cams == &quot;rear&quot; else {1, 2})</span>
+<span class="line" id="L251"><a href="#L251"> 251</a>     if EXCL:</span>
+<span class="line" id="L252"><a href="#L252"> 252</a>         cand = [vi for vi in cand if not (views[vi][1] == 1 and views[vi][0] in EXCL)]</span>
+<span class="line" id="L253"><a href="#L253"> 253</a>     cand = [vi for vi in cand if views[vi][1] in cam_ok]</span>
+<span class="line" id="L254"><a href="#L254"> 254</a>     if args.only_rows:</span>
+<span class="line" id="L255"><a href="#L255"> 255</a>         keep_ = {int(x) for x in args.only_rows.split(&quot;,&quot;)}</span>
+<span class="line" id="L256"><a href="#L256"> 256</a>         cand = [vi for vi in cand if views[vi][0] in keep_]</span>
+<span class="line" id="L257"><a href="#L257"> 257</a>     for vi in cand:</span>
+<span class="line" id="L258"><a href="#L258"> 258</a>         r, ch, fi = views[vi]; R, t, rd = VP[vi]</span>
+<span class="line" id="L259"><a href="#L259"> 259</a>         Rt = torch.tensor(R, device=dev); tt_ = torch.tensor(t, device=dev); Cc = torch.tensor(centers[vi], device=dev)</span>
+<span class="line" id="L260"><a href="#L260"> 260</a>         XX = X</span>
+<span class="line" id="L261"><a href="#L261"> 261</a>         if args.ipm:   # 这张照片自己的车体平面</span>
+<span class="line" id="L262"><a href="#L262"> 262</a>             R_vc, t_vc = (R_vf, t_vf) if ch == 2 else (R_vr, t_vr)</span>
+<span class="line" id="L263"><a href="#L263"> 263</a>             Rvw = R_vc @ R; tvw = R_vc @ t + t_vc; p0 = -Rvw.T @ tvw; nz = Rvw.T @ np.array([0, 0, 1.0])</span>
+<span class="line" id="L264"><a href="#L264"> 264</a>             Zv = p0[2] - (nz[0] * (X[:, 0] - p0[0]) + nz[1] * (X[:, 1] - p0[1])) / nz[2]</span>
+<span class="line" id="L265"><a href="#L265"> 265</a>             XX = torch.stack([X[:, 0], X[:, 1], Zv], -1)</span>
+<span class="line" id="L266"><a href="#L266"> 266</a>         Xw = XX</span>
+<span class="line" id="L267"><a href="#L267"> 267</a>         if rd is not None:</span>
+<span class="line" id="L268"><a href="#L268"> 268</a>             cyw, syw = math.cos(rd[2]), math.sin(rd[2])</span>
+<span class="line" id="L269"><a href="#L269"> 269</a>             x0 = XX[:, 0] - rd[0] - Cc[0]; y0 = XX[:, 1] - rd[1] - Cc[1]</span>
+<span class="line" id="L270"><a href="#L270"> 270</a>             Xw = torch.stack([cyw * x0 + syw * y0 + Cc[0], -syw * x0 + cyw * y0 + Cc[1], XX[:, 2]], -1)</span>
+<span class="line" id="L271"><a href="#L271"> 271</a>         Xc = Xw @ Rt.T + tt_</span>
+<span class="line" id="L272"><a href="#L272"> 272</a>         if abs(RS[0 if ch == 2 else 1]) &gt; 1e-6:      # 卷帘快门：按像素行的拍摄时刻差平移世界点（与 p13 相同）</span>
+<span class="line" id="L273"><a href="#L273"> 273</a>             yr = (Xc[:, 1] / Xc[:, 2]) * fy + cy</span>
+<span class="line" id="L274"><a href="#L274"> 274</a>             tau = (yr - IMG_H / 2) / IMG_H * float(RS[0 if ch == 2 else 1])</span>
+<span class="line" id="L275"><a href="#L275"> 275</a>             Xc = (Xw - tau[:, None] * torch.tensor(VEL[fi], device=dev)[None]) @ Rt.T + tt_</span>
+<span class="line" id="L276"><a href="#L276"> 276</a>         gd = torch.linalg.norm(XX[:, :2] - Cc[:2], dim=1)</span>
+<span class="line" id="L277"><a href="#L277"> 277</a>         ax = R.T @ np.array([0, 0, 1.0]); ax2 = ax[:2] / max(np.linalg.norm(ax[:2]), 1e-9)</span>
+<span class="line" id="L278"><a href="#L278"> 278</a>         latd = torch.abs((XX[:, 0] - Cc[0]) * ax2[1] - (XX[:, 1] - Cc[1]) * ax2[0])</span>
+<span class="line" id="L279"><a href="#L279"> 279</a>         rng = FR_ if ch == 2 else RR_</span>
+<span class="line" id="L280"><a href="#L280"> 280</a>         m = (Xc[:, 2] &gt; 0.5) &amp; (gd &gt; rng[0]) &amp; (gd &lt; rng[1]) &amp; (latd &lt; LC[0 if ch == 2 else 1]) &amp; nearT</span>
+<span class="line" id="L281"><a href="#L281"> 281</a>         if int(m.sum()) &lt; 100:</span>
+<span class="line" id="L282"><a href="#L282"> 282</a>             continue</span>
+<span class="line" id="L283"><a href="#L283"> 283</a>         idx = torch.nonzero(m)[:, 0]; Xs = Xc[idx]</span>
+<span class="line" id="L284"><a href="#L284"> 284</a>         x = Xs[:, 0] / Xs[:, 2]; y = Xs[:, 1] / Xs[:, 2]; r2 = x * x + y * y; rad = 1 + k1 * r2 + k2 * r2 * r2</span>
+<span class="line" id="L285"><a href="#L285"> 285</a>         xd = x * rad + 2 * p1 * x * y + p2 * (r2 + 2 * x * x); yd = y * rad + p1 * (r2 + 2 * y * y) + 2 * p2 * x * y</span>
+<span class="line" id="L286"><a href="#L286"> 286</a>         u = (fx * xd + cx).float(); v = (fy * yd + cy).float()</span>
+<span class="line" id="L287"><a href="#L287"> 287</a>         if NRG is not None:   # 每张照片的画面形变（与 p13 相同）</span>
+<span class="line" id="L288"><a href="#L288"> 288</a>             gu = (u / IMG_W) * 2 - 1; gv = ((v - 0.3 * IMG_H) / (BOTV[ch] - 0.3 * IMG_H)) * 2 - 1</span>
+<span class="line" id="L289"><a href="#L289"> 289</a>             dd = Fnn.grid_sample(NRG[vi][None], torch.stack([gu, gv], -1)[None, :, None, :], mode=&quot;bilinear&quot;, padding_mode=&quot;border&quot;, align_corners=True)[0, :, :, 0]</span>
+<span class="line" id="L290"><a href="#L290"> 290</a>             u = u + dd[0]; v = v + dd[1]</span>
+<span class="line" id="L291"><a href="#L291"> 291</a>         g = torch.stack([(u + 0.5) / IMG_W * 2 - 1, (v + 0.5) / IMG_H * 2 - 1], -1)[None, :, None, :]</span>
+<span class="line" id="L292"><a href="#L292"> 292</a>         im, fea, sm = load(vi)</span>
+<span class="line" id="L293"><a href="#L293"> 293</a>         I = Fnn.grid_sample(im[None], g, mode=&quot;bilinear&quot;, align_corners=False)[0, :, :, 0].T</span>
+<span class="line" id="L294"><a href="#L294"> 294</a>         f_ = Fnn.grid_sample(fea[None], g, mode=&quot;bilinear&quot;, align_corners=False)[0, 0, :, 0]</span>
+<span class="line" id="L295"><a href="#L295"> 295</a>         S = Fnn.grid_sample(sm[None], g, mode=&quot;bilinear&quot;, align_corners=False)[0, 0, :, 0]</span>
+<span class="line" id="L296"><a href="#L296"> 296</a>         V = torch.exp(Fnn.grid_sample(vig[0 if ch == 2 else 1][None], g, mode=&quot;bilinear&quot;, align_corners=True)[0, 0, :, 0]).clamp(0.7, 1.5)   # 无数据格子的外推值截断</span>
+<span class="line" id="L297"><a href="#L297"> 297</a>         gain = torch.exp(loga[vi])[None] * V[:, None] * torch.exp(shad[vi][None] * S[:, None])</span>
+<span class="line" id="L298"><a href="#L298"> 298</a>         add = bb[vi][None]</span>
+<span class="line" id="L299"><a href="#L299"> 299</a>         if &quot;glare_grid&quot; in J.files and bool(J[&quot;glare_grid&quot;]):</span>
+<span class="line" id="L300"><a href="#L300"> 300</a>             add = add + Fnn.grid_sample(torch.tensor(J[&quot;bgrid&quot;][vi], device=dev)[None], g, mode=&quot;bilinear&quot;, padding_mode=&quot;border&quot;, align_corners=True)[0, :, :, 0].T</span>
+<span class="line" id="L301"><a href="#L301"> 301</a>         col = (I - 10.0 * add) / gain</span>
+<span class="line" id="L302"><a href="#L302"> 302</a>         dist_ = torch.linalg.norm(Xs, dim=1).float()</span>
+<span class="line" id="L303"><a href="#L303"> 303</a>         if args.feather_m &gt; 0:   # 取用范围边界渐变（近端、远端、横向）</span>
+<span class="line" id="L304"><a href="#L304"> 304</a>             fm_ = args.feather_m; gds = gd[idx].float(); lts = latd[idx].float(); lc_ = LC[0 if ch == 2 else 1]</span>
+<span class="line" id="L305"><a href="#L305"> 305</a>             f_ = f_ * ((gds - rng[0]) / fm_).clamp(0, 1) * ((rng[1] - gds) / (2 * fm_)).clamp(0, 1) * ((lc_ - lts) / fm_).clamp(0, 1)</span>
+<span class="line" id="L306"><a href="#L306"> 306</a>         w = f_ * (3.0 / dist_) ** args.pow</span>
+<span class="line" id="L307"><a href="#L307"> 307</a>         ok = w &gt; 1e-7</span>
+<span class="line" id="L308"><a href="#L308"> 308</a>         if args.bands == 2:</span>
+<span class="line" id="L309"><a href="#L309"> 309</a>             # 这张照片在本块里的稠密栅格 → 掩膜内高斯模糊得低频，原值减低频得高频</span>
+<span class="line" id="L310"><a href="#L310"> 310</a>             full = torch.zeros((TPI * TPI, 3), device=dev); mk = torch.zeros(TPI * TPI, device=dev)</span>
+<span class="line" id="L311"><a href="#L311"> 311</a>             full[idx] = col; mk[idx] = (f_ &gt; 0.05).float()</span>
+<span class="line" id="L312"><a href="#L312"> 312</a>             ks = int(self_k := int(args.sigma * 3)) * 2 + 1</span>
+<span class="line" id="L313"><a href="#L313"> 313</a>             gk = torch.exp(-0.5 * ((torch.arange(ks, device=dev) - ks // 2) / args.sigma) ** 2); gk = gk / gk.sum()</span>
+<span class="line" id="L314"><a href="#L314"> 314</a>             def blur(x):   # x: C×H×W</span>
+<span class="line" id="L315"><a href="#L315"> 315</a>                 x = Fnn.conv2d(x[:, None], gk.view(1, 1, 1, -1), padding=(0, ks // 2))</span>
+<span class="line" id="L316"><a href="#L316"> 316</a>                 return Fnn.conv2d(x, gk.view(1, 1, -1, 1), padding=(ks // 2, 0))[:, 0]</span>
+<span class="line" id="L317"><a href="#L317"> 317</a>             mk2 = mk.reshape(1, TPI, TPI)</span>
+<span class="line" id="L318"><a href="#L318"> 318</a>             if args.low_nomarks &gt; 0:   # 白漆不进低频：亮度比 50 cm 尺度（掩膜内归一化）均值高出阈值的像素外扩 3 px 扣掉</span>
+<span class="line" id="L319"><a href="#L319"> 319</a>                 lum = (full.T.reshape(3, TPI, TPI) * torch.tensor([0.299, 0.587, 0.114], device=dev).view(3, 1, 1)).sum(0, keepdim=True)</span>
+<span class="line" id="L320"><a href="#L320"> 320</a>                 kb = 51; gb = torch.exp(-0.5 * ((torch.arange(kb, device=dev) - kb // 2) / 12.5) ** 2); gb = gb / gb.sum()</span>
+<span class="line" id="L321"><a href="#L321"> 321</a>                 def blurb(x):</span>
+<span class="line" id="L322"><a href="#L322"> 322</a>                     x = Fnn.conv2d(x[:, None], gb.view(1, 1, 1, -1), padding=(0, kb // 2))</span>
+<span class="line" id="L323"><a href="#L323"> 323</a>                     return Fnn.conv2d(x, gb.view(1, 1, -1, 1), padding=(kb // 2, 0))[:, 0]</span>
+<span class="line" id="L324"><a href="#L324"> 324</a>                 bgl = blurb(lum * mk2) / blurb(mk2).clamp_min(1e-3)</span>
+<span class="line" id="L325"><a href="#L325"> 325</a>                 cand_ = ((lum - bgl) &gt; args.low_nomarks).float() * mk2</span>
+<span class="line" id="L326"><a href="#L326"> 326</a>                 # 只扣细长的（标线最宽约 45 cm）：开运算（61 px ≈ 1.2 m）留下的大片亮区是迎光光泽/亮斑，不算标线</span>
+<span class="line" id="L327"><a href="#L327"> 327</a>                 big_ = Fnn.max_pool2d(-Fnn.max_pool2d(-cand_[None], 61, 1, 30), 61, 1, 30)[0]</span>
+<span class="line" id="L328"><a href="#L328"> 328</a>                 paint = cand_ * (1 - big_)</span>
+<span class="line" id="L329"><a href="#L329"> 329</a>                 paint = (Fnn.max_pool2d(paint[None], 7, 1, 3)[0] &gt; 0).float()</span>
+<span class="line" id="L330"><a href="#L330"> 330</a>                 mk2 = mk2 * (1 - paint)</span>
+<span class="line" id="L331"><a href="#L331"> 331</a>                 if args.low_adapt:</span>
+<span class="line" id="L332"><a href="#L332"> 332</a>                     paintA = torch.maximum(paintA, paint.reshape(-1))</span>
+<span class="line" id="L333"><a href="#L333"> 333</a>             fm = full.T.reshape(3, TPI, TPI) * mk2; mm = blur(mk2)</span>
+<span class="line" id="L334"><a href="#L334"> 334</a>             low = blur(fm) / mm.clamp_min(1e-3)</span>
+<span class="line" id="L335"><a href="#L335"> 335</a>             if args.low_nomarks &gt; 0:   # 扣掉后 16 cm 尺度支撑不够的地方先退到 50 cm 尺度（斑马线：条纹间的沥青），还不够才退回不扣的低频</span>
+<span class="line" id="L336"><a href="#L336"> 336</a>                 mk1 = mk.reshape(1, TPI, TPI); mm1 = blur(mk1)</span>
+<span class="line" id="L337"><a href="#L337"> 337</a>                 low1 = blur(full.T.reshape(3, TPI, TPI) * mk1) / mm1.clamp_min(1e-3)</span>
+<span class="line" id="L338"><a href="#L338"> 338</a>                 kb2 = 151; gb2 = torch.exp(-0.5 * ((torch.arange(kb2, device=dev) - kb2 // 2) / 25.0) ** 2); gb2 = gb2 / gb2.sum()</span>
+<span class="line" id="L339"><a href="#L339"> 339</a>                 def blur25(x):</span>
+<span class="line" id="L340"><a href="#L340"> 340</a>                     x = Fnn.conv2d(x[:, None], gb2.view(1, 1, 1, -1), padding=(0, kb2 // 2))</span>
+<span class="line" id="L341"><a href="#L341"> 341</a>                     return Fnn.conv2d(x, gb2.view(1, 1, -1, 1), padding=(kb2 // 2, 0))[:, 0]</span>
+<span class="line" id="L342"><a href="#L342"> 342</a>                 mm25 = blur25(mk2); mm1_25 = blur25(mk1)</span>
+<span class="line" id="L343"><a href="#L343"> 343</a>                 low25 = blur25(fm) / mm25.clamp_min(1e-3)</span>
+<span class="line" id="L344"><a href="#L344"> 344</a>                 al_ = ((mm / mm1.clamp_min(1e-3) - 0.25) / 0.2).clamp(0, 1)</span>
+<span class="line" id="L345"><a href="#L345"> 345</a>                 al25 = ((mm25 / mm1_25.clamp_min(1e-3) - 0.25) / 0.2).clamp(0, 1)</span>
+<span class="line" id="L346"><a href="#L346"> 346</a>                 low = al_ * low + (1 - al_) * (al25 * low25 + (1 - al25) * low1)</span>
+<span class="line" id="L347"><a href="#L347"> 347</a>             low = low.reshape(3, -1).T</span>
+<span class="line" id="L348"><a href="#L348"> 348</a>             if args.robust &gt; 0:   # 偏差用更粗尺度（默认 50 cm）的低频算：眩光是米级大块，标线在这个尺度下被平均掉</span>
+<span class="line" id="L349"><a href="#L349"> 349</a>                 kr = int(args.robust_px * 3) * 2 + 1      # 注意别叫 k2：会盖掉畸变系数 k2</span>
+<span class="line" id="L350"><a href="#L350"> 350</a>                 gr = torch.exp(-0.5 * ((torch.arange(kr, device=dev) - kr // 2) / args.robust_px) ** 2); gr = gr / gr.sum()</span>
+<span class="line" id="L351"><a href="#L351"> 351</a>                 def blur2(x):</span>
+<span class="line" id="L352"><a href="#L352"> 352</a>                     x = Fnn.conv2d(x[:, None], gr.view(1, 1, 1, -1), padding=(0, kr // 2))</span>
+<span class="line" id="L353"><a href="#L353"> 353</a>                     return Fnn.conv2d(x, gr.view(1, 1, -1, 1), padding=(kr // 2, 0))[:, 0]</span>
+<span class="line" id="L354"><a href="#L354"> 354</a>                 low2 = (blur2(fm) / blur2(mk.reshape(1, TPI, TPI)).clamp_min(1e-3)).reshape(3, -1).T</span>
+<span class="line" id="L355"><a href="#L355"> 355</a>             hi = col - low[idx]</span>
+<span class="line" id="L356"><a href="#L356"> 356</a>             # 低频（颜色/亮度）：影子区几乎不参与、后摄减半——影子区和后摄只贡献高频纹理</span>
+<span class="line" id="L357"><a href="#L357"> 357</a>             wl = f_ * (3.0 / dist_) ** args.lowpow * (1 - (1 - args.low_shadow) * S.clamp(0, 1)) * (args.low_rear if ch == 1 else 1.0)</span>
+<span class="line" id="L358"><a href="#L358"> 358</a>             accL.index_add_(0, idx[ok], low[idx][ok] * wl[ok, None]); wsL.index_add_(0, idx[ok], wl[ok])</span>
+<span class="line" id="L359"><a href="#L359"> 359</a>             acc.index_add_(0, idx[ok], hi[ok] * w[ok, None]); ws.index_add_(0, idx[ok], w[ok])</span>
+<span class="line" id="L360"><a href="#L360"> 360</a>             if args.seam:</span>
+<span class="line" id="L361"><a href="#L361"> 361</a>                 seam_store.append((idx[ok], hi[ok].half(), w[ok], S[ok].float(), low[idx][ok].half())); seam_vi.append(vi)</span>
+<span class="line" id="L362"><a href="#L362"> 362</a>             if args.low_adapt:</span>
+<span class="line" id="L363"><a href="#L363"> 363</a>                 lum_ = (low[idx][ok] * LUMW).sum(1)</span>
+<span class="line" id="L364"><a href="#L364"> 364</a>                 accM1.index_add_(0, idx[ok], lum_ * wl[ok]); accM2.index_add_(0, idx[ok], lum_ ** 2 * wl[ok])</span>
+<span class="line" id="L365"><a href="#L365"> 365</a>             if args.robust &gt; 0:</span>
+<span class="line" id="L366"><a href="#L366"> 366</a>                 store.append((idx[ok], low[idx][ok], hi[ok], wl[ok], w[ok], low2[idx][ok]))</span>
+<span class="line" id="L367"><a href="#L367"> 367</a>         else:</span>
+<span class="line" id="L368"><a href="#L368"> 368</a>             acc.index_add_(0, idx[ok], col[ok] * w[ok, None]); ws.index_add_(0, idx[ok], w[ok])</span>
+<span class="line" id="L369"><a href="#L369"> 369</a>     if os.environ.get(&quot;P14_DEBUG&quot;):</span>
+<span class="line" id="L370"><a href="#L370"> 370</a>         print(&quot;  debug pass1: store&quot;, len(store), &quot;cov&quot;, int((ws &gt; 1e-7).sum()), &quot;nan ws&quot;, int(torch.isnan(ws).sum()), &quot;nan l2&quot;, sum(int(torch.isnan(x[5]).sum()) for x in store) if store else 0, flush=True)</span>
+<span class="line" id="L371"><a href="#L371"> 371</a>     if args.robust &gt; 0 and store:</span>
+<span class="line" id="L372"><a href="#L372"> 372</a>         # 第二遍：共识低频 → 每张的 RGB 偏差 → 柯西权重，低频高频一起重新累加</span>
+<span class="line" id="L373"><a href="#L373"> 373</a>         # 眩光只会加亮、加彩色：比共识亮的偏差罚得重（σ），暗的偏差罚得轻（3σ），色度偏差按 σ；迭代 3 次逼近众数</span>
+<span class="line" id="L374"><a href="#L374"> 374</a>         # 共识用粗尺度低频的加权平均；只改低频权重，高频不动（保住标线对比度）</span>
+<span class="line" id="L375"><a href="#L375"> 375</a>         accC = torch.zeros((TPI * TPI, 3), device=dev); wsC = torch.zeros(TPI * TPI, device=dev)</span>
+<span class="line" id="L376"><a href="#L376"> 376</a>         for idx_, lo_, hi_, wl_, wh_, l2_ in store:</span>
+<span class="line" id="L377"><a href="#L377"> 377</a>             accC.index_add_(0, idx_, l2_ * wl_[:, None]); wsC.index_add_(0, idx_, wl_)</span>
+<span class="line" id="L378"><a href="#L378"> 378</a>         for it_ in range(3):</span>
+<span class="line" id="L379"><a href="#L379"> 379</a>             meanL = accC / wsC.clamp_min(1e-9)[:, None]</span>
+<span class="line" id="L380"><a href="#L380"> 380</a>             accL.zero_(); wsL.zero_(); acc.zero_(); ws.zero_(); accC.zero_(); wsC.zero_()</span>
+<span class="line" id="L381"><a href="#L381"> 381</a>             for idx_, lo_, hi_, wl_, wh_, l2_ in store:</span>
+<span class="line" id="L382"><a href="#L382"> 382</a>                 dv = l2_ - meanL[idx_]; g_ = dv.mean(1)</span>
+<span class="line" id="L383"><a href="#L383"> 383</a>                 chroma = torch.linalg.norm(dv - g_[:, None], dim=1)</span>
+<span class="line" id="L384"><a href="#L384"> 384</a>                 r = torch.sqrt(g_.clamp_min(0) ** 2 + ((-g_).clamp_min(0) / 3) ** 2 + chroma ** 2)</span>
+<span class="line" id="L385"><a href="#L385"> 385</a>                 rw = 1.0 / (1.0 + (r / args.robust) ** 2)</span>
+<span class="line" id="L386"><a href="#L386"> 386</a>                 accL.index_add_(0, idx_, lo_ * (wl_ * rw)[:, None]); wsL.index_add_(0, idx_, wl_ * rw)</span>
+<span class="line" id="L387"><a href="#L387"> 387</a>                 accC.index_add_(0, idx_, l2_ * (wl_ * rw)[:, None]); wsC.index_add_(0, idx_, wl_ * rw)</span>
+<span class="line" id="L388"><a href="#L388"> 388</a>                 acc.index_add_(0, idx_, hi_ * wh_[:, None]); ws.index_add_(0, idx_, wh_)</span>
+<span class="line" id="L389"><a href="#L389"> 389</a>         store = []</span>
+<span class="line" id="L390"><a href="#L390"> 390</a>     if args.seam and len(seam_store) &gt; 1:</span>
+<span class="line" id="L391"><a href="#L391"> 391</a>         hi_sel, w_sel = seam_select(seam_store)</span>
+<span class="line" id="L392"><a href="#L392"> 392</a>         if args.save_labels:</span>
+<span class="line" id="L393"><a href="#L393"> 393</a>             lb = seam_select.last_lab.view(TPI, TPI)[MG:MG + TP, MG:MG + TP].cpu().numpy().astype(np.uint16) + 1</span>
+<span class="line" id="L394"><a href="#L394"> 394</a>             lb[~(w_sel.view(TPI, TPI)[MG:MG + TP, MG:MG + TP] &gt; 1e-6).cpu().numpy()] = 0</span>
+<span class="line" id="L395"><a href="#L395"> 395</a>             cv2.imwrite(f&quot;{OD}/labels_{gx}_{gn}.png&quot;, lb)</span>
+<span class="line" id="L396"><a href="#L396"> 396</a>             json.dump([[int(views[v][0]), int(views[v][1])] for v in seam_vi], open(f&quot;{OD}/labels_{gx}_{gn}.json&quot;, &quot;w&quot;))</span>
+<span class="line" id="L397"><a href="#L397"> 397</a>         okc = w_sel &gt; 1e-6</span>
+<span class="line" id="L398"><a href="#L398"> 398</a>         acc[okc] = hi_sel[okc] * ws[okc, None]   # 下面统一除以 ws</span>
+<span class="line" id="L399"><a href="#L399"> 399</a>         if args.low_adapt:   # 低频：分歧大的地方改用选中那张</span>
+<span class="line" id="L400"><a href="#L400"> 400</a>             s0_, s1_ = map(float, args.low_adapt.split(&quot;,&quot;))</span>
+<span class="line" id="L401"><a href="#L401"> 401</a>             m1 = accM1 / wsL.clamp_min(1e-9); sd = torch.sqrt((accM2 / wsL.clamp_min(1e-9) - m1 ** 2).clamp_min(0))</span>
+<span class="line" id="L402"><a href="#L402"> 402</a>             al = ((sd - s0_) / s1_).clamp(0, 1).view(1, 1, TPI, TPI)</span>
+<span class="line" id="L403"><a href="#L403"> 403</a>             ka = 13; gka = torch.exp(-0.5 * ((torch.arange(ka, device=dev) - ka // 2) / 3.0) ** 2); gka = gka / gka.sum()</span>
+<span class="line" id="L404"><a href="#L404"> 404</a>             al = Fnn.max_pool2d(al, 9, 1, 4) * Fnn.max_pool2d(paintA.view(1, 1, TPI, TPI), 21, 1, 10)   # 只在白漆附近（任一张有漆、外扩 20 cm）切换</span>
+<span class="line" id="L405"><a href="#L405"> 405</a>             al = Fnn.conv2d(Fnn.conv2d(al, gka.view(1, 1, 1, -1), padding=(0, ka // 2)), gka.view(1, 1, -1, 1), padding=(ka // 2, 0)).reshape(-1)</span>
+<span class="line" id="L406"><a href="#L406"> 406</a>             al = al * okc.float()</span>
+<span class="line" id="L407"><a href="#L407"> 407</a>             lowb = accL / wsL.clamp_min(1e-9)[:, None]</span>
+<span class="line" id="L408"><a href="#L408"> 408</a>             accL = (al[:, None] * seam_select.last_low + (1 - al[:, None]) * lowb) * wsL[:, None]</span>
+<span class="line" id="L409"><a href="#L409"> 409</a>             if args.save_labels:</span>
+<span class="line" id="L410"><a href="#L410"> 410</a>                 cv2.imwrite(f&quot;{OD}/lowadapt_{gx}_{gn}.png&quot;, (al.view(TPI, TPI)[MG:MG + TP, MG:MG + TP].cpu().numpy() * 255).astype(np.uint8))</span>
+<span class="line" id="L411"><a href="#L411"> 411</a>     col = acc / ws.clamp_min(1e-9)[:, None]</span>
+<span class="line" id="L412"><a href="#L412"> 412</a>     if args.bands == 2:</span>
+<span class="line" id="L413"><a href="#L413"> 413</a>         col = col + accL / wsL.clamp_min(1e-9)[:, None]</span>
+<span class="line" id="L414"><a href="#L414"> 414</a>     ctr_ = slice(MG, MG + TP)</span>
+<span class="line" id="L415"><a href="#L415"> 415</a>     cov = (ws &gt; 1e-7).view(TPI, TPI)[ctr_, ctr_].reshape(-1).cpu().numpy()</span>
+<span class="line" id="L416"><a href="#L416"> 416</a>     if cov.sum() &lt; 400:</span>
+<span class="line" id="L417"><a href="#L417"> 417</a>         continue</span>
+<span class="line" id="L418"><a href="#L418"> 418</a>     col = col.view(TPI, TPI, 3)[ctr_, ctr_].reshape(-1, 3).cpu().numpy()</span>
+<span class="line" id="L419"><a href="#L419"> 419</a>     out = np.zeros((TP * TP, 4), np.uint8)</span>
+<span class="line" id="L420"><a href="#L420"> 420</a>     out[cov, :3] = np.clip(col[cov][:, ::-1], 0, 255).astype(np.uint8); out[cov, 3] = 255</span>
+<span class="line" id="L421"><a href="#L421"> 421</a>     cv2.imwrite(f&quot;{OD}/{gx}_{gn}.png&quot;, out.reshape(TP, TP, 4), [cv2.IMWRITE_PNG_COMPRESSION, 3])</span>
+<span class="line" id="L422"><a href="#L422"> 422</a>     index.append(dict(id=f&quot;{gx}_{gn}&quot;, e0=e0, n0=n0, cov=round(float(cov.mean()), 4))); area += cov.sum() * RES * RES</span>
+<span class="line" id="L423"><a href="#L423"> 423</a>     print(f&quot;tile {gx}_{gn} views {len(cand)} cov {cov.mean():.2f} [{time.time()-t0:.0f}s]&quot;, flush=True)</span>
+<span class="line" id="L424"><a href="#L424"> 424</a> json.dump(dict(res=RES, tile=20.0, px=TP, tiles=index, args=vars(args)), open(f&quot;{OD}/index.json&quot;, &quot;w&quot;))</span>
+<span class="line" id="L425"><a href="#L425"> 425</a> print(f&quot;done {len(index)} tiles {area:.0f} m2 [{time.time()-t0:.0f}s]&quot;)</span></pre></html>

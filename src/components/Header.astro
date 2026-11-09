@@ -4,6 +4,7 @@ import { isCurrent, withBase } from '../lib/notes';
 const path = Astro.url.pathname;
 const nav = [
   { href: '/',        label: '笔记' },
+  { href: '/series/internship/', label: '实习专栏' },
   { href: '/tags/',   label: '标签' },
   { href: '/about/',  label: '关于' },
 ];
@@ -11,7 +12,7 @@ const nav = [
 
 <header class="site">
   <div class="wrap bar">
-    <a class="brand" href={withBase('/')}>
+    <a class="brand" href={withBase('/')} aria-label="笔记本首页">
       <span class="stamp" aria-hidden="true">記</span>
       <span class="brand-text">
         <b>笔记本</b>
@@ -147,7 +148,13 @@ const nav = [
 
   @media (max-width: 560px) {
     .brand-text em { display: none; }
-    .bar { gap: .6rem; }
-    .nav-link { padding: .3rem .45rem; font-size: .85rem; }
+    .brand, .toggle { flex-shrink: 0; }
+    .brand-text b, .nav-link { white-space: nowrap; }
+    .bar { gap: .4rem; }
+    nav { gap: .1rem; }
+    .nav-link { padding: .3rem .2rem; font-size: .8rem; }
+  }
+  @media (max-width: 360px) {
+    .brand-text { display: none; }
   }
 </style>

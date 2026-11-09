@@ -1,0 +1,118 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>a2_verify.py</title><style>body{margin:24px;font:15px system-ui;background:#faf8f3;color:#243342}pre{overflow:auto;line-height:1.6;background:white;padding:16px}.line{display:block}.line:target{background:#fff1a8}a{color:#58728a}header{overflow-wrap:anywhere}</style><header><a href="/notes/series/internship/">返回实习专栏</a><h1>a2_verify.py</h1><p>只读快照：2026-11-09 · /home/yjl/asset8824/run/a2_verify.py</p><p>SHA-256: e23eb2c35a5121077c6c2aea00768a25554fa94fab1efc1badbc144fdfd4e8d7</p></header><pre><span class="line" id="L1"><a href="#L1">   1</a> # -*- coding: utf-8 -*-</span>
+<span class="line" id="L2"><a href="#L2">   2</a> &quot;&quot;&quot;A2 · 核验新定位。四条互不相关的证据，都不依赖人工标注。</span>
+<span class="line" id="L3"><a href="#L3">   3</a> </span>
+<span class="line" id="L4"><a href="#L4">   4</a> 1. 离路面高度 vs 国标挂高（标志牌与信号灯的合理区间不同）</span>
+<span class="line" id="L5"><a href="#L5">   5</a> 2. MVS 点云支持（P2 产物，与资产定位完全独立：一个来自检测框三角化，</span>
+<span class="line" id="L6"><a href="#L6">   6</a>    一个来自逐像素平面扫描）</span>
+<span class="line" id="L7"><a href="#L7">   7</a> 3. 与旧台账的位移（旧台账用尺寸先验 + 噪声 GPS，位移大说明改动确实发生）</span>
+<span class="line" id="L8"><a href="#L8">   8</a> 4. 重投影残差与射线夹角（几何自洽）</span>
+<span class="line" id="L9"><a href="#L9">   9</a> &quot;&quot;&quot;</span>
+<span class="line" id="L10"><a href="#L10">  10</a> import sys, json, os</span>
+<span class="line" id="L11"><a href="#L11">  11</a> sys.path.insert(0, &quot;/home/yjl/asset8824&quot;)</span>
+<span class="line" id="L12"><a href="#L12">  12</a> os.environ.setdefault(&quot;GLOG_minloglevel&quot;, &quot;2&quot;)</span>
+<span class="line" id="L13"><a href="#L13">  13</a> import numpy as np, pandas as pd</span>
+<span class="line" id="L14"><a href="#L14">  14</a> from scipy.spatial import cKDTree</span>
+<span class="line" id="L15"><a href="#L15">  15</a> import config as C</span>
+<span class="line" id="L16"><a href="#L16">  16</a> </span>
+<span class="line" id="L17"><a href="#L17">  17</a> df = pd.read_parquet(C.OUT / &quot;assets3d.parquet&quot;)</span>
+<span class="line" id="L18"><a href="#L18">  18</a> orig = json.load(open(C.ENU_ORIG))</span>
+<span class="line" id="L19"><a href="#L19">  19</a> MLON = 111320.0 * np.cos(np.radians(orig[&quot;lat_ref&quot;])); MLAT = 110540.0</span>
+<span class="line" id="L20"><a href="#L20">  20</a> </span>
+<span class="line" id="L21"><a href="#L21">  21</a> print(&quot;=&quot; * 76)</span>
+<span class="line" id="L22"><a href="#L22">  22</a> print(&quot;① 离路面高度 vs 国标挂高&quot;)</span>
+<span class="line" id="L23"><a href="#L23">  23</a> print(&quot;=&quot; * 76)</span>
+<span class="line" id="L24"><a href="#L24">  24</a> EXPECT = {&quot;traffic_sign&quot;: (1.8, 7.5, &quot;GB 5768：柱式 1.8–2.5 m（下缘），悬臂/门架 5–7 m&quot;),</span>
+<span class="line" id="L25"><a href="#L25">  25</a>           &quot;traffic_light&quot;: (3.0, 7.0, &quot;GB 14886：悬臂式 5.5–7 m，柱式 3–4 m&quot;),</span>
+<span class="line" id="L26"><a href="#L26">  26</a>           &quot;camera&quot;: (3.0, 8.0, &quot;电子眼多与信号灯同杆或独立高杆&quot;)}</span>
+<span class="line" id="L27"><a href="#L27">  27</a> off = df[df.method == &quot;triangulate&quot;]</span>
+<span class="line" id="L28"><a href="#L28">  28</a> for lab, g in off.groupby(&quot;label&quot;):</span>
+<span class="line" id="L29"><a href="#L29">  29</a>     lo, hi, note = EXPECT.get(lab, (0, 99, &quot;&quot;))</span>
+<span class="line" id="L30"><a href="#L30">  30</a>     h = g.height_above_road_m</span>
+<span class="line" id="L31"><a href="#L31">  31</a>     ok = ((h &gt;= lo) &amp; (h &lt;= hi)).sum()</span>
+<span class="line" id="L32"><a href="#L32">  32</a>     print(f&quot;  {lab:14s} n={len(g):3d}  高度 中位 {h.median():5.2f} m  &quot;</span>
+<span class="line" id="L33"><a href="#L33">  33</a>           f&quot;p10 {h.quantile(.1):5.2f}  p90 {h.quantile(.9):5.2f}  &quot;</span>
+<span class="line" id="L34"><a href="#L34">  34</a>           f&quot;落在 [{lo},{hi}] 的 {ok}/{len(g)}&quot;)</span>
+<span class="line" id="L35"><a href="#L35">  35</a>     print(f&quot;                 {note}&quot;)</span>
+<span class="line" id="L36"><a href="#L36">  36</a>     bad = g[(h &lt; lo) | (h &gt; hi)]</span>
+<span class="line" id="L37"><a href="#L37">  37</a>     for b in bad.itertuples():</span>
+<span class="line" id="L38"><a href="#L38">  38</a>         print(f&quot;      异常 {b.asset_id} {b.leaf_vote or &#x27;—&#x27;}  h={b.height_above_road_m:.2f} m  &quot;</span>
+<span class="line" id="L39"><a href="#L39">  39</a>               f&quot;夹角 {b.max_angle_deg:.1f}°  RMS {b.rms_px:.1f} px  n={b.n_used}&quot;)</span>
+<span class="line" id="L40"><a href="#L40">  40</a> </span>
+<span class="line" id="L41"><a href="#L41">  41</a> print()</span>
+<span class="line" id="L42"><a href="#L42">  42</a> print(&quot;=&quot; * 76)</span>
+<span class="line" id="L43"><a href="#L43">  43</a> print(&quot;② MVS 点云支持（P2 产物，与资产定位完全独立）&quot;)</span>
+<span class="line" id="L44"><a href="#L44">  44</a> print(&quot;=&quot; * 76)</span>
+<span class="line" id="L45"><a href="#L45">  45</a> m = np.load(C.MVS_NPZ)</span>
+<span class="line" id="L46"><a href="#L46">  46</a> MX = m[&quot;X&quot;].astype(float)</span>
+<span class="line" id="L47"><a href="#L47">  47</a> tree = cKDTree(MX)</span>
+<span class="line" id="L48"><a href="#L48">  48</a> P = df[[&quot;east_m&quot;, &quot;north_m&quot;, &quot;z_m&quot;]].to_numpy()</span>
+<span class="line" id="L49"><a href="#L49">  49</a> for r in (0.5, 1.0, 1.5):</span>
+<span class="line" id="L50"><a href="#L50">  50</a>     cnt = np.array([len(tree.query_ball_point(p, r)) for p in P])</span>
+<span class="line" id="L51"><a href="#L51">  51</a>     print(f&quot;  半径 {r:.1f} m 内有 MVS 点的资产: {(cnt&gt;0).sum():3d}/{len(df)} &quot;</span>
+<span class="line" id="L52"><a href="#L52">  52</a>           f&quot;({(cnt&gt;0).mean()*100:4.1f}%)   点数中位 {int(np.median(cnt))}&quot;)</span>
+<span class="line" id="L53"><a href="#L53">  53</a> d_near, _ = tree.query(P, workers=-1)</span>
+<span class="line" id="L54"><a href="#L54">  54</a> df[&quot;mvs_dist_m&quot;] = d_near</span>
+<span class="line" id="L55"><a href="#L55">  55</a> for lab, g in df.groupby(&quot;label&quot;):</span>
+<span class="line" id="L56"><a href="#L56">  56</a>     print(f&quot;  {lab:16s} 最近 MVS 点距离 中位 {g.mvs_dist_m.median():.2f} m  &quot;</span>
+<span class="line" id="L57"><a href="#L57">  57</a>           f&quot;p90 {g.mvs_dist_m.quantile(.9):.2f} m&quot;)</span>
+<span class="line" id="L58"><a href="#L58">  58</a> </span>
+<span class="line" id="L59"><a href="#L59">  59</a> print()</span>
+<span class="line" id="L60"><a href="#L60">  60</a> print(&quot;=&quot; * 76)</span>
+<span class="line" id="L61"><a href="#L61">  61</a> print(&quot;③ 与旧台账的位移（旧 = 尺寸先验/IPM + 噪声 GPS）&quot;)</span>
+<span class="line" id="L62"><a href="#L62">  62</a> print(&quot;=&quot; * 76)</span>
+<span class="line" id="L63"><a href="#L63">  63</a> old = pd.read_parquet(C.LEDGER_OLD).set_index(&quot;asset_id&quot;)</span>
+<span class="line" id="L64"><a href="#L64">  64</a> j = df.set_index(&quot;asset_id&quot;).join(old[[&quot;lon&quot;, &quot;lat&quot;, &quot;method&quot;, &quot;needs_manual_review&quot;]],</span>
+<span class="line" id="L65"><a href="#L65">  65</a>                                   rsuffix=&quot;_old&quot;, how=&quot;inner&quot;)</span>
+<span class="line" id="L66"><a href="#L66">  66</a> dx = (j.lon - j.lon_old) * MLON</span>
+<span class="line" id="L67"><a href="#L67">  67</a> dy = (j.lat - j.lat_old) * MLAT</span>
+<span class="line" id="L68"><a href="#L68">  68</a> j[&quot;shift_m&quot;] = np.hypot(dx, dy)</span>
+<span class="line" id="L69"><a href="#L69">  69</a> print(f&quot;  可对照 {len(j)} 个   位移 中位 {j.shift_m.median():.2f} m  &quot;</span>
+<span class="line" id="L70"><a href="#L70">  70</a>       f&quot;p90 {j.shift_m.quantile(.9):.2f} m  最大 {j.shift_m.max():.2f} m&quot;)</span>
+<span class="line" id="L71"><a href="#L71">  71</a> for (lab, mo), g in j.groupby([&quot;label&quot;, &quot;method_old&quot;]):</span>
+<span class="line" id="L72"><a href="#L72">  72</a>     print(f&quot;  {lab:16s} 旧法 {mo:16s} n={len(g):3d}  位移中位 {g.shift_m.median():5.2f} m&quot;)</span>
+<span class="line" id="L73"><a href="#L73">  73</a> print(f&quot;  旧台账标“需复核”的 {int(j.needs_manual_review.sum())} 个，其位移中位 &quot;</span>
+<span class="line" id="L74"><a href="#L74">  74</a>       f&quot;{j[j.needs_manual_review].shift_m.median():.2f} m；&quot;</span>
+<span class="line" id="L75"><a href="#L75">  75</a>       f&quot;未标的位移中位 {j[~j.needs_manual_review].shift_m.median():.2f} m&quot;)</span>
+<span class="line" id="L76"><a href="#L76">  76</a> </span>
+<span class="line" id="L77"><a href="#L77">  77</a> print()</span>
+<span class="line" id="L78"><a href="#L78">  78</a> print(&quot;=&quot; * 76)</span>
+<span class="line" id="L79"><a href="#L79">  79</a> print(&quot;④ 几何自洽&quot;)</span>
+<span class="line" id="L80"><a href="#L80">  80</a> print(&quot;=&quot; * 76)</span>
+<span class="line" id="L81"><a href="#L81">  81</a> print(f&quot;  离地类 重投影 RMS: 中位 {off.rms_px.median():.2f} px  &quot;</span>
+<span class="line" id="L82"><a href="#L82">  82</a>       f&quot;p90 {off.rms_px.quantile(.9):.2f}  &gt;10 px 的 {int((off.rms_px&gt;10).sum())} 个&quot;)</span>
+<span class="line" id="L83"><a href="#L83">  83</a> print(f&quot;  离地类 最大射线夹角: 中位 {off.max_angle_deg.median():.1f}°  &quot;</span>
+<span class="line" id="L84"><a href="#L84">  84</a>       f&quot;最小 {off.max_angle_deg.min():.1f}°&quot;)</span>
+<span class="line" id="L85"><a href="#L85">  85</a> gnd = df[df.method == &quot;ground_ray&quot;]</span>
+<span class="line" id="L86"><a href="#L86">  86</a> print(f&quot;  贴地类 多帧散布: 中位 {gnd.scatter_m.median():.3f} m  &quot;</span>
+<span class="line" id="L87"><a href="#L87">  87</a>       f&quot;p90 {gnd.scatter_m.quantile(.9):.3f} m  &gt;1 m 的 {int((gnd.scatter_m&gt;1).sum())} 个&quot;)</span>
+<span class="line" id="L88"><a href="#L88">  88</a> </span>
+<span class="line" id="L89"><a href="#L89">  89</a> # ---- 质量分级 ----</span>
+<span class="line" id="L90"><a href="#L90">  90</a> def grade(r):</span>
+<span class="line" id="L91"><a href="#L91">  91</a>     if r.method == &quot;ground_ray&quot;:</span>
+<span class="line" id="L92"><a href="#L92">  92</a>         if r.scatter_m is not None and r.scatter_m &lt; 0.3 and r.n_used &gt;= 4: return 3</span>
+<span class="line" id="L93"><a href="#L93">  93</a>         if r.scatter_m is not None and r.scatter_m &lt; 0.8: return 2</span>
+<span class="line" id="L94"><a href="#L94">  94</a>         return 1</span>
+<span class="line" id="L95"><a href="#L95">  95</a>     if r.rms_px is None: return 0</span>
+<span class="line" id="L96"><a href="#L96">  96</a>     if r.rms_px &lt; 4 and r.max_angle_deg &gt; 8 and r.n_used &gt;= 4: return 3</span>
+<span class="line" id="L97"><a href="#L97">  97</a>     if r.rms_px &lt; 10 and r.max_angle_deg &gt; 3: return 2</span>
+<span class="line" id="L98"><a href="#L98">  98</a>     return 1</span>
+<span class="line" id="L99"><a href="#L99">  99</a> </span>
+<span class="line" id="L100"><a href="#L100"> 100</a> df[&quot;grade&quot;] = df.apply(grade, axis=1)</span>
+<span class="line" id="L101"><a href="#L101"> 101</a> df[&quot;needs_review&quot;] = (df.grade &lt;= 1) | (df.mvs_dist_m &gt; C.MVS_SNAP_R)</span>
+<span class="line" id="L102"><a href="#L102"> 102</a> df.to_parquet(C.OUT / &quot;assets3d.parquet&quot;)</span>
+<span class="line" id="L103"><a href="#L103"> 103</a> df.drop(columns=[&quot;obs&quot;]).to_csv(C.OUT / &quot;assets3d.csv&quot;, index=False)</span>
+<span class="line" id="L104"><a href="#L104"> 104</a> </span>
+<span class="line" id="L105"><a href="#L105"> 105</a> print()</span>
+<span class="line" id="L106"><a href="#L106"> 106</a> print(&quot;=&quot; * 76)</span>
+<span class="line" id="L107"><a href="#L107"> 107</a> print(&quot;质量分级（3 最好）&quot;)</span>
+<span class="line" id="L108"><a href="#L108"> 108</a> print(&quot;=&quot; * 76)</span>
+<span class="line" id="L109"><a href="#L109"> 109</a> inv = df[df.in_inventory]</span>
+<span class="line" id="L110"><a href="#L110"> 110</a> print(pd.crosstab(df.label, df.grade, margins=True).to_string())</span>
+<span class="line" id="L111"><a href="#L111"> 111</a> print(f&quot;\n入库资产 {len(inv)}   需复核 {int(inv.needs_review.sum())} &quot;</span>
+<span class="line" id="L112"><a href="#L112"> 112</a>       f&quot;({inv.needs_review.mean()*100:.0f}%)   旧台账为 41/81 (51%)&quot;)</span>
+<span class="line" id="L113"><a href="#L113"> 113</a> json.dump({&quot;n_assets&quot;: int(len(df)), &quot;n_inventory&quot;: int(len(inv)),</span>
+<span class="line" id="L114"><a href="#L114"> 114</a>            &quot;n_review&quot;: int(inv.needs_review.sum()),</span>
+<span class="line" id="L115"><a href="#L115"> 115</a>            &quot;grade_counts&quot;: {str(k): int(v) for k, v in df.grade.value_counts().items()},</span>
+<span class="line" id="L116"><a href="#L116"> 116</a>            &quot;mvs_support_1m&quot;: float((df.mvs_dist_m &lt;= 1.0).mean()),</span>
+<span class="line" id="L117"><a href="#L117"> 117</a>            &quot;shift_vs_old_median_m&quot;: float(j.shift_m.median())},</span>
+<span class="line" id="L118"><a href="#L118"> 118</a>           open(C.OUT / &quot;verify.json&quot;, &quot;w&quot;), indent=2, ensure_ascii=False)</span></pre></html>
