@@ -1,0 +1,425 @@
+{
+  "date": "2026-11-10",
+  "mode": "read-only server snapshots; CPU diagnostics only; no inference, training, BA rerun, or server writes",
+  "saved_inputs": [
+    {
+      "path": "/home/yjl/crack/viewer8826/build/common.py",
+      "archive": "code/common.py",
+      "bytes": 18177,
+      "sha256": "8300841c1b9347db56e23319196abd87fba30b63870e415a8ae1f0e07f651356"
+    },
+    {
+      "path": "/home/yjl/crack/viewer8826/build/video0903.py",
+      "archive": "code/video0903.py",
+      "bytes": 4073,
+      "sha256": "07016aaf9ef7e45ca5b30fb5438447031f33d516f866728625bc076aef8e71cf"
+    },
+    {
+      "path": "/home/yjl/crack/viewer8826/build/t01a_vo.py",
+      "archive": "code/t01a_vo.py",
+      "bytes": 10565,
+      "sha256": "5be5aed4c823b278d5d49a5dc84ba1659f6d2bf699366bb882e0166646fc1aac"
+    },
+    {
+      "path": "/home/yjl/crack/viewer8826/build/t01e_time.py",
+      "archive": "code/t01e_time.py",
+      "bytes": 7798,
+      "sha256": "11840439893c8b5bcf1cb0151fa68d918e0ac352196a1049c66bb525f390b0b7"
+    },
+    {
+      "path": "/home/yjl/crack/viewer8826/build/t01f_track.py",
+      "archive": "code/t01f_track.py",
+      "bytes": 11082,
+      "sha256": "df406f4f1fd2efdc3d00b8dd8571160712095a6ec93f8cf160048eeab7ebc5fe"
+    },
+    {
+      "path": "/home/yjl/crack/viewer8826/build/t02a_flat.py",
+      "archive": "code/t02a_flat.py",
+      "bytes": 3036,
+      "sha256": "11d410cb37767e6463270cb258171c97361973ed6bbfbd99a124ffd45b117ae9"
+    },
+    {
+      "path": "/home/yjl/crack/viewer8826/build/t02_ortho.py",
+      "archive": "code/t02_ortho.py",
+      "bytes": 9084,
+      "sha256": "327edcb8425fcad4a83aeb74e048508f3b45ea46dca78b5abb9d6383ad436ee3"
+    },
+    {
+      "path": "/home/yjl/crack/viewer8826/build/t04_cloud.py",
+      "archive": "code/t04_cloud.py",
+      "bytes": 13354,
+      "sha256": "3e98a6f5756fe35dd64169ae6c9ca11f7ed0ceb28e01222a5fd1958995f38b72"
+    },
+    {
+      "path": "/home/yjl/crack/viewer8826/build/t05_site.py",
+      "archive": "code/t05_site.py",
+      "bytes": 7302,
+      "sha256": "b3fd7cdb86110ea2217e4c05e2cbfc6e676163b80b451744acee251657508967"
+    },
+    {
+      "path": "/home/yjl/crack/viewer8826/gs/g11_ba.py",
+      "archive": "code/g11_ba.py",
+      "bytes": 18917,
+      "sha256": "3c4a5e96e0274436bd058629f71d14ccef1d88636a99943d76b9e0fb6c729136"
+    },
+    {
+      "path": "/home/yjl/crack/viewer8826/gs/g02_train.py",
+      "archive": "code/g02_train.py",
+      "bytes": 28679,
+      "sha256": "c2af1f8512ab1108670abfd9b1ea4512522a9ef1cbda896be8de10deb2509705"
+    },
+    {
+      "path": "/home/yjl/crack/viewer3d/build/t01d_strips.py",
+      "archive": "code/t01d_strips.py",
+      "bytes": 3079,
+      "sha256": "12f4aa8182cf0122747387de4439c3fe6e51b3b136e8295f88c6a51610805e73"
+    },
+    {
+      "path": "/home/yjl/gd/ABot-Recon/abot_recon/api.py",
+      "archive": "code/abot_api.py",
+      "bytes": 8884,
+      "sha256": "5636cf94fdb848f1c56b33c2e450e33d06f4ea4983f00e47efd9552942004e80"
+    },
+    {
+      "path": "/home/yjl/gd/ABot-Recon/abot_recon/model.py",
+      "archive": "code/abot_model.py",
+      "bytes": 7744,
+      "sha256": "1f2c81dca65dc47c43a77659a7ba0e754ba852ebf2474bd941990c0752e2bae3"
+    },
+    {
+      "path": "/home/yjl/gd/ABot-Recon/abot_recon/preprocessing.py",
+      "archive": "code/abot_preprocessing.py",
+      "bytes": 4109,
+      "sha256": "2bd9a67916be7cdd11806d77c1d433b497ebedda9aa37c9f8da79677ed671b40"
+    },
+    {
+      "path": "/home/yjl/gd/ABot-Recon/abot_recon/config.py",
+      "archive": "code/abot_config.py",
+      "bytes": 1855,
+      "sha256": "02c6b2bbd7c77428d922caa6c25762c059f0f59507e9be850cf9a1d569bd1e70"
+    },
+    {
+      "path": "/home/yjl/gd/ABot-Recon/abot_recon/modeling/pi3/models/pi3.py",
+      "archive": "code/abot_pi3.py",
+      "bytes": 27944,
+      "sha256": "33c6dc28d633a77b5f9e09e082aeb10b30744476c867b7576ba1fecca95b51ed"
+    },
+    {
+      "path": "/home/yjl/gd/ABot-Recon/abot_recon/modeling/pi3/models/depth_utils.py",
+      "archive": "code/abot_depth_utils.py",
+      "bytes": 374,
+      "sha256": "7b4483a7ae6f1ca7473d2c16ec80a361257d0b0c651edfe0a75d355bd41aef4f"
+    },
+    {
+      "path": "/home/yjl/gd/ABot-Recon/abot_recon/modeling/streaming/network.py",
+      "archive": "code/abot_network.py",
+      "bytes": 61801,
+      "sha256": "926f981ee002a0a2859812de17e880889388b030ccdc2aa51c09ae88b018a868"
+    },
+    {
+      "path": "/home/yjl/crack/viewer8826/work/track0903.npz",
+      "archive": "input/track0903.npz",
+      "bytes": 1269562,
+      "sha256": "432c33839bd9b9b879cdd61813de972db39336d8ee3343280ffd79797e2ba69d"
+    },
+    {
+      "path": "/home/yjl/crack/viewer8826/work/frontcam0903.json",
+      "archive": "input/frontcam0903.json",
+      "bytes": 394,
+      "sha256": "0f96bd9f4f096c8fc77cce6e89cd116ebc45adf4ad19e7911eb13aef2639e13f"
+    },
+    {
+      "path": "/home/yjl/crack/viewer8826/work/cam0903.json",
+      "archive": "input/cam0903.json",
+      "bytes": 121,
+      "sha256": "6876d4109e2cb179f1518881c4020f6f9eeb58538ed5a0b51e463f4654888b48"
+    },
+    {
+      "path": "/home/yjl/crack/viewer8826/work/cloud2_scale.npy",
+      "archive": "input/cloud2_scale.npy",
+      "bytes": 56416,
+      "sha256": "301821ccdcdb7cae1ef4151086c71ea7619d747800aa4df2ac7b572759608564"
+    },
+    {
+      "path": "/home/yjl/crack/viewer8826/work/cloud2_index.json",
+      "archive": "input/cloud2_index.json",
+      "bytes": 41875,
+      "sha256": "5aa275872b46f2af1975ae5b98f45f2ecc4ac7fc4e9b2e8b2e58b68165f894c4"
+    },
+    {
+      "path": "/home/yjl/crack/viewer8826/work/vo0903.npz",
+      "archive": "input/vo0903.npz",
+      "bytes": 1778846,
+      "sha256": "51127f3c8d86c17e6577ade17272373ca938c0d0143a2140c5c3b402bc44d72c"
+    },
+    {
+      "path": "/home/yjl/crack/viewer8826/work/strips2_meta.npz",
+      "archive": "input/strips2_meta.npz",
+      "bytes": 448628,
+      "sha256": "380d7753e2c8c3b32139265d0e47ee3380e3461305abeff87ef9c819aca377f5"
+    },
+    {
+      "path": "/home/yjl/crack/viewer8826/work/time0903.npz",
+      "archive": "input/time0903.npz",
+      "bytes": 214536,
+      "sha256": "924feca170e958259e2af48813c3ec73d22e6c187c03bb904a202ec5fd66079f"
+    },
+    {
+      "path": "/home/yjl/crack/viewer8826/work/model_pixmap.json",
+      "archive": "input/model_pixmap.json",
+      "bytes": 57,
+      "sha256": "b8ca0b72d20edb3262cdc8cf5a8823ec0055686a8f8139b7fb9166c2847f80a6"
+    },
+    {
+      "path": "/home/yjl/crack/viewer8826/work/gs/chunks.json",
+      "archive": "input/gs/chunks.json",
+      "bytes": 43542,
+      "sha256": "78af642360331f822c852c20dbbfc1cebe6aca638c0ba6588c8fcaf23ae3426f"
+    },
+    {
+      "path": "/home/yjl/crack/viewer8826/work/gs/ba/s1_00.npz",
+      "archive": "input/gs/ba/s1_00.npz",
+      "bytes": 147146,
+      "sha256": "89db12c1a7de800b62d6fe6938e658f03a1b0fc55ad1128d81f7dd4bf85558e6"
+    },
+    {
+      "path": "/home/yjl/crack/viewer8826/work/gs/ba/s1_01.npz",
+      "archive": "input/gs/ba/s1_01.npz",
+      "bytes": 231738,
+      "sha256": "5cbd363bb23ce46dec6c139d1430bfb4efae7588ffb921a45d21d5bfc47f953b"
+    },
+    {
+      "path": "/home/yjl/gd/ABot-Recon/outputs/rec0903_hires/metadata.json",
+      "archive": "input/abot_metadata.json",
+      "bytes": 10387,
+      "sha256": "633ec817b7065aeb3ec3b858ea3add769db7d3562c4c0f0a7f5d3365b4c6b295"
+    },
+    {
+      "path": "/home/yjl/gd/frames/rec0903/003535.jpg",
+      "archive": "input/raw-3535.jpg",
+      "bytes": 144799,
+      "sha256": "9acf36e1a8d7f2bc4ebe8b322037c45b8acf5e4211fb7ce65ed011078df48025"
+    },
+    {
+      "path": "/home/yjl/gd/frames/rec0903/003540.jpg",
+      "archive": "input/raw-3540.jpg",
+      "bytes": 164241,
+      "sha256": "e6b6f69a3a973e6767bac54800c5eb1394beb7d2416024cc6e2b1e79d31d7a1f"
+    },
+    {
+      "path": "/home/yjl/gd/frames/rec0903/003545.jpg",
+      "archive": "input/raw-3545.jpg",
+      "bytes": 161606,
+      "sha256": "da1ad78c5b1984a70b5d9a235db62b68a3300f182f37aad5b150d3ee67eab3d4"
+    },
+    {
+      "path": "/home/yjl/crack/viewer8826/site2/tiles/-22_-71.bin",
+      "archive": "input/tile.bin",
+      "bytes": 2028708,
+      "sha256": "c3590b762d435315f7c9065bf2df5ad9edc53ac575d8b24b25f39061b2f16464"
+    },
+    {
+      "path": "/home/yjl/crack/viewer8826/work/gs/logs/s1_00.log",
+      "archive": "input/s1_00.log",
+      "bytes": 1351,
+      "sha256": "fc05b2daee26afd3abbc76f6102c6981fe6a0c4451302b0fabdbd8f95df42e71"
+    },
+    {
+      "path": "/home/yjl/crack/viewer8826/work/gs/logs/s1_00_ba.log",
+      "archive": "input/s1_00_ba.log",
+      "bytes": 1409,
+      "sha256": "738b424c4023258c202c98bea31b1d0bdbba1a9ff04e345208de5bc31f2e2583"
+    }
+  ],
+  "tensor_slices": {
+    "local_points": {
+      "shape": [
+        1759,
+        420,
+        756,
+        3
+      ],
+      "dtype": "torch.float32",
+      "file": "/home/yjl/gd/ABot-Recon/outputs/rec0903_hires/local_points.pt",
+      "frame_index": 708
+    },
+    "colors": {
+      "shape": [
+        1759,
+        420,
+        756,
+        3
+      ],
+      "dtype": "torch.uint8",
+      "file": "/home/yjl/gd/ABot-Recon/outputs/rec0903_hires/colors.pt",
+      "frame_index": 708
+    },
+    "confidence": {
+      "shape": [
+        1759,
+        420,
+        756
+      ],
+      "dtype": "torch.float32",
+      "file": "/home/yjl/gd/ABot-Recon/outputs/rec0903_hires/confidence.pt",
+      "frame_index": 708
+    }
+  },
+  "caveats": [
+    "Current source is not proof of the exact historical checkpoint or invocation.",
+    "CPU feature matches are newly extracted, not original BA observation arrays.",
+    "Deployed tile is existing output; CPU single-frame candidates are before cross-frame voxel filtering."
+  ],
+  "assets": [
+    {
+      "file": "3540-raw.jpg",
+      "bytes": 164241,
+      "sha256": "e6b6f69a3a973e6767bac54800c5eb1394beb7d2416024cc6e2b1e79d31d7a1f",
+      "normalization": "none"
+    },
+    {
+      "file": "actual-dataflow.png",
+      "bytes": 240355,
+      "sha256": "0d0225daa1f2abef23b8b99d13f018116b67e363bf599852c719d797984caf9d",
+      "normalization": "none"
+    },
+    {
+      "file": "ba-diagnostic.json",
+      "bytes": 2985,
+      "sha256": "551fca6619248aa9fdf65a7e2af006b46c8a8c64391bcedd6dc206aada0f8056",
+      "normalization": "CRLF to LF, matching Git publication"
+    },
+    {
+      "file": "ba-features.png",
+      "bytes": 1298290,
+      "sha256": "7e2c7f70f51f5d0d815e01c002e95c0d6fd54a1a67c1bd311cd95beeab36d0ae",
+      "normalization": "none"
+    },
+    {
+      "file": "ba-observations-cpu.npz",
+      "bytes": 1768,
+      "sha256": "727e16d43cf0d4a2e4c7c558e4468878eeb23e9e796c601f221d582f67bb893b",
+      "normalization": "none"
+    },
+    {
+      "file": "ba-schur.png",
+      "bytes": 45367,
+      "sha256": "f44912e3fb0f7e90d93b849fcb96a952002f78991e23034b0bc7f2a503f985df",
+      "normalization": "none"
+    },
+    {
+      "file": "case-3540.npz",
+      "bytes": 5211013,
+      "sha256": "334fa885f8032a8e890f196653e13f6a490061c10bdf64bc4dae6266a3b19c17",
+      "normalization": "none"
+    },
+    {
+      "file": "code-manifest.json",
+      "bytes": 5606,
+      "sha256": "6d29da06bc784c22dbb0a1ff843de6d5e0bcb863a7167e0452b45042d1109126",
+      "normalization": "CRLF to LF, matching Git publication"
+    },
+    {
+      "file": "deployed-cloud.png",
+      "bytes": 316643,
+      "sha256": "f94c44847bbc952aee6259739c614e639fd95d48505e95d8a2bd4d7b75d0d910",
+      "normalization": "none"
+    },
+    {
+      "file": "effective_camera.json",
+      "bytes": 236,
+      "sha256": "3425526110d874251fa0db2df6230ba6ac2b71deb24d33e4a4697e7f49152e0f",
+      "normalization": "CRLF to LF, matching Git publication"
+    },
+    {
+      "file": "frame-landmarks.png",
+      "bytes": 2586894,
+      "sha256": "3c4a9eae593e10655026cfca0ca5001c48114779cb551ae4bc6ec17699d0de69",
+      "normalization": "none"
+    },
+    {
+      "file": "fusion-filter.png",
+      "bytes": 304847,
+      "sha256": "be1d2f8a3be311139bfbcf36eaa9fde04490421e04e561a2ce54c9f118a55260",
+      "normalization": "none"
+    },
+    {
+      "file": "internship-8826-ba-diagnostic.py",
+      "bytes": 6393,
+      "sha256": "ef80630c4a4ffe3c694233a14c988137f5a55a6eca7d45ab0cbf8f5b3ef53262",
+      "normalization": "CRLF to LF, matching Git publication"
+    },
+    {
+      "file": "internship-8826-case.py",
+      "bytes": 10433,
+      "sha256": "aae45a8bc24b7944cd35537f2f09d984baec6337f8cce81e82e3d4592ea5d728",
+      "normalization": "CRLF to LF, matching Git publication"
+    },
+    {
+      "file": "measurements.json",
+      "bytes": 8533,
+      "sha256": "cdde4b1dde49679623f02865b492160821ff7dc1ad00a5eceffb676378ce9575",
+      "normalization": "CRLF to LF, matching Git publication"
+    },
+    {
+      "file": "point-to-world.png",
+      "bytes": 430825,
+      "sha256": "2702da6054455f1d00e3f40d434ddca0a1b93b9310e15c3a23f40ffe94ae9a3d",
+      "normalization": "none"
+    },
+    {
+      "file": "pointmap.png",
+      "bytes": 743910,
+      "sha256": "9051a1eae533fd2c084784c30f157853260fd393375831e5f4fefc521671c164",
+      "normalization": "none"
+    },
+    {
+      "file": "poses.png",
+      "bytes": 103339,
+      "sha256": "e3a63807e29fc23c1840082b46aa4526efd0d0e66363101f21d72ee31ddbda08",
+      "normalization": "none"
+    },
+    {
+      "file": "s1_00-ba.npz",
+      "bytes": 147146,
+      "sha256": "89db12c1a7de800b62d6fe6938e658f03a1b0fc55ad1128d81f7dd4bf85558e6",
+      "normalization": "none"
+    },
+    {
+      "file": "s1_01-ba.npz",
+      "bytes": 231738,
+      "sha256": "5cbd363bb23ce46dec6c139d1430bfb4efae7588ffb921a45d21d5bfc47f953b",
+      "normalization": "none"
+    },
+    {
+      "file": "scale.png",
+      "bytes": 106137,
+      "sha256": "c45570b720f0b1e0d90ac18255b08f62859b833ed45b6dd3622052122c91a1de",
+      "normalization": "none"
+    },
+    {
+      "file": "strips.png",
+      "bytes": 1070742,
+      "sha256": "a0f8b7b9fd172314d7f5b9579f284f6380298662981792ffbc3d070104a5089c",
+      "normalization": "none"
+    },
+    {
+      "file": "tensor-info.json",
+      "bytes": 632,
+      "sha256": "e8c5a7179ddef241516349d99e47dcb3b5c7502262e5232658f9e64aaa1ef2ac",
+      "normalization": "CRLF to LF, matching Git publication"
+    },
+    {
+      "file": "tile-meta.json",
+      "bytes": 162,
+      "sha256": "3c215c3973a9d8a3f990d29ede8d543428930c0ead1d3a7c09bde33e702f5865",
+      "normalization": "CRLF to LF, matching Git publication"
+    },
+    {
+      "file": "tile-minus22-minus72.bin",
+      "bytes": 1464078,
+      "sha256": "9e4d54cdd0ca69435d0037d740434fbac36e2051aa5abde78022c874c51be918",
+      "normalization": "none"
+    }
+  ]
+}

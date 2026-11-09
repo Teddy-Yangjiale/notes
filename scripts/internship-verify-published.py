@@ -67,7 +67,7 @@ for url,r in resources.items():
     if urlsplit(url).path.lower().endswith(('.png','.jpg','.jpeg','.webp')):
         try:Image.open(io.BytesIO(r['data'])).verify();image_count+=1
         except Exception as e:errors.append({'url':url,'error':'image decoding failed: '+str(e)})
-    if '/internship/code/' in url or '/8827-lesson/code/' in url:
+    if '/internship/code/' in url or '/8827-lesson/code/' in url or '/8826-lesson/code/' in url:
         code_count+=1
         if not BeautifulSoup(r['data'],'html.parser').select('pre span[id]'):
             errors.append({'url':url,'error':'missing source lines'})

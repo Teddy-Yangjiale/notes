@@ -1,0 +1,112 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>t01e_time.py</title><style>body{font:15px system-ui;margin:24px;background:#faf8f3}pre{overflow:auto;line-height:1.6}pre span{display:block}span:target{background:#fff1a8}header{overflow-wrap:anywhere}</style><header><a href="/notes/internship-8826/">返回8826课堂笔记</a><h1>t01e_time.py</h1><p>2026-11-10 服务器只读快照：/home/yjl/crack/viewer8826/build/t01e_time.py<br>SHA-256 11840439893c8b5bcf1cb0151fa68d918e0ac352196a1049c66bb525f390b0b7</p></header><pre><span id="L1"><a href="#L1">   1</a> # -*- coding: utf-8 -*-</span>
+<span id="L2"><a href="#L2">   2</a> &quot;&quot;&quot;t01e: rec0903 每一帧的真实拍摄时刻 (黑匣子/GNSS 时间轴)。</span>
+<span id="L3"><a href="#L3">   3</a> </span>
+<span id="L4"><a href="#L4">   4</a> 2026-10-01 查明的三件事 (取代 common.frame_lag 里&quot;时延缓慢漂移&quot;的说法):</span>
+<span id="L5"><a href="#L5">   5</a>   1. 帧间隔不均匀: 25 fps 的源每 4,4,4,5,4,4,5 帧取一帧 —— 每 7 帧 (一个 GOP, 1.2 s) 里 5 个 0.16 s、2 个 0.20 s。</span>
+<span id="L6"><a href="#L6">   6</a>      长间隔出现在&quot;真实帧序号 mod 7 = 0 和 3&quot;之后。</span>
+<span id="L7"><a href="#L7">   7</a>   2. mp4 里有 13 个解不出来的样本。它们**不占拍摄时刻** (不是丢了的画面, 是码流里的坏数据被封装成了样本):</span>
+<span id="L8"><a href="#L8">   8</a>      每过一个坏样本, 长短间隔的相位就在帧号上后移一位, 实测处处吻合; 真实帧正好 8778 = 7 x 1254 个。</span>
+<span id="L9"><a href="#L9">   9</a>      所以&quot;帧号 / 5.827&quot;每过一个坏样本就比真实时刻多走 0.171 s —— 这就是之前看到的&quot;时延从 +1.6 漂到 -1.0 s&quot;。</span>
+<span id="L10"><a href="#L10">  10</a>   3. 于是时间模型只有一个未知数 T0:  t(r) = T0 + 1.2*floor(r/7) + off[r mod 7],  r = 真实帧序号。</span>
+<span id="L11"><a href="#L11">  11</a>      T0 用&quot;逐帧路面位移 (视觉里程计) = 黑匣子定位在这段时间里走过的路程&quot;来定, 并分窗检验它是否真是常数。</span>
+<span id="L12"><a href="#L12">  12</a> 输出 work/time0903.npz:  f2r (帧号 -&gt; 真实帧序号, 坏样本为 -1), t (每帧时刻, 相对 14:45:56 的秒), T0</span>
+<span id="L13"><a href="#L13">  13</a> &quot;&quot;&quot;</span>
+<span id="L14"><a href="#L14">  14</a> import sys, time</span>
+<span id="L15"><a href="#L15">  15</a> import numpy as np, cv2</span>
+<span id="L16"><a href="#L16">  16</a> from common import *</span>
+<span id="L17"><a href="#L17">  17</a> </span>
+<span id="L18"><a href="#L18">  18</a> import video0903</span>
+<span id="L19"><a href="#L19">  19</a> OFF = np.array([0.0, 0.20, 0.36, 0.52, 0.72, 0.88, 1.04])        # 长间隔在位置 0、3 之后</span>
+<span id="L20"><a href="#L20">  20</a> </span>
+<span id="L21"><a href="#L21">  21</a> if __name__ == &quot;__main__&quot;:</span>
+<span id="L22"><a href="#L22">  22</a>     t0 = time.time()</span>
+<span id="L23"><a href="#L23">  23</a>     n = 8791</span>
+<span id="L24"><a href="#L24">  24</a>     r2f = video0903.frame_map()</span>
+<span id="L25"><a href="#L25">  25</a>     f2r = np.full(n, -1, int); f2r[r2f] = np.arange(len(r2f))</span>
+<span id="L26"><a href="#L26">  26</a>     bad = np.flatnonzero(f2r &lt; 0)</span>
+<span id="L27"><a href="#L27">  27</a>     print(&quot;真实帧 %d 个 (= 7 x %.2f), 坏样本 %d 个, 帧号: %s&quot; % (len(r2f), len(r2f) / 7.0, len(bad), bad.tolist()))</span>
+<span id="L28"><a href="#L28">  28</a>     assert (np.diff(r2f) &gt; 0).all(), &quot;帧号映射不单调&quot;</span>
+<span id="L29"><a href="#L29">  29</a>     # ---- 视觉里程计 ----</span>
+<span id="L30"><a href="#L30">  30</a>     z = np.load(WORK + &quot;/vo0903.npz&quot;); R = z[&quot;R&quot;]; keys = list(z[&quot;keys&quot;]); idx = z[&quot;idx&quot;]</span>
+<span id="L31"><a href="#L31">  31</a>     c = {k: R[:, i] for i, k in enumerate(keys)}</span>
+<span id="L32"><a href="#L32">  32</a>     ka = c[&quot;ka&quot;].astype(int); kb = c[&quot;kb&quot;].astype(int)</span>
+<span id="L33"><a href="#L33">  33</a>     fa, fb = idx[ka], idx[kb]</span>
+<span id="L34"><a href="#L34">  34</a>     ra, rb = f2r[fa], f2r[fb]</span>
+<span id="L35"><a href="#L35">  35</a>     adj = (rb - ra == 1) &amp; (ra &gt;= 0) &amp; np.isfinite(c[&quot;dy&quot;]) &amp; (c[&quot;ninl&quot;] &gt;= 20)</span>
+<span id="L36"><a href="#L36">  36</a>     r = ra[adj]; dy = c[&quot;dy&quot;][adj]</span>
+<span id="L37"><a href="#L37">  37</a>     dt = np.where(np.isin(r % 7, (0, 3)), 0.20, 0.16)</span>
+<span id="L38"><a href="#L38">  38</a>     # 1) 相位检验: 相对局部中位的位移比, 按预期长/短分组</span>
+<span id="L39"><a href="#L39">  39</a>     d_r = np.full(len(r2f), np.nan); d_r[r] = dy</span>
+<span id="L40"><a href="#L40">  40</a>     q = np.full(len(r2f), np.nan)</span>
+<span id="L41"><a href="#L41">  41</a>     for i in r:</span>
+<span id="L42"><a href="#L42">  42</a>         w = d_r[max(0, i - 10):i + 11]; w = w[np.isfinite(w)]</span>
+<span id="L43"><a href="#L43">  43</a>         if len(w) &gt;= 12 and np.median(w) &gt; 0.8: q[i] = d_r[i] / np.median(w)</span>
+<span id="L44"><a href="#L44">  44</a>     m = np.isfinite(q); exp_long = np.isin(np.arange(len(q)) % 7, (0, 3))</span>
+<span id="L45"><a href="#L45">  45</a>     print(&quot;相位检验 (位移 / 局部中位): 预期长间隔处 中位 %.3f (n=%d), 预期短间隔处 中位 %.3f (n=%d); 理论 1.166 / 0.933&quot;</span>
+<span id="L46"><a href="#L46">  46</a>           % (np.median(q[m &amp; exp_long]), (m &amp; exp_long).sum(), np.median(q[m &amp; ~exp_long]), (m &amp; ~exp_long).sum()))</span>
+<span id="L47"><a href="#L47">  47</a>     wrong = (m &amp; exp_long &amp; (q &lt; 1.05)).sum() + (m &amp; ~exp_long &amp; (q &gt; 1.05)).sum()</span>
+<span id="L48"><a href="#L48">  48</a>     print(&quot;   与预期不符的帧对: %d / %d (%.1f%%)&quot; % (wrong, m.sum(), 100 * wrong / m.sum()))</span>
+<span id="L49"><a href="#L49">  49</a>     # 2) 定 T0</span>
+<span id="L50"><a href="#L50">  50</a>     bb = np.load(WORK + &quot;/bb_track.npz&quot;)</span>
+<span id="L51"><a href="#L51">  51</a>     arc = np.concatenate([[0], np.cumsum(np.hypot(np.diff(bb[&quot;E&quot;]), np.diff(bb[&quot;N&quot;])))])</span>
+<span id="L52"><a href="#L52">  52</a>     tb = bb[&quot;t&quot;]</span>
+<span id="L53"><a href="#L53">  53</a>     trel = 1.2 * (np.arange(len(r2f)) // 7) + OFF[np.arange(len(r2f)) % 7]       # 相对 T0</span>
+<span id="L54"><a href="#L54">  54</a>     def cost(T0, al, sel):</span>
+<span id="L55"><a href="#L55">  55</a>         pred = np.interp(T0 + al * trel[r[sel] + 1], tb, arc) - np.interp(T0 + al * trel[r[sel]], tb, arc)</span>
+<span id="L56"><a href="#L56">  56</a>         e = dy[sel] - pred</span>
+<span id="L57"><a href="#L57">  57</a>         return np.mean(np.minimum(np.abs(e), 0.5)), e</span>
+<span id="L58"><a href="#L58">  58</a>     allsel = np.ones(len(r), bool)</span>
+<span id="L59"><a href="#L59">  59</a>     best = None</span>
+<span id="L60"><a href="#L60">  60</a>     for al in 1.0 + np.arange(-4, 22) * 1e-4:</span>
+<span id="L61"><a href="#L61">  61</a>         for T in np.arange(-1.0, 4.0, 0.02):</span>
+<span id="L62"><a href="#L62">  62</a>             cst = cost(T, al, allsel)[0]</span>
+<span id="L63"><a href="#L63">  63</a>             if best is None or cst &lt; best[0]: best = (cst, float(T), float(al))</span>
+<span id="L64"><a href="#L64">  64</a>     _, T0, AL = best</span>
+<span id="L65"><a href="#L65">  65</a>     e = cost(T0, AL, allsel)[1]</span>
+<span id="L66"><a href="#L66">  66</a>     print(&quot;时间模型: t(r) = %+.2f + %.5f * (1.2*floor(r/7) + off[r%%7]);  alpha=1 时最优代价 %.4f, 现在 %.4f&quot;</span>
+<span id="L67"><a href="#L67">  67</a>           % (T0, AL, min(cost(T, 1.0, allsel)[0] for T in np.arange(-1.0, 4.0, 0.02)), best[0]))</span>
+<span id="L68"><a href="#L68">  68</a>     print(&quot;   钟速比 %.5f: 源帧率 = 25 / %.5f = %.3f fps (若是 25/1.001 = 24.975); 全片 %.1f s (文件名给的时长 1507 s)&quot;</span>
+<span id="L69"><a href="#L69">  69</a>           % (AL, AL, 25 / AL, AL * trel[-1]))</span>
+<span id="L70"><a href="#L70">  70</a>     print(&quot;   位移残差 (视觉 - 定位): 中位 %+.3f m, IQR %+.3f~%+.3f; 位移比 中位 %.4f&quot; % (np.median(e), *np.percentile(e, [25, 75]),</span>
+<span id="L71"><a href="#L71">  71</a>           np.median(dy / np.maximum(dy - e, 0.05))))</span>
+<span id="L72"><a href="#L72">  72</a>     print(&quot;   分窗检验 (固定 alpha, 每窗单独找时间偏移, 应当都在 0 附近):&quot;)</span>
+<span id="L73"><a href="#L73">  73</a>     wins = []; grid = np.arange(-1.5, 1.5, 0.02)</span>
+<span id="L74"><a href="#L74">  74</a>     for a in range(0, len(r2f), 600):</span>
+<span id="L75"><a href="#L75">  75</a>         sel = (r &gt;= a) &amp; (r &lt; a + 600)</span>
+<span id="L76"><a href="#L76">  76</a>         if sel.sum() &lt; 120: continue</span>
+<span id="L77"><a href="#L77">  77</a>         pred = np.interp(T0 + AL * trel[r[sel] + 1], tb, arc) - np.interp(T0 + AL * trel[r[sel]], tb, arc)</span>
+<span id="L78"><a href="#L78">  78</a>         if np.ptp(pred / dt[sel]) &lt; 3.0: continue</span>
+<span id="L79"><a href="#L79">  79</a>         cw = np.array([cost(T0 + T, AL, sel)[0] for T in grid]); Tw = float(grid[cw.argmin()])</span>
+<span id="L80"><a href="#L80">  80</a>         wins.append((a, Tw, sel.sum()))</span>
+<span id="L81"><a href="#L81">  81</a>         print(&quot;      真实帧 %4d~%4d (帧号 %d~): 偏移 %+.2f s  (n=%d, 代价 %.4f)&quot; % (a, a + 600, r2f[a], Tw, sel.sum(), cw.min()))</span>
+<span id="L82"><a href="#L82">  82</a>     W = np.array(wins)</span>
+<span id="L83"><a href="#L83">  83</a>     print(&quot;   分窗偏移: 中位 %+.2f, 范围 %+.2f ~ %+.2f s, 标准差 %.2f s&quot; % (np.median(W[:, 1]), W[:, 1].min(), W[:, 1].max(), W[:, 1].std()))</span>
+<span id="L84"><a href="#L84">  84</a>     trel = AL * trel</span>
+<span id="L85"><a href="#L85">  85</a>     # ---- 残余时间偏移: 滑动窗口 (420 帧 ~ 72 s, 步长 105 帧), 只在有加减速的窗口里估, 中值滤波后按帧号线性插值 ----</span>
+<span id="L86"><a href="#L86">  86</a>     # 上面的分窗检验显示模型之外还剩 ±0.2 s 的缓变 (去程后半 -0.15, 回程后半 +0.15): 15 m/s 时相当于沿路 ±3 m,</span>
+<span id="L87"><a href="#L87">  87</a>     # 而且去程回程方向相反, 两程的路面图会互相错开两倍。原因未明 (黑匣子定位的滤波延迟随工况变, 或抽帧节拍还有别的不规则),</span>
+<span id="L88"><a href="#L88">  88</a>     # 这里只做经验改正; 隧道里 (定位是推算的) 的窗口代价明显偏高, 不采用。</span>
+<span id="L89"><a href="#L89">  89</a>     cen, off, cst = [], [], []</span>
+<span id="L90"><a href="#L90">  90</a>     g2 = np.arange(-0.8, 0.8, 0.01)</span>
+<span id="L91"><a href="#L91">  91</a>     for a in range(0, len(r2f) - 200, 105):</span>
+<span id="L92"><a href="#L92">  92</a>         sel = (r &gt;= a) &amp; (r &lt; a + 420)</span>
+<span id="L93"><a href="#L93">  93</a>         if sel.sum() &lt; 100: continue</span>
+<span id="L94"><a href="#L94">  94</a>         pred = np.interp(T0 + trel[r[sel] + 1], tb, arc) - np.interp(T0 + trel[r[sel]], tb, arc)</span>
+<span id="L95"><a href="#L95">  95</a>         if np.ptp(np.percentile(pred / dt[sel], [5, 95])) &lt; 2.5: continue</span>
+<span id="L96"><a href="#L96">  96</a>         cw = np.array([np.mean(np.minimum(np.abs(dy[sel] - (np.interp(T0 + T + trel[r[sel] + 1], tb, arc) - np.interp(T0 + T + trel[r[sel]], tb, arc))), 0.5)) for T in g2])</span>
+<span id="L97"><a href="#L97">  97</a>         if cw.min() &gt; 0.12: continue</span>
+<span id="L98"><a href="#L98">  98</a>         cen.append(a + 210); off.append(float(g2[cw.argmin()])); cst.append(float(cw.min()))</span>
+<span id="L99"><a href="#L99">  99</a>     cen, off = np.array(cen), np.array(off)</span>
+<span id="L100"><a href="#L100"> 100</a>     offm = np.array([np.median(off[max(0, i - 1):i + 2]) for i in range(len(off))])</span>
+<span id="L101"><a href="#L101"> 101</a>     corr = np.interp(np.arange(len(r2f)), cen, offm)</span>
+<span id="L102"><a href="#L102"> 102</a>     print(&quot;   残余偏移 (滑窗 %d 个): 中位 %+.2f s, 范围 %+.2f ~ %+.2f s; 改正后重新算的位移残差 IQR:&quot; % (len(cen), np.median(offm), offm.min(), offm.max()), end=&quot; &quot;)</span>
+<span id="L103"><a href="#L103"> 103</a>     trel = trel + corr</span>
+<span id="L104"><a href="#L104"> 104</a>     e2 = dy - (np.interp(T0 + trel[r + 1], tb, arc) - np.interp(T0 + trel[r], tb, arc))</span>
+<span id="L105"><a href="#L105"> 105</a>     print(&quot;%+.3f~%+.3f m (改正前 %+.3f~%+.3f)&quot; % (*np.percentile(e2, [25, 75]), *np.percentile(e, [25, 75])))</span>
+<span id="L106"><a href="#L106"> 106</a>     t = np.full(n, np.nan); t[r2f] = T0 + trel</span>
+<span id="L107"><a href="#L107"> 107</a>     # 坏样本的时刻用前后真实帧插值 (只为数组完整, 不参与任何计算)</span>
+<span id="L108"><a href="#L108"> 108</a>     ok = np.isfinite(t); t[~ok] = np.interp(np.flatnonzero(~ok), np.flatnonzero(ok), t[ok])</span>
+<span id="L109"><a href="#L109"> 109</a>     np.savez(WORK + &quot;/time0903.npz&quot;, f2r=f2r, r2f=r2f, t=t, T0=T0, alpha=AL, bad=bad, wins=W, corr_cen=cen, corr_off=offm)</span>
+<span id="L110"><a href="#L110"> 110</a>     old = np.arange(n) / FPS + np.load(WORK + &quot;/frames.npz&quot;)[&quot;lag&quot;]</span>
+<span id="L111"><a href="#L111"> 111</a>     print(&quot;新旧帧时刻之差 (新 - 旧): 中位 %+.2f s, 范围 %+.2f ~ %+.2f s&quot; % (np.median(t - old), (t - old).min(), (t - old).max()))</span>
+<span id="L112"><a href="#L112"> 112</a>     print(&quot;用时 %.0fs&quot; % (time.time() - t0))</span></pre></html>

@@ -1,0 +1,154 @@
+[
+  {
+    "path": "/home/yjl/crack/viewer8826/build/common.py",
+    "archive": "code/common.py",
+    "bytes": 18177,
+    "sha256": "8300841c1b9347db56e23319196abd87fba30b63870e415a8ae1f0e07f651356",
+    "url": "/notes/internship/8826-lesson/code/common.py.html",
+    "lines": 295
+  },
+  {
+    "path": "/home/yjl/crack/viewer8826/build/video0903.py",
+    "archive": "code/video0903.py",
+    "bytes": 4073,
+    "sha256": "07016aaf9ef7e45ca5b30fb5438447031f33d516f866728625bc076aef8e71cf",
+    "url": "/notes/internship/8826-lesson/code/video0903.py.html",
+    "lines": 89
+  },
+  {
+    "path": "/home/yjl/crack/viewer8826/build/t01a_vo.py",
+    "archive": "code/t01a_vo.py",
+    "bytes": 10565,
+    "sha256": "5be5aed4c823b278d5d49a5dc84ba1659f6d2bf699366bb882e0166646fc1aac",
+    "url": "/notes/internship/8826-lesson/code/t01a_vo.py.html",
+    "lines": 175
+  },
+  {
+    "path": "/home/yjl/crack/viewer8826/build/t01e_time.py",
+    "archive": "code/t01e_time.py",
+    "bytes": 7798,
+    "sha256": "11840439893c8b5bcf1cb0151fa68d918e0ac352196a1049c66bb525f390b0b7",
+    "url": "/notes/internship/8826-lesson/code/t01e_time.py.html",
+    "lines": 112
+  },
+  {
+    "path": "/home/yjl/crack/viewer8826/build/t01f_track.py",
+    "archive": "code/t01f_track.py",
+    "bytes": 11082,
+    "sha256": "df406f4f1fd2efdc3d00b8dd8571160712095a6ec93f8cf160048eeab7ebc5fe",
+    "url": "/notes/internship/8826-lesson/code/t01f_track.py.html",
+    "lines": 171
+  },
+  {
+    "path": "/home/yjl/crack/viewer8826/build/t02a_flat.py",
+    "archive": "code/t02a_flat.py",
+    "bytes": 3036,
+    "sha256": "11d410cb37767e6463270cb258171c97361973ed6bbfbd99a124ffd45b117ae9",
+    "url": "/notes/internship/8826-lesson/code/t02a_flat.py.html",
+    "lines": 51
+  },
+  {
+    "path": "/home/yjl/crack/viewer8826/build/t02_ortho.py",
+    "archive": "code/t02_ortho.py",
+    "bytes": 9084,
+    "sha256": "327edcb8425fcad4a83aeb74e048508f3b45ea46dca78b5abb9d6383ad436ee3",
+    "url": "/notes/internship/8826-lesson/code/t02_ortho.py.html",
+    "lines": 140
+  },
+  {
+    "path": "/home/yjl/crack/viewer8826/build/t04_cloud.py",
+    "archive": "code/t04_cloud.py",
+    "bytes": 13354,
+    "sha256": "3e98a6f5756fe35dd64169ae6c9ca11f7ed0ceb28e01222a5fd1958995f38b72",
+    "url": "/notes/internship/8826-lesson/code/t04_cloud.py.html",
+    "lines": 217
+  },
+  {
+    "path": "/home/yjl/crack/viewer8826/build/t05_site.py",
+    "archive": "code/t05_site.py",
+    "bytes": 7302,
+    "sha256": "b3fd7cdb86110ea2217e4c05e2cbfc6e676163b80b451744acee251657508967",
+    "url": "/notes/internship/8826-lesson/code/t05_site.py.html",
+    "lines": 122
+  },
+  {
+    "path": "/home/yjl/crack/viewer8826/gs/g11_ba.py",
+    "archive": "code/g11_ba.py",
+    "bytes": 18917,
+    "sha256": "3c4a5e96e0274436bd058629f71d14ccef1d88636a99943d76b9e0fb6c729136",
+    "url": "/notes/internship/8826-lesson/code/g11_ba.py.html",
+    "lines": 222
+  },
+  {
+    "path": "/home/yjl/crack/viewer8826/gs/g02_train.py",
+    "archive": "code/g02_train.py",
+    "bytes": 28679,
+    "sha256": "c2af1f8512ab1108670abfd9b1ea4512522a9ef1cbda896be8de10deb2509705",
+    "url": "/notes/internship/8826-lesson/code/g02_train.py.html",
+    "lines": 351
+  },
+  {
+    "path": "/home/yjl/crack/viewer3d/build/t01d_strips.py",
+    "archive": "code/t01d_strips.py",
+    "bytes": 3079,
+    "sha256": "12f4aa8182cf0122747387de4439c3fe6e51b3b136e8295f88c6a51610805e73",
+    "url": "/notes/internship/8826-lesson/code/t01d_strips.py.html",
+    "lines": 52
+  },
+  {
+    "path": "/home/yjl/gd/ABot-Recon/abot_recon/api.py",
+    "archive": "code/abot_api.py",
+    "bytes": 8884,
+    "sha256": "5636cf94fdb848f1c56b33c2e450e33d06f4ea4983f00e47efd9552942004e80",
+    "url": "/notes/internship/8826-lesson/code/abot_api.py.html",
+    "lines": 213
+  },
+  {
+    "path": "/home/yjl/gd/ABot-Recon/abot_recon/model.py",
+    "archive": "code/abot_model.py",
+    "bytes": 7744,
+    "sha256": "1f2c81dca65dc47c43a77659a7ba0e754ba852ebf2474bd941990c0752e2bae3",
+    "url": "/notes/internship/8826-lesson/code/abot_model.py.html",
+    "lines": 203
+  },
+  {
+    "path": "/home/yjl/gd/ABot-Recon/abot_recon/preprocessing.py",
+    "archive": "code/abot_preprocessing.py",
+    "bytes": 4109,
+    "sha256": "2bd9a67916be7cdd11806d77c1d433b497ebedda9aa37c9f8da79677ed671b40",
+    "url": "/notes/internship/8826-lesson/code/abot_preprocessing.py.html",
+    "lines": 117
+  },
+  {
+    "path": "/home/yjl/gd/ABot-Recon/abot_recon/config.py",
+    "archive": "code/abot_config.py",
+    "bytes": 1855,
+    "sha256": "02c6b2bbd7c77428d922caa6c25762c059f0f59507e9be850cf9a1d569bd1e70",
+    "url": "/notes/internship/8826-lesson/code/abot_config.py.html",
+    "lines": 45
+  },
+  {
+    "path": "/home/yjl/gd/ABot-Recon/abot_recon/modeling/pi3/models/pi3.py",
+    "archive": "code/abot_pi3.py",
+    "bytes": 27944,
+    "sha256": "33c6dc28d633a77b5f9e09e082aeb10b30744476c867b7576ba1fecca95b51ed",
+    "url": "/notes/internship/8826-lesson/code/abot_pi3.py.html",
+    "lines": 730
+  },
+  {
+    "path": "/home/yjl/gd/ABot-Recon/abot_recon/modeling/pi3/models/depth_utils.py",
+    "archive": "code/abot_depth_utils.py",
+    "bytes": 374,
+    "sha256": "7b4483a7ae6f1ca7473d2c16ec80a361257d0b0c651edfe0a75d355bd41aef4f",
+    "url": "/notes/internship/8826-lesson/code/abot_depth_utils.py.html",
+    "lines": 15
+  },
+  {
+    "path": "/home/yjl/gd/ABot-Recon/abot_recon/modeling/streaming/network.py",
+    "archive": "code/abot_network.py",
+    "bytes": 61801,
+    "sha256": "926f981ee002a0a2859812de17e880889388b030ccdc2aa51c09ae88b018a868",
+    "url": "/notes/internship/8826-lesson/code/abot_network.py.html",
+    "lines": 1517
+  }
+]

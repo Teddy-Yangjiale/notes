@@ -1,0 +1,45 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>abot_config.py</title><style>body{font:15px system-ui;margin:24px;background:#faf8f3}pre{overflow:auto;line-height:1.6}pre span{display:block}span:target{background:#fff1a8}header{overflow-wrap:anywhere}</style><header><a href="/notes/internship-8826/">返回8826课堂笔记</a><h1>abot_config.py</h1><p>2026-11-10 服务器只读快照：/home/yjl/gd/ABot-Recon/abot_recon/config.py<br>SHA-256 02c6b2bbd7c77428d922caa6c25762c059f0f59507e9be850cf9a1d569bd1e70</p></header><pre><span id="L1"><a href="#L1">   1</a> from __future__ import annotations</span>
+<span id="L2"><a href="#L2">   2</a> </span>
+<span id="L3"><a href="#L3">   3</a> from dataclasses import dataclass, replace</span>
+<span id="L4"><a href="#L4">   4</a> from pathlib import Path</span>
+<span id="L5"><a href="#L5">   5</a> from typing import Any</span>
+<span id="L6"><a href="#L6">   6</a> </span>
+<span id="L7"><a href="#L7">   7</a> </span>
+<span id="L8"><a href="#L8">   8</a> @dataclass(frozen=True)</span>
+<span id="L9"><a href="#L9">   9</a> class InferenceConfig:</span>
+<span id="L10"><a href="#L10">  10</a>     &quot;&quot;&quot;Stable inference configuration matching the released checkpoint.&quot;&quot;&quot;</span>
+<span id="L11"><a href="#L11">  11</a> </span>
+<span id="L12"><a href="#L12">  12</a>     checkpoint: Path = Path(&quot;checkpoints/abot_recon.safetensors&quot;)</span>
+<span id="L13"><a href="#L13">  13</a>     device: str = &quot;cuda&quot;</span>
+<span id="L14"><a href="#L14">  14</a>     amp_dtype: str = &quot;bf16&quot;</span>
+<span id="L15"><a href="#L15">  15</a>     height: int = 280</span>
+<span id="L16"><a href="#L16">  16</a>     width: int = 504</span>
+<span id="L17"><a href="#L17">  17</a>     local_window_frames: int = 12</span>
+<span id="L18"><a href="#L18">  18</a>     max_frames: int = 22_000</span>
+<span id="L19"><a href="#L19">  19</a>     attention_backend: str = &quot;auto&quot;</span>
+<span id="L20"><a href="#L20">  20</a>     output_local_points: bool = True</span>
+<span id="L21"><a href="#L21">  21</a>     output_world_points: bool = False</span>
+<span id="L22"><a href="#L22">  22</a>     output_confidence: bool = True</span>
+<span id="L23"><a href="#L23">  23</a>     confidence_threshold: float = 0.0</span>
+<span id="L24"><a href="#L24">  24</a>     loop_closure: bool = True</span>
+<span id="L25"><a href="#L25">  25</a>     loop_salad_checkpoint: Path = Path(&quot;checkpoints/loop/dino_salad.ckpt&quot;)</span>
+<span id="L26"><a href="#L26">  26</a>     loop_dino_checkpoint: Path = Path(&quot;checkpoints/loop/dinov2_vitb14_pretrain.pth&quot;)</span>
+<span id="L27"><a href="#L27">  27</a>     loop_output_dir: Path = Path(&quot;outputs/loop&quot;)</span>
+<span id="L28"><a href="#L28">  28</a> </span>
+<span id="L29"><a href="#L29">  29</a>     def __post_init__(self) -&gt; None:</span>
+<span id="L30"><a href="#L30">  30</a>         if self.amp_dtype not in {&quot;fp32&quot;, &quot;fp16&quot;, &quot;bf16&quot;}:</span>
+<span id="L31"><a href="#L31">  31</a>             raise ValueError(&quot;amp_dtype must be one of: fp32, fp16, bf16&quot;)</span>
+<span id="L32"><a href="#L32">  32</a>         if self.attention_backend not in {&quot;auto&quot;, &quot;paged&quot;, &quot;sdpa&quot;}:</span>
+<span id="L33"><a href="#L33">  33</a>             raise ValueError(&quot;attention_backend must be one of: auto, paged, sdpa&quot;)</span>
+<span id="L34"><a href="#L34">  34</a>         if self.height &lt;= 0 or self.width &lt;= 0:</span>
+<span id="L35"><a href="#L35">  35</a>             raise ValueError(&quot;height and width must be positive&quot;)</span>
+<span id="L36"><a href="#L36">  36</a>         if self.local_window_frames != 12:</span>
+<span id="L37"><a href="#L37">  37</a>             raise ValueError(&quot;The released model requires a 12-frame local window&quot;)</span>
+<span id="L38"><a href="#L38">  38</a>         if self.max_frames &lt;= 0:</span>
+<span id="L39"><a href="#L39">  39</a>             raise ValueError(&quot;max_frames must be positive&quot;)</span>
+<span id="L40"><a href="#L40">  40</a>         if not 0.0 &lt;= self.confidence_threshold &lt;= 1.0:</span>
+<span id="L41"><a href="#L41">  41</a>             raise ValueError(&quot;confidence_threshold must be in [0, 1]&quot;)</span>
+<span id="L42"><a href="#L42">  42</a> </span>
+<span id="L43"><a href="#L43">  43</a>     def override(self, **values: Any) -&gt; &quot;InferenceConfig&quot;:</span>
+<span id="L44"><a href="#L44">  44</a>         &quot;&quot;&quot;Return a validated copy with API/CLI overrides applied.&quot;&quot;&quot;</span>
+<span id="L45"><a href="#L45">  45</a>         return replace(self, **values)</span></pre></html>

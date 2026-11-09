@@ -1,0 +1,351 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>g02_train.py</title><style>body{font:15px system-ui;margin:24px;background:#faf8f3}pre{overflow:auto;line-height:1.6}pre span{display:block}span:target{background:#fff1a8}header{overflow-wrap:anywhere}</style><header><a href="/notes/internship-8826/">返回8826课堂笔记</a><h1>g02_train.py</h1><p>2026-11-10 服务器只读快照：/home/yjl/crack/viewer8826/gs/g02_train.py<br>SHA-256 c2af1f8512ab1108670abfd9b1ea4512522a9ef1cbda896be8de10deb2509705</p></header><pre><span id="L1"><a href="#L1">   1</a> # -*- coding: utf-8 -*-</span>
+<span id="L2"><a href="#L2">   2</a> &quot;&quot;&quot;g02: 训练一块三维高斯 (0903 前摄录像), 评测, 导出网页用的分块文件。</span>
+<span id="L3"><a href="#L3">   3</a> </span>
+<span id="L4"><a href="#L4">   4</a> 环境: ~/3dgs/.venvs/gaussian (gsplat 1.5.3)。cv2 取自 geometry 环境的 site-packages (只追加到本进程 sys.path 的末尾, 不改任何环境)。</span>
+<span id="L5"><a href="#L5">   5</a> 用法: CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=2 python g02_train.py --chunk s1_03 [--iters 8000] [--pose_opt 1] [--tag x]</span>
+<span id="L6"><a href="#L6">   6</a> </span>
+<span id="L7"><a href="#L7">   7</a> 输入 (全部只读):</span>
+<span id="L8"><a href="#L8">   8</a>   图像    ~/gd/frames/rec0903/%06d.jpg (960x540, 与 SAM 3 掩膜同帧号), 按标定去畸变成针孔图。</span>
+<span id="L9"><a href="#L9">   9</a>   位姿    work/track0903.npz 的平面位姿 (E, N, 航向) + 前摄外参 (common.frontcam_cfg, 与正射图同一套): 相机在路面上方 IPM_HEIGHT。</span>
+<span id="L10"><a href="#L10">  10</a>   深度    重建模型的逐帧点图 (每 5 帧一张): 方向用标定光线, 距离 = 模型距离 x 本帧比例 (work/cloud2_scale.npy, 由路面像素定) —— 与 t04 点云同一口径。</span>
+<span id="L11"><a href="#L11">  11</a>           每张点图的三维点 (R_NEAR 米以内) 投到它前后几帧里, 于是**每一帧**都有: 稀疏深度 (监督) 和&quot;近景范围&quot;掩膜。</span>
+<span id="L12"><a href="#L12">  12</a>           近景范围以外 (天空、R_NEAR 以外的楼群) 不参与颜色损失, 并要求那里不透明度为 0 —— 只建轨迹附近的东西, 远景不建。</span>
+<span id="L13"><a href="#L13">  13</a>           (第一版试点只在有点图的帧上加深度、远景也参与颜色损失: 远处楼群被拉成长条, 抬高/横移视角后路面上方全是细长碎片。)</span>
+<span id="L14"><a href="#L14">  14</a>   掩膜    SAM 3 的车辆/行人 (外扩)、引擎盖: 不参与损失。</span>
+<span id="L15"><a href="#L15">  15</a> 模型: 各向异性高斯 + 不随视角变的颜色 (网页端不带球谐); 每帧一组曝光增益/偏置。致密化用 gsplat 的 MCMC 策略, 高斯总数有上限。</span>
+<span id="L16"><a href="#L16">  16</a>       形状约束: 最长轴不超过中间轴的 4 倍 (压细长条)、不超过最短轴的 8 倍 (压薄片, --flat)、不超过 0.6 m (--smax)。背景用每步随机的纯色, 迫使近景范围内不透明。</span>
+<span id="L17"><a href="#L17">  17</a> 坐标: 训练在块内局部 ENU (原点 = 块核心的平均位置, z 向上, 单位米); 导出时换到查看器系 (X=E, Y=U, Z=-N) 的绝对坐标。</span>
+<span id="L18"><a href="#L18">  18</a> 输出: work/gs/&lt;id&gt;&lt;tag&gt;/{meta.json, sheet.jpg, params.npz, log.txt}; 导出 site2/gs/&lt;id&gt;.bin (tag 为空时)。</span>
+<span id="L19"><a href="#L19">  19</a> &quot;&quot;&quot;</span>
+<span id="L20"><a href="#L20">  20</a> import os, sys, glob, json, math, time, argparse</span>
+<span id="L21"><a href="#L21">  21</a> HERE = os.path.dirname(os.path.abspath(__file__))</span>
+<span id="L22"><a href="#L22">  22</a> sys.path.insert(0, HERE + &quot;/../build&quot;)</span>
+<span id="L23"><a href="#L23">  23</a> sys.path.append(glob.glob(os.path.expanduser(&quot;~/3dgs/.venvs/geometry/lib/python3.12/site-packages&quot;))[0])</span>
+<span id="L24"><a href="#L24">  24</a> import numpy as np, cv2, torch, torch.nn.functional as F</span>
+<span id="L25"><a href="#L25">  25</a> from concurrent.futures import ThreadPoolExecutor</span>
+<span id="L26"><a href="#L26">  26</a> from scipy.spatial import cKDTree</span>
+<span id="L27"><a href="#L27">  27</a> import scipy.ndimage as ndi</span>
+<span id="L28"><a href="#L28">  28</a> from common import *</span>
+<span id="L29"><a href="#L29">  29</a> from gsplat import rasterization, MCMCStrategy</span>
+<span id="L30"><a href="#L30">  30</a> </span>
+<span id="L31"><a href="#L31">  31</a> ap = argparse.ArgumentParser()</span>
+<span id="L32"><a href="#L32">  32</a> ap.add_argument(&quot;--chunk&quot;, required=True); ap.add_argument(&quot;--iters&quot;, type=int, default=8000); ap.add_argument(&quot;--cap&quot;, type=int, default=900000)</span>
+<span id="L33"><a href="#L33">  33</a> ap.add_argument(&quot;--pose_opt&quot;, type=int, default=0); ap.add_argument(&quot;--tag&quot;, default=&quot;&quot;); ap.add_argument(&quot;--export&quot;, type=int, default=1)</span>
+<span id="L34"><a href="#L34">  34</a> ap.add_argument(&quot;--w_depth&quot;, type=float, default=0.5); ap.add_argument(&quot;--w_bg&quot;, type=float, default=0.3); ap.add_argument(&quot;--w_shape&quot;, type=float, default=1.0); ap.add_argument(&quot;--seed&quot;, type=int, default=0)</span>
+<span id="L35"><a href="#L35">  35</a> ap.add_argument(&quot;--flat&quot;, type=float, default=8.0); ap.add_argument(&quot;--smax&quot;, type=float, default=0.6)</span>
+<span id="L36"><a href="#L36">  36</a> ap.add_argument(&quot;--ba_guard&quot;, type=int, default=2); ap.add_argument(&quot;--gs_dir&quot;, default=&quot;gs&quot;);   # 平差位姿的保护: 2 = 绝对门限 + 偏离前后帧中值; 1 = 只用绝对门限; 0 = 不保护</span>
+<span id="L37"><a href="#L37">  37</a> ap.add_argument(&quot;--ba_tag&quot;, default=&quot;&quot;); ap.add_argument(&quot;--poses&quot;, default=&quot;track&quot;)          # track = 地图轨迹的平面位姿; ba = g11_ba.py 平差后的六自由度位姿 (work/gs/ba/&lt;块&gt;.npz)</span>
+<span id="L38"><a href="#L38">  38</a> A = ap.parse_args()</span>
+<span id="L39"><a href="#L39">  39</a> torch.manual_seed(A.seed); np.random.seed(A.seed)</span>
+<span id="L40"><a href="#L40">  40</a> dev = &quot;cuda&quot;; t00 = time.time()</span>
+<span id="L41"><a href="#L41">  41</a> W_, H_ = 960, 540; C0 = 0.28209479177387814</span>
+<span id="L42"><a href="#L42">  42</a> CONF_T, R_NEAR, R_INIT, VOX = 0.10, 80.0, 70.0, 0.08</span>
+<span id="L43"><a href="#L43">  43</a> OUT = &quot;%s/gs/%s%s&quot; % (WORK, A.chunk, A.tag); os.makedirs(OUT, exist_ok=True)</span>
+<span id="L44"><a href="#L44">  44</a> LOG = open(OUT + &quot;/log.txt&quot;, &quot;w&quot;)</span>
+<span id="L45"><a href="#L45">  45</a> def say(s):</span>
+<span id="L46"><a href="#L46">  46</a>     s = &quot;[%5.0fs] %s&quot; % (time.time() - t00, s); print(s, flush=True); LOG.write(s + &quot;\n&quot;); LOG.flush()</span>
+<span id="L47"><a href="#L47">  47</a> </span>
+<span id="L48"><a href="#L48">  48</a> # ---------------------------------------------------------------- 相机几何</span>
+<span id="L49"><a href="#L49">  49</a> cfg = frontcam_cfg()</span>
+<span id="L50"><a href="#L50">  50</a> Kf = np.array([[cfg[&quot;fx&quot;], 0, cfg[&quot;cx&quot;]], [0, cfg[&quot;fy&quot;], cfg[&quot;cy&quot;]], [0, 0, 1]]); D = np.array(cfg[&quot;dist&quot;], np.float64)</span>
+<span id="L51"><a href="#L51">  51</a> Kh = np.array([[cfg[&quot;fx&quot;] / 2, 0, (cfg[&quot;cx&quot;] + 0.5) / 2 - 0.5], [0, cfg[&quot;fy&quot;] / 2, (cfg[&quot;cy&quot;] + 0.5) / 2 - 0.5], [0, 0, 1]])   # 960x540 像素中心约定</span>
+<span id="L52"><a href="#L52">  52</a> MAP1, MAP2 = cv2.initUndistortRectifyMap(Kh, D, None, Kh, (W_, H_), cv2.CV_32FC1)</span>
+<span id="L53"><a href="#L53">  53</a> def rc2v():</span>
+<span id="L54"><a href="#L54">  54</a>     r, p, y = cfg[&quot;roll&quot;], cfg[&quot;pitch&quot;], cfg[&quot;yaw&quot;]</span>
+<span id="L55"><a href="#L55">  55</a>     Rz = np.array([[np.cos(y), -np.sin(y), 0], [np.sin(y), np.cos(y), 0], [0, 0, 1]])</span>
+<span id="L56"><a href="#L56">  56</a>     Rx = np.array([[1, 0, 0], [0, np.cos(p), -np.sin(p)], [0, np.sin(p), np.cos(p)]])</span>
+<span id="L57"><a href="#L57">  57</a>     Ry = np.array([[np.cos(r), 0, np.sin(r)], [0, 1, 0], [-np.sin(r), 0, np.cos(r)]])</span>
+<span id="L58"><a href="#L58">  58</a>     return Rz @ Rx @ Ry @ np.array([[1, 0, 0], [0, 0, 1], [0, -1, 0]], float)      # 相机 (右, 下, 前) -&gt; 车体 (右, 前, 上), 与 t04 相同</span>
+<span id="L59"><a href="#L59">  59</a> RC2V = rc2v()</span>
+<span id="L60"><a href="#L60">  60</a> def c2w_of(E, N, psi, E0, N0):</span>
+<span id="L61"><a href="#L61">  61</a>     c, s = np.cos(psi), np.sin(psi)</span>
+<span id="L62"><a href="#L62">  62</a>     Rv = np.array([[c, s, 0], [-s, c, 0], [0, 0, 1]])                               # 车体 -&gt; ENU</span>
+<span id="L63"><a href="#L63">  63</a>     M = np.eye(4); M[:3, :3] = Rv @ RC2V; M[:3, 3] = [E - E0, N - N0, IPM_HEIGHT]</span>
+<span id="L64"><a href="#L64">  64</a>     return M</span>
+<span id="L65"><a href="#L65">  65</a> # 模型点图 (420x756) 的每个像素: 相机系单位光线、去畸变图里的落点、标签图里的下标</span>
+<span id="L66"><a href="#L66">  66</a> jj, ii = np.meshgrid(np.arange(756), np.arange(420))</span>
+<span id="L67"><a href="#L67">  67</a> u_f = (jj + 0.5) * (1920.0 / 756.0) - 0.5; v_f = (ii + 2 + 0.5) * (1080.0 / 425.0) - 0.5</span>
+<span id="L68"><a href="#L68">  68</a> nrm = cv2.undistortPoints(np.stack([u_f, v_f], -1).reshape(-1, 1, 2).astype(np.float64), Kf, D).reshape(420, 756, 2)</span>
+<span id="L69"><a href="#L69">  69</a> RC = np.dstack([nrm, np.ones((420, 756))]); RC /= np.linalg.norm(RC, axis=2, keepdims=True); RC = RC.astype(np.float32)</span>
+<span id="L70"><a href="#L70">  70</a> PU = np.round(Kh[0, 0] * nrm[..., 0] + Kh[0, 2]).astype(int); PV = np.round(Kh[1, 1] * nrm[..., 1] + Kh[1, 2]).astype(int)</span>
+<span id="L71"><a href="#L71">  71</a> INB = (PU &gt;= 0) &amp; (PU &lt; W_) &amp; (PV &gt;= 0) &amp; (PV &lt; H_); PIX = np.clip(PV, 0, H_ - 1) * W_ + np.clip(PU, 0, W_ - 1)</span>
+<span id="L72"><a href="#L72">  72</a> LI = np.clip(np.round((v_f + 0.5) / 2 - 0.5).astype(int), 0, 539); LJ = np.clip(np.round((u_f + 0.5) / 2 - 0.5).astype(int), 0, 959)</span>
+<span id="L73"><a href="#L73">  73</a> UP = (RC.reshape(-1, 3) @ RC2V.T)[:, 2].reshape(420, 756)                           # 光线在车体系里的向上分量</span>
+<span id="L74"><a href="#L74">  74</a> HOOD_OK = np.ones((H_, W_), bool); HOOD_OK[516:] = False                            # 原片第 1040 行以下是引擎盖</span>
+<span id="L75"><a href="#L75">  75</a> _gu, _gv = np.meshgrid(np.arange(W_), np.arange(H_))</span>
+<span id="L76"><a href="#L76">  76</a> _d = np.stack([(_gu - Kh[0, 2]) / Kh[0, 0], (_gv - Kh[1, 2]) / Kh[1, 1], np.ones((H_, W_))], -1)</span>
+<span id="L77"><a href="#L77">  77</a> UP_IMG = (_d @ RC2V.T)[..., 2] / np.linalg.norm(_d, axis=2)                         # 去畸变图每个像素的光线在车体系里的向上分量</span>
+<span id="L78"><a href="#L78">  78</a> K5 = np.ones((5, 5), np.uint8)</span>
+<span id="L79"><a href="#L79">  79</a> </span>
+<span id="L80"><a href="#L80">  80</a> # ---------------------------------------------------------------- 数据</span>
+<span id="L81"><a href="#L81">  81</a> CH = {c[&quot;id&quot;]: c for c in json.load(open(WORK + &quot;/gs/chunks.json&quot;))}[A.chunk]</span>
+<span id="L82"><a href="#L82">  82</a> TR = dict(np.load(WORK + &quot;/track0903.npz&quot;)); E0, N0 = CH[&quot;E0&quot;], CH[&quot;N0&quot;]</span>
+<span id="L83"><a href="#L83">  83</a> DENSE = np.array(json.load(open(RUN + &quot;/metadata.json&quot;))[&quot;dense_output_indices&quot;], int); KOF = {int(f): k for k, f in enumerate(DENSE)}</span>
+<span id="L84"><a href="#L84">  84</a> SCALE = np.load(WORK + &quot;/cloud2_scale.npy&quot;)[:, 2]</span>
+<span id="L85"><a href="#L85">  85</a> TT = {k: torch.load(&quot;%s/%s.pt&quot; % (RUN, k), map_location=&quot;cpu&quot;, weights_only=True, mmap=True) for k in (&quot;local_points&quot;, &quot;colors&quot;, &quot;confidence&quot;)}</span>
+<span id="L86"><a href="#L86">  86</a> cams = np.array(CH[&quot;cams&quot;]); frames = TR[&quot;idx&quot;][cams]; ncam = len(cams)</span>
+<span id="L87"><a href="#L87">  87</a> C2W = np.stack([c2w_of(TR[&quot;E&quot;][i], TR[&quot;N&quot;][i], TR[&quot;psi&quot;][i], E0, N0) for i in cams])</span>
+<span id="L88"><a href="#L88">  88</a> BA_D = {}; BA_BAD = None                                    # 帧号 -&gt; 平差给出的修正 (右乘在现有位姿上的 4x4)</span>
+<span id="L89"><a href="#L89">  89</a> if A.poses == &quot;ba&quot; and not os.path.exists(&quot;%s/gs/ba/%s%s.npz&quot; % (WORK, A.chunk, A.ba_tag)): say(&quot;没有这一块的平差结果, 退回地图轨迹的位姿&quot;); A.poses = &quot;track&quot;</span>
+<span id="L90"><a href="#L90">  90</a> if A.poses == &quot;ba&quot;:</span>
+<span id="L91"><a href="#L91">  91</a>     Z = np.load(&quot;%s/gs/ba/%s%s.npz&quot; % (WORK, A.chunk, A.ba_tag))</span>
+<span id="L92"><a href="#L92">  92</a>     # 平差结果的保护: 修正量大得不合理的帧 (车流里特征落在别的车上、观测太少), 以及相对前后帧的平缓趋势突然跳开的帧, 不采用。</span>
+<span id="L93"><a href="#L93">  93</a>     # 弯道上的侧倾、航向修正可以到 1~2 度, 那是真实的 (路面有超高, 车头朝向与行进方向不一致), 所以绝对门限放得宽, 主要看是否平缓。</span>
+<span id="L94"><a href="#L94">  94</a>     cr = Z[&quot;corr&quot;]; dvn = np.abs(cr - ndi.median_filter(cr, size=(9, 1), mode=&quot;nearest&quot;))</span>
+<span id="L95"><a href="#L95">  95</a>     bad = (np.degrees(np.abs(cr[:, :3])).max(1) &gt; 3.0) | (np.abs(cr[:, 3]) &gt; 0.30) | (np.abs(cr[:, 4]) &gt; 0.60) | (np.abs(cr[:, 5]) &gt; 0.15) | (Z[&quot;n_obs&quot;] &lt; 80)</span>
+<span id="L96"><a href="#L96">  96</a>     if A.ba_guard &gt;= 2: bad |= (np.degrees(dvn[:, :3]).max(1) &gt; 0.5) | (dvn[:, 3] &gt; 0.10) | (dvn[:, 4] &gt; 0.25) | (dvn[:, 5] &gt; 0.05)</span>
+<span id="L97"><a href="#L97">  97</a>     if A.ba_guard &lt;= 0: bad[:] = False</span>
+<span id="L98"><a href="#L98">  98</a>     say(&quot;平差位姿: %d 帧里不采用的 %d 帧 (%.0f%%)&quot; % (len(bad), bad.sum(), 100 * bad.mean()))</span>
+<span id="L99"><a href="#L99">  99</a>     if bad.mean() &gt; 0.5: say(&quot;这一块的平差结果一半以上不可用, 整块退回地图轨迹的位姿&quot;); bad[:] = True; A.poses = &quot;track&quot;</span>
+<span id="L100"><a href="#L100"> 100</a>     for f_, c_, c0_, b_ in zip(Z[&quot;frames&quot;], Z[&quot;c2w&quot;], Z[&quot;c2w0&quot;], bad):</span>
+<span id="L101"><a href="#L101"> 101</a>         if not b_: BA_D[int(f_)] = np.linalg.inv(c0_) @ c_</span>
+<span id="L102"><a href="#L102"> 102</a>     BA_F = np.array(sorted(BA_D)); BA_BAD = float(bad.mean())</span>
+<span id="L103"><a href="#L103"> 103</a>     def _near(f, M):                                        # 被剔掉的帧: 借用帧号最近的可用帧的修正 (6 帧以内), 否则留用现有位姿</span>
+<span id="L104"><a href="#L104"> 104</a>         if not len(BA_F): return M</span>
+<span id="L105"><a href="#L105"> 105</a>         j = int(BA_F[np.argmin(np.abs(BA_F - int(f)))]); return M @ BA_D[j] if abs(j - int(f)) &lt;= 6 else M</span>
+<span id="L106"><a href="#L106"> 106</a>     C2W = np.stack([_near(frames[n_], C2W[n_]) for n_ in range(ncam)])</span>
+<span id="L107"><a href="#L107"> 107</a> def ba_fix(M, f):</span>
+<span id="L108"><a href="#L108"> 108</a>     &quot;&quot;&quot;没有参加平差的帧 (停车时被抽稀掉的): 借用帧号最近的那一帧的修正&quot;&quot;&quot;</span>
+<span id="L109"><a href="#L109"> 109</a>     if not BA_D or not len(BA_F): return M</span>
+<span id="L110"><a href="#L110"> 110</a>     j = int(BA_F[np.argmin(np.abs(BA_F - int(f)))])</span>
+<span id="L111"><a href="#L111"> 111</a>     return M @ BA_D[j] if abs(j - int(f)) &lt;= 6 else M</span>
+<span id="L112"><a href="#L112"> 112</a> </span>
+<span id="L113"><a href="#L113"> 113</a> NODE = {int(f): i for i, f in enumerate(TR[&quot;idx&quot;])}</span>
+<span id="L114"><a href="#L114"> 114</a> def load_dense(f):</span>
+<span id="L115"><a href="#L115"> 115</a>     &quot;&quot;&quot;一张点图 -&gt; 世界系 (块内 ENU) 的近景点。返回 None: 这一帧没有点图 / 没有位姿。&quot;&quot;&quot;</span>
+<span id="L116"><a href="#L116"> 116</a>     k = KOF.get(int(f)); i = NODE.get(int(f))</span>
+<span id="L117"><a href="#L117"> 117</a>     if k is None or i is None or TR[&quot;seg&quot;][i] &lt; 0 or not np.isfinite(SCALE[k]): return None</span>
+<span id="L118"><a href="#L118"> 118</a>     lab = load_label(WORK + &quot;/seg0903&quot;, &quot;%06d&quot; % f, WORK + &quot;/seg0903_mark&quot;)</span>
+<span id="L119"><a href="#L119"> 119</a>     if lab is None: lab = np.zeros((H_, W_), np.uint8)</span>
+<span id="L120"><a href="#L120"> 120</a>     P = TT[&quot;local_points&quot;][k].numpy(); Z = P[..., 2]; rm = np.linalg.norm(P, axis=2); cf = TT[&quot;confidence&quot;][k].numpy()</span>
+<span id="L121"><a href="#L121"> 121</a>     edge_ok = (ndi.maximum_filter(Z, size=3) - ndi.minimum_filter(Z, size=3)) &lt; 0.06 * np.maximum(Z, 1e-6)</span>
+<span id="L122"><a href="#L122"> 122</a>     r = rm * SCALE[k]; veh = vehicle_mask(lab, grow=7, down=6)[LI, LJ]</span>
+<span id="L123"><a href="#L123"> 123</a>     m = (cf &gt; CONF_T) &amp; ~veh &amp; (r &gt; 1.5) &amp; (r &lt; R_NEAR) &amp; (Z &gt; 1e-4)</span>
+<span id="L124"><a href="#L124"> 124</a>     M = ba_fix(c2w_of(TR[&quot;E&quot;][i], TR[&quot;N&quot;][i], TR[&quot;psi&quot;][i], E0, N0), f)</span>
+<span id="L125"><a href="#L125"> 125</a>     return dict(pts=((RC[m] * r[m][:, None]) @ M[:3, :3].T + M[:3, 3]).astype(np.float32), eok=edge_ok[m], col=TT[&quot;colors&quot;][k].numpy()[m], rng=r[m].astype(np.float32),</span>
+<span id="L126"><a href="#L126"> 126</a>                 grid=(ii[m] % 2 == 0) &amp; (jj[m] % 2 == 0))</span>
+<span id="L127"><a href="#L127"> 127</a> dense_all = np.sort(DENSE); need = set()</span>
+<span id="L128"><a href="#L128"> 128</a> for f in frames:</span>
+<span id="L129"><a href="#L129"> 129</a>     j = np.searchsorted(dense_all, f)</span>
+<span id="L130"><a href="#L130"> 130</a>     for d in (dense_all[max(j - 1, 0)], dense_all[min(j, len(dense_all) - 1)]):</span>
+<span id="L131"><a href="#L131"> 131</a>         if abs(int(d) - int(f)) &lt;= 6: need.add(int(d))</span>
+<span id="L132"><a href="#L132"> 132</a> with ThreadPoolExecutor(16) as ex: SRC = {f: v for f, v in zip(sorted(need), ex.map(load_dense, sorted(need))) if v is not None}</span>
+<span id="L133"><a href="#L133"> 133</a> SRCF = np.array(sorted(SRC))</span>
+<span id="L134"><a href="#L134"> 134</a> K7 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)); K21 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (21, 21))</span>
+<span id="L135"><a href="#L135"> 135</a> def load_cam(n):</span>
+<span id="L136"><a href="#L136"> 136</a>     f = int(frames[n]); im = cv2.imread(&quot;%s/frames/rec0903/%06d.jpg&quot; % (GD, f))</span>
+<span id="L137"><a href="#L137"> 137</a>     lab = load_label(WORK + &quot;/seg0903&quot;, &quot;%06d&quot; % f, WORK + &quot;/seg0903_mark&quot;)</span>
+<span id="L138"><a href="#L138"> 138</a>     if lab is None: lab = np.zeros((H_, W_), np.uint8)</span>
+<span id="L139"><a href="#L139"> 139</a>     ok = (~vehicle_mask(lab, grow=9, down=10)) &amp; HOOD_OK</span>
+<span id="L140"><a href="#L140"> 140</a>     imu = cv2.remap(im, MAP1, MAP2, cv2.INTER_LINEAR)[..., ::-1].copy()</span>
+<span id="L141"><a href="#L141"> 141</a>     vu = cv2.remap(ok.astype(np.uint8), MAP1, MAP2, cv2.INTER_NEAREST) &gt; 0</span>
+<span id="L142"><a href="#L142"> 142</a>     # 前后各一张点图的近景点投到本帧</span>
+<span id="L143"><a href="#L143"> 143</a>     j = np.searchsorted(SRCF, f); src = [int(SRCF[k]) for k in (j - 1, j) if 0 &lt;= k &lt; len(SRCF) and abs(int(SRCF[k]) - f) &lt;= 6]</span>
+<span id="L144"><a href="#L144"> 144</a>     Rw = C2W[n][:3, :3]; tw = C2W[n][:3, 3]; occ = np.zeros(H_ * W_, np.uint8); zb = np.full(H_ * W_, np.inf, np.float32); px = []; pz = []</span>
+<span id="L145"><a href="#L145"> 145</a>     for sf in set(src):</span>
+<span id="L146"><a href="#L146"> 146</a>         Xc = (SRC[sf][&quot;pts&quot;] - tw) @ Rw; z = Xc[:, 2]; g = z &gt; 1.0</span>
+<span id="L147"><a href="#L147"> 147</a>         u = np.round(Kh[0, 0] * Xc[g, 0] / z[g] + Kh[0, 2]).astype(np.int64); v = np.round(Kh[1, 1] * Xc[g, 1] / z[g] + Kh[1, 2]).astype(np.int64)</span>
+<span id="L148"><a href="#L148"> 148</a>         inb = (u &gt;= 0) &amp; (u &lt; W_) &amp; (v &gt;= 0) &amp; (v &lt; H_); pix = v[inb] * W_ + u[inb]; zz = z[g][inb].astype(np.float32)</span>
+<span id="L149"><a href="#L149"> 149</a>         occ[pix] = 1; np.minimum.at(zb, pix, zz)</span>
+<span id="L150"><a href="#L150"> 150</a>         e = SRC[sf][&quot;eok&quot;][g][inb]; px.append(pix[e]); pz.append(zz[e])</span>
+<span id="L151"><a href="#L151"> 151</a>     near = cv2.morphologyEx(occ.reshape(H_, W_), cv2.MORPH_CLOSE, K7) &gt; 0</span>
+<span id="L152"><a href="#L152"> 152</a>     if src: near |= cv2.remap((lab == 1).astype(np.uint8), MAP1, MAP2, cv2.INTER_NEAREST) &gt; 0   # 路面一律算近景 (车头前几米的投影点稀, 闭运算补不满)</span>
+<span id="L153"><a href="#L153"> 153</a>     far = cv2.dilate(near.astype(np.uint8), K21) == 0</span>
+<span id="L154"><a href="#L154"> 154</a>     # 树叶缝隙里的天空: 很亮、近乎无色、在地平线以上、附近没有投影点。闭运算会把它们算进近景, 于是被学成一片片白色的高斯</span>
+<span id="L155"><a href="#L155"> 155</a>     # (第二版试点: 沿行车方向看不出来, 从上往下看树冠处全是白色碎片)。这些像素改归远景: 不算颜色, 并要求透明。</span>
+<span id="L156"><a href="#L156"> 156</a>     sky = (imu.min(2) &gt; 200) &amp; ((imu.max(2).astype(np.int16) - imu.min(2)) &lt; 32) &amp; (UP_IMG &gt; 0.02) &amp; (cv2.dilate(occ.reshape(H_, W_), K5) == 0)</span>
+<span id="L157"><a href="#L157"> 157</a>     near &amp;= ~sky; far |= sky</span>
+<span id="L158"><a href="#L158"> 158</a>     if not src: far[:] = False                                                    # 没有点图可投的帧: 不加任何约束</span>
+<span id="L159"><a href="#L159"> 159</a>     out = dict(img=imu, valid=vu &amp; near, far=vu &amp; far, nsrc=len(set(src)))</span>
+<span id="L160"><a href="#L160"> 160</a>     if px:</span>
+<span id="L161"><a href="#L161"> 161</a>         px = np.concatenate(px); pz = np.concatenate(pz)</span>
+<span id="L162"><a href="#L162"> 162</a>         zmin = ndi.minimum_filter(zb.reshape(H_, W_), size=5).reshape(-1)          # 被近处东西挡住的点 (从别的帧看得到、本帧看不到) 不要</span>
+<span id="L163"><a href="#L163"> 163</a>         k_ = pz &lt; 1.15 * zmin[px]; out.update(dpix=px[k_], dz=pz[k_])</span>
+<span id="L164"><a href="#L164"> 164</a>     else: out.update(dpix=np.zeros(0, np.int64), dz=np.zeros(0, np.float32))</span>
+<span id="L165"><a href="#L165"> 165</a>     return out</span>
+<span id="L166"><a href="#L166"> 166</a> with ThreadPoolExecutor(24) as ex: DATA = list(ex.map(load_cam, range(ncam)))</span>
+<span id="L167"><a href="#L167"> 167</a> dense = np.array([int(f) in SRC for f in frames])</span>
+<span id="L168"><a href="#L168"> 168</a> hold = np.zeros(ncam, bool)</span>
+<span id="L169"><a href="#L169"> 169</a> for n in range(4, ncam, 8):</span>
+<span id="L170"><a href="#L170"> 170</a>     m = n if not dense[n] else n + 1</span>
+<span id="L171"><a href="#L171"> 171</a>     if m &lt; ncam and not dense[m]: hold[m] = True</span>
+<span id="L172"><a href="#L172"> 172</a> train_ids = np.flatnonzero(~hold); hold_ids = np.flatnonzero(hold)</span>
+<span id="L173"><a href="#L173"> 173</a> say(&quot;块 %s: 相机 %d (训练 %d, 留出 %d), 点图 %d 张, 核心 %.0f m, 帧 %d~%d; 每帧深度样本中位 %d 个, 近景范围占画面 %.0f%%&quot; % (</span>
+<span id="L174"><a href="#L174"> 174</a>     A.chunk, ncam, len(train_ids), len(hold_ids), len(SRC), CH[&quot;len&quot;], frames.min(), frames.max(), np.median([len(d[&quot;dpix&quot;]) for d in DATA]), 100 * np.mean([d[&quot;valid&quot;].mean() for d in DATA])))</span>
+<span id="L175"><a href="#L175"> 175</a> </span>
+<span id="L176"><a href="#L176"> 176</a> # 初始点: 有深度的帧的点图, 8 cm 体素里留最近的一次观测</span>
+<span id="L177"><a href="#L177"> 177</a> sel0 = {f: v[&quot;grid&quot;] &amp; v[&quot;eok&quot;] &amp; (v[&quot;rng&quot;] &lt; R_INIT) for f, v in SRC.items()}</span>
+<span id="L178"><a href="#L178"> 178</a> pts = np.concatenate([SRC[f][&quot;pts&quot;][sel0[f]] for f in SRC]); col = np.concatenate([SRC[f][&quot;col&quot;][sel0[f]] for f in SRC]); rng = np.concatenate([SRC[f][&quot;rng&quot;][sel0[f]] for f in SRC])</span>
+<span id="L179"><a href="#L179"> 179</a> v = np.floor(pts.astype(np.float64) / VOX).astype(np.int64); key = (v[:, 0] &amp; 0x1FFFFF) | ((v[:, 1] &amp; 0x1FFFFF) &lt;&lt; 21) | ((v[:, 2] &amp; 0x3FFFF) &lt;&lt; 42)</span>
+<span id="L180"><a href="#L180"> 180</a> o = np.lexsort((rng, key)); sel = o[np.r_[True, key[o][1:] != key[o][:-1]]]</span>
+<span id="L181"><a href="#L181"> 181</a> if len(sel) &gt; 600000: sel = np.random.choice(sel, 600000, replace=False)</span>
+<span id="L182"><a href="#L182"> 182</a> pts, col = pts[sel], col[sel]</span>
+<span id="L183"><a href="#L183"> 183</a> dnn = cKDTree(pts).query(pts, k=4)[0][:, 1:].mean(1)</span>
+<span id="L184"><a href="#L184"> 184</a> say(&quot;初始点 %d 个 (去重前 %d)&quot; % (len(pts), len(key)))</span>
+<span id="L185"><a href="#L185"> 185</a> </span>
+<span id="L186"><a href="#L186"> 186</a> imgs = torch.from_numpy(np.stack([d[&quot;img&quot;] for d in DATA])).to(dev)                # uint8 (n, H, W, 3)</span>
+<span id="L187"><a href="#L187"> 187</a> valid = torch.from_numpy(np.stack([d[&quot;valid&quot;] for d in DATA])).to(dev)</span>
+<span id="L188"><a href="#L188"> 188</a> farm = torch.from_numpy(np.stack([d[&quot;far&quot;] for d in DATA])).to(dev)</span>
+<span id="L189"><a href="#L189"> 189</a> DEP = {n: (torch.from_numpy(d[&quot;dpix&quot;]).to(dev), torch.from_numpy(d[&quot;dz&quot;]).to(dev)) for n, d in enumerate(DATA) if len(d[&quot;dpix&quot;]) &gt; 2000}</span>
+<span id="L190"><a href="#L190"> 190</a> C2Wt = torch.from_numpy(C2W).float().to(dev); Kt = torch.from_numpy(Kh).float().to(dev)</span>
+<span id="L191"><a href="#L191"> 191</a> </span>
+<span id="L192"><a href="#L192"> 192</a> # ---------------------------------------------------------------- 模型</span>
+<span id="L193"><a href="#L193"> 193</a> P = torch.nn.ParameterDict(dict(</span>
+<span id="L194"><a href="#L194"> 194</a>     means=torch.nn.Parameter(torch.from_numpy(pts).float()),</span>
+<span id="L195"><a href="#L195"> 195</a>     scales=torch.nn.Parameter(torch.log(torch.from_numpy(np.clip(dnn, 0.02, 0.5)).float())[:, None].repeat(1, 3)),</span>
+<span id="L196"><a href="#L196"> 196</a>     quats=torch.nn.Parameter(torch.tensor([1.0, 0, 0, 0]).repeat(len(pts), 1)),</span>
+<span id="L197"><a href="#L197"> 197</a>     opacities=torch.nn.Parameter(torch.logit(torch.full((len(pts),), 0.3))),</span>
+<span id="L198"><a href="#L198"> 198</a>     sh0=torch.nn.Parameter(((torch.from_numpy(col).float() / 255.0 - 0.5) / C0)[:, None, :]))).to(dev)</span>
+<span id="L199"><a href="#L199"> 199</a> LR = dict(means=2e-3, scales=5e-3, quats=1e-3, opacities=5e-2, sh0=2.5e-3)</span>
+<span id="L200"><a href="#L200"> 200</a> OPT = {k: torch.optim.Adam([{&quot;params&quot;: P[k], &quot;lr&quot;: LR[k], &quot;name&quot;: k}], eps=1e-15) for k in P.keys()}</span>
+<span id="L201"><a href="#L201"> 201</a> sched = torch.optim.lr_scheduler.ExponentialLR(OPT[&quot;means&quot;], gamma=0.01 ** (1.0 / A.iters))</span>
+<span id="L202"><a href="#L202"> 202</a> app = torch.nn.Parameter(torch.zeros(ncam, 6, device=dev))                          # 每帧曝光: log 增益 x3, 偏置 x3</span>
+<span id="L203"><a href="#L203"> 203</a> opt_app = torch.optim.Adam([app], lr=2e-3)</span>
+<span id="L204"><a href="#L204"> 204</a> SKY = torch.tensor([0.80, 0.83, 0.87], device=dev)                                  # 只用于出样张</span>
+<span id="L205"><a href="#L205"> 205</a> dpose = torch.nn.Parameter(torch.zeros(ncam, 6, device=dev)) if A.pose_opt else None</span>
+<span id="L206"><a href="#L206"> 206</a> opt_pose = torch.optim.Adam([{&quot;params&quot;: [dpose], &quot;lr&quot;: 1.0}], lr=1.0) if A.pose_opt else None</span>
+<span id="L207"><a href="#L207"> 207</a> POSE_LR = torch.tensor([1e-4] * 3 + [5e-4] * 3, device=dev)                         # 转角 (rad) / 平移 (m) 的步长</span>
+<span id="L208"><a href="#L208"> 208</a> strategy = MCMCStrategy(cap_max=A.cap, noise_lr=5e4, refine_start_iter=500, refine_stop_iter=int(A.iters * 0.75), refine_every=100, min_opacity=0.005)</span>
+<span id="L209"><a href="#L209"> 209</a> strategy.check_sanity(P, OPT); state = strategy.initialize_state()</span>
+<span id="L210"><a href="#L210"> 210</a> </span>
+<span id="L211"><a href="#L211"> 211</a> def cam_pose(n, delta=None):</span>
+<span id="L212"><a href="#L212"> 212</a>     M = C2Wt[n]</span>
+<span id="L213"><a href="#L213"> 213</a>     d = delta if delta is not None else (dpose[n] if dpose is not None else None)</span>
+<span id="L214"><a href="#L214"> 214</a>     if d is None: return M</span>
+<span id="L215"><a href="#L215"> 215</a>     w = d[:3] * POSE_LR[:3]; t = d[3:] * POSE_LR[3:]; z = torch.zeros((), device=dev)</span>
+<span id="L216"><a href="#L216"> 216</a>     Kx = torch.stack([torch.stack([z, -w[2], w[1]]), torch.stack([w[2], z, -w[0]]), torch.stack([-w[1], w[0], z])])</span>
+<span id="L217"><a href="#L217"> 217</a>     Dm = torch.eye(4, device=dev); Dm = Dm.clone(); Dm[:3, :3] = torch.linalg.matrix_exp(Kx); Dm[:3, 3] = t</span>
+<span id="L218"><a href="#L218"> 218</a>     return M @ Dm</span>
+<span id="L219"><a href="#L219"> 219</a> def render(c2w, mode=&quot;RGB+ED&quot;):</span>
+<span id="L220"><a href="#L220"> 220</a>     r, a, info = rasterization(P[&quot;means&quot;], P[&quot;quats&quot;], torch.exp(P[&quot;scales&quot;]), torch.sigmoid(P[&quot;opacities&quot;]), P[&quot;sh0&quot;], torch.linalg.inv(c2w)[None], Kt[None],</span>
+<span id="L221"><a href="#L221"> 221</a>                                W_, H_, near_plane=0.3, far_plane=600.0, sh_degree=0, packed=False, render_mode=mode)</span>
+<span id="L222"><a href="#L222"> 222</a>     return r[0], a[0, ..., 0], info</span>
+<span id="L223"><a href="#L223"> 223</a> _win = None</span>
+<span id="L224"><a href="#L224"> 224</a> def ssim(x, y):</span>
+<span id="L225"><a href="#L225"> 225</a>     global _win</span>
+<span id="L226"><a href="#L226"> 226</a>     if _win is None:</span>
+<span id="L227"><a href="#L227"> 227</a>         g = torch.tensor([math.exp(-(i - 5) ** 2 / (2 * 1.5 ** 2)) for i in range(11)], device=x.device); g = g / g.sum()</span>
+<span id="L228"><a href="#L228"> 228</a>         _win = (g[:, None] * g[None, :])[None, None].repeat(3, 1, 1, 1)</span>
+<span id="L229"><a href="#L229"> 229</a>     mx = F.conv2d(x, _win, padding=5, groups=3); my = F.conv2d(y, _win, padding=5, groups=3)</span>
+<span id="L230"><a href="#L230"> 230</a>     sxx = F.conv2d(x * x, _win, padding=5, groups=3) - mx * mx; syy = F.conv2d(y * y, _win, padding=5, groups=3) - my * my; sxy = F.conv2d(x * y, _win, padding=5, groups=3) - mx * my</span>
+<span id="L231"><a href="#L231"> 231</a>     return (((2 * mx * my + 1e-4) * (2 * sxy + 9e-4)) / ((mx * mx + my * my + 1e-4) * (sxx + syy + 9e-4))).mean()</span>
+<span id="L232"><a href="#L232"> 232</a> </span>
+<span id="L233"><a href="#L233"> 233</a> # ---------------------------------------------------------------- 训练</span>
+<span id="L234"><a href="#L234"> 234</a> perm = []; t1 = time.time()</span>
+<span id="L235"><a href="#L235"> 235</a> for step in range(A.iters):</span>
+<span id="L236"><a href="#L236"> 236</a>     if not perm: perm = list(np.random.permutation(train_ids))</span>
+<span id="L237"><a href="#L237"> 237</a>     n = int(perm.pop())</span>
+<span id="L238"><a href="#L238"> 238</a>     r, al, info = render(cam_pose(n))</span>
+<span id="L239"><a href="#L239"> 239</a>     rgb = r[..., :3] + (1 - al[..., None]) * torch.rand(3, device=dev)              # 随机背景色: 近景范围内必须自己不透明</span>
+<span id="L240"><a href="#L240"> 240</a>     rgb = rgb * torch.exp(app[n, :3]) + app[n, 3:]</span>
+<span id="L241"><a href="#L241"> 241</a>     gt = imgs[n].float() / 255.0; m = valid[n]</span>
+<span id="L242"><a href="#L242"> 242</a>     rgbm = torch.where(m[..., None], rgb, gt)</span>
+<span id="L243"><a href="#L243"> 243</a>     l1 = (rgbm - gt).abs().sum() / (m.sum() * 3 + 1)</span>
+<span id="L244"><a href="#L244"> 244</a>     loss = 0.8 * l1 + 0.2 * (1 - ssim(rgbm.permute(2, 0, 1)[None], gt.permute(2, 0, 1)[None]))</span>
+<span id="L245"><a href="#L245"> 245</a>     if n in DEP:</span>
+<span id="L246"><a href="#L246"> 246</a>         dpix, dz = DEP[n]; dr = r[..., 3].reshape(-1)[dpix]</span>
+<span id="L247"><a href="#L247"> 247</a>         loss = loss + A.w_depth * ((dr - dz).abs() / dz).clamp(max=1.0).mean()</span>
+<span id="L248"><a href="#L248"> 248</a>     fm = farm[n]</span>
+<span id="L249"><a href="#L249"> 249</a>     if fm.any(): loss = loss + A.w_bg * al[fm].mean()</span>
+<span id="L250"><a href="#L250"> 250</a>     ss = torch.exp(P[&quot;scales&quot;]).sort(dim=1)[0]</span>
+<span id="L251"><a href="#L251"> 251</a>     loss = loss + A.w_shape * (F.relu(ss[:, 2] / ss[:, 1].clamp(min=1e-5) - 4.0).mean() + F.relu(ss[:, 2] - A.smax).mean())</span>
+<span id="L252"><a href="#L252"> 252</a>     if A.flat &gt; 0: loss = loss + A.w_shape * F.relu(ss[:, 2] / ss[:, 0].clamp(min=1e-5) - A.flat).mean()      # 不许太扁: 薄片从训练视角以外看是一片片碎片</span>
+<span id="L253"><a href="#L253"> 253</a>     loss = loss + 0.01 * torch.sigmoid(P[&quot;opacities&quot;]).mean() + 0.01 * ss.mean() + 1e-3 * (app ** 2).mean()</span>
+<span id="L254"><a href="#L254"> 254</a>     loss.backward()</span>
+<span id="L255"><a href="#L255"> 255</a>     for o_ in OPT.values(): o_.step(); o_.zero_grad(set_to_none=True)</span>
+<span id="L256"><a href="#L256"> 256</a>     opt_app.step(); opt_app.zero_grad(set_to_none=True)</span>
+<span id="L257"><a href="#L257"> 257</a>     if opt_pose is not None and step &gt; 500: opt_pose.step()</span>
+<span id="L258"><a href="#L258"> 258</a>     if opt_pose is not None: opt_pose.zero_grad(set_to_none=True)</span>
+<span id="L259"><a href="#L259"> 259</a>     sched.step()</span>
+<span id="L260"><a href="#L260"> 260</a>     strategy.step_post_backward(P, OPT, state, step, info, lr=sched.get_last_lr()[0])</span>
+<span id="L261"><a href="#L261"> 261</a>     if step % 1000 == 0 or step == A.iters - 1:</span>
+<span id="L262"><a href="#L262"> 262</a>         say(&quot;step %5d  loss %.4f  l1 %.4f  高斯 %d  长轴/中轴&gt;4 的占 %.1f%%  %.1f it/s&quot; % (step, loss.item(), l1.item(), len(P[&quot;means&quot;]), 100 * float((ss[:, 2] &gt; 4 * ss[:, 1]).float().mean()), (step + 1) / (time.time() - t1)))</span>
+<span id="L263"><a href="#L263"> 263</a> </span>
+<span id="L264"><a href="#L264"> 264</a> # ---------------------------------------------------------------- 评测</span>
+<span id="L265"><a href="#L265"> 265</a> @torch.no_grad()</span>
+<span id="L266"><a href="#L266"> 266</a> def eval_view(n, delta=None, bg=None, exposure=True):</span>
+<span id="L267"><a href="#L267"> 267</a>     r, al, _ = render(cam_pose(n, delta))</span>
+<span id="L268"><a href="#L268"> 268</a>     rgb = r[..., :3] + (1 - al[..., None]) * SKY</span>
+<span id="L269"><a href="#L269"> 269</a>     if exposure: rgb = rgb * torch.exp(app[n, :3]) + app[n, 3:]</span>
+<span id="L270"><a href="#L270"> 270</a>     return rgb.clamp(0, 1), al</span>
+<span id="L271"><a href="#L271"> 271</a> def psnr_of(x, gt, m, fit):</span>
+<span id="L272"><a href="#L272"> 272</a>     x = x[m]; g = gt[m]</span>
+<span id="L273"><a href="#L273"> 273</a>     if fit:                                                                        # 逐通道线性拟合 (留出帧没有自己的曝光参数)</span>
+<span id="L274"><a href="#L274"> 274</a>         xm, gm = x.mean(0), g.mean(0); a_ = ((x - xm) * (g - gm)).mean(0) / ((x - xm) ** 2).mean(0).clamp(min=1e-8); x = (x - xm) * a_ + gm</span>
+<span id="L275"><a href="#L275"> 275</a>     return float(-10 * torch.log10(((x - g) ** 2).mean()))</span>
+<span id="L276"><a href="#L276"> 276</a> res = dict(hold=[], train=[])</span>
+<span id="L277"><a href="#L277"> 277</a> with torch.no_grad():</span>
+<span id="L278"><a href="#L278"> 278</a>     for n in hold_ids:</span>
+<span id="L279"><a href="#L279"> 279</a>         nb = [k for k in (n - 1, n + 1) if 0 &lt;= k &lt; ncam and not hold[k]]</span>
+<span id="L280"><a href="#L280"> 280</a>         delta = torch.stack([dpose[k] for k in nb]).mean(0) if dpose is not None else None</span>
+<span id="L281"><a href="#L281"> 281</a>         x, al = eval_view(int(n), delta, exposure=False); gt = imgs[n].float() / 255.0</span>
+<span id="L282"><a href="#L282"> 282</a>         res[&quot;hold&quot;].append((psnr_of(x, gt, valid[n], False), psnr_of(x, gt, valid[n], True), float(ssim(torch.where(valid[n][..., None], x, gt).permute(2, 0, 1)[None], gt.permute(2, 0, 1)[None]))))</span>
+<span id="L283"><a href="#L283"> 283</a>     for n in train_ids[::max(1, len(train_ids) // 10)]:</span>
+<span id="L284"><a href="#L284"> 284</a>         x, al = eval_view(int(n)); gt = imgs[n].float() / 255.0</span>
+<span id="L285"><a href="#L285"> 285</a>         res[&quot;train&quot;].append(psnr_of(x, gt, valid[n], False))</span>
+<span id="L286"><a href="#L286"> 286</a> hp = np.array(res[&quot;hold&quot;]); tp = np.array(res[&quot;train&quot;])</span>
+<span id="L287"><a href="#L287"> 287</a> say(&quot;留出帧 %d 张 (只算近景范围): PSNR %.2f dB (线性校色后 %.2f, 最低 %.2f), SSIM %.3f; 训练帧 PSNR %.2f dB&quot; % (len(hp), hp[:, 0].mean(), hp[:, 1].mean(), hp[:, 1].min(), hp[:, 2].mean(), tp.mean()))</span>
+<span id="L288"><a href="#L288"> 288</a> if dpose is not None:</span>
+<span id="L289"><a href="#L289"> 289</a>     dd = (dpose.detach() * POSE_LR).cpu().numpy()[train_ids]</span>
+<span id="L290"><a href="#L290"> 290</a>     say(&quot;位姿修正量: 转角中位 %.3f 度 (p90 %.3f), 平移中位 %.3f m (p90 %.3f)&quot; % (*np.degrees(np.percentile(np.linalg.norm(dd[:, :3], axis=1), [50, 90])), *np.percentile(np.linalg.norm(dd[:, 3:], axis=1), [50, 90])))</span>
+<span id="L291"><a href="#L291"> 291</a> </span>
+<span id="L292"><a href="#L292"> 292</a> # 样张: 上排 留出帧的原图 | 渲染 (3 组); 下排 同一位置抬高 5 m 俯看 | 左移 2.5 m | 右移 2.5 m</span>
+<span id="L293"><a href="#L293"> 293</a> with torch.no_grad():</span>
+<span id="L294"><a href="#L294"> 294</a>     def u8(x): return (x.clamp(0, 1) * 255).byte().cpu().numpy()[..., ::-1]</span>
+<span id="L295"><a href="#L295"> 295</a>     rows = []</span>
+<span id="L296"><a href="#L296"> 296</a>     pick = hold_ids[np.linspace(0, len(hold_ids) - 1, 3).astype(int)] if len(hold_ids) &gt;= 3 else hold_ids</span>
+<span id="L297"><a href="#L297"> 297</a>     for n in pick:</span>
+<span id="L298"><a href="#L298"> 298</a>         nb = [k for k in (n - 1, n + 1) if 0 &lt;= k &lt; ncam and not hold[k]]</span>
+<span id="L299"><a href="#L299"> 299</a>         x, _ = eval_view(int(n), torch.stack([dpose[k] for k in nb]).mean(0) if dpose is not None else None, exposure=False)</span>
+<span id="L300"><a href="#L300"> 300</a>         g_ = imgs[n].float() / 255.0; g_ = torch.where(valid[n][..., None], g_, g_ * 0.35)      # 原图里压暗的部分不参与训练 (远景、车辆、引擎盖)</span>
+<span id="L301"><a href="#L301"> 301</a>         rows.append(np.hstack([u8(g_), u8(x)]))</span>
+<span id="L302"><a href="#L302"> 302</a>     def novel(n, dx=0.0, dz=0.0, pitch=0.0):</span>
+<span id="L303"><a href="#L303"> 303</a>         M = C2Wt[n].clone(); c, s = math.cos(pitch), math.sin(pitch)</span>
+<span id="L304"><a href="#L304"> 304</a>         Rx = torch.tensor([[1, 0, 0], [0, c, -s], [0, s, c]], device=dev, dtype=torch.float32)</span>
+<span id="L305"><a href="#L305"> 305</a>         M[:3, 3] += M[:3, 0] * dx; M[2, 3] += dz; M[:3, :3] = M[:3, :3] @ Rx</span>
+<span id="L306"><a href="#L306"> 306</a>         r, al, _ = render(M, &quot;RGB&quot;); return u8(r[..., :3] + (1 - al[..., None]) * SKY)</span>
+<span id="L307"><a href="#L307"> 307</a>     for n in train_ids[np.linspace(0, len(train_ids) - 1, 4).astype(int)[1:3]]:</span>
+<span id="L308"><a href="#L308"> 308</a>         n = int(n); rows.append(np.hstack([novel(n, dz=5.0, pitch=-math.radians(22)), novel(n, dx=-2.5)])); rows.append(np.hstack([novel(n, dx=2.5), novel(n, dz=1.5, dx=0.0, pitch=-math.radians(8))]))</span>
+<span id="L309"><a href="#L309"> 309</a>     sheet = np.vstack(rows); sheet = cv2.resize(sheet, (sheet.shape[1] * 2 // 3, sheet.shape[0] * 2 // 3), interpolation=cv2.INTER_AREA)</span>
+<span id="L310"><a href="#L310"> 310</a>     cv2.imwrite(OUT + &quot;/sheet.jpg&quot;, sheet, [cv2.IMWRITE_JPEG_QUALITY, 88])</span>
+<span id="L311"><a href="#L311"> 311</a> </span>
+<span id="L312"><a href="#L312"> 312</a> # ---------------------------------------------------------------- 导出</span>
+<span id="L313"><a href="#L313"> 313</a> with torch.no_grad():</span>
+<span id="L314"><a href="#L314"> 314</a>     mu = P[&quot;means&quot;].cpu().numpy().astype(np.float64); sc = torch.exp(P[&quot;scales&quot;]); op = torch.sigmoid(P[&quot;opacities&quot;]).cpu().numpy()</span>
+<span id="L315"><a href="#L315"> 315</a>     q = F.normalize(P[&quot;quats&quot;], dim=1); w, x, y, z = q.unbind(-1)</span>
+<span id="L316"><a href="#L316"> 316</a>     R = torch.stack([1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y), 2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x),</span>
+<span id="L317"><a href="#L317"> 317</a>                      2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)], -1).reshape(-1, 3, 3)</span>
+<span id="L318"><a href="#L318"> 318</a>     cov = (R * (sc ** 2)[:, None, :]) @ R.transpose(1, 2)                           # ENU</span>
+<span id="L319"><a href="#L319"> 319</a>     Mv = torch.tensor([[1.0, 0, 0], [0, 0, 1], [0, -1, 0]], device=dev)             # ENU -&gt; 查看器 (E, U, -N)</span>
+<span id="L320"><a href="#L320"> 320</a>     cov = (Mv @ cov @ Mv.T).cpu().numpy(); smax = sc.max(1)[0].cpu().numpy()</span>
+<span id="L321"><a href="#L321"> 321</a>     rgbv = (P[&quot;sh0&quot;][:, 0] * C0 + 0.5).clamp(0, 1).cpu().numpy()</span>
+<span id="L322"><a href="#L322"> 322</a> np.savez(OUT + &quot;/params.npz&quot;, means=mu.astype(np.float32), scales=P[&quot;scales&quot;].detach().cpu().numpy().astype(np.float16), quats=P[&quot;quats&quot;].detach().cpu().numpy().astype(np.float16),</span>
+<span id="L323"><a href="#L323"> 323</a>          opac=P[&quot;opacities&quot;].detach().cpu().numpy().astype(np.float16), sh0=P[&quot;sh0&quot;].detach().cpu().numpy().astype(np.float16), E0=E0, N0=N0)</span>
+<span id="L324"><a href="#L324"> 324</a> Ew, Nw, Uw = mu[:, 0] + E0, mu[:, 1] + N0, mu[:, 2]</span>
+<span id="L325"><a href="#L325"> 325</a> ok_seg = TR[&quot;seg&quot;] &gt;= 0; own = np.flatnonzero(ok_seg &amp; (TR[&quot;pas&quot;] == CH[&quot;pas&quot;])); oth = np.flatnonzero(ok_seg &amp; (TR[&quot;pas&quot;] != CH[&quot;pas&quot;]))</span>
+<span id="L326"><a href="#L326"> 326</a> d_own, j_own = cKDTree(np.c_[TR[&quot;E&quot;][own], TR[&quot;N&quot;][own]]).query(np.c_[Ew, Nw]); node = own[j_own]</span>
+<span id="L327"><a href="#L327"> 327</a> d_oth = cKDTree(np.c_[TR[&quot;E&quot;][oth], TR[&quot;N&quot;][oth]]).query(np.c_[Ew, Nw])[0] if len(oth) else np.full(len(Ew), 1e9)</span>
+<span id="L328"><a href="#L328"> 328</a> keep = (op &gt; 0.08) &amp; (smax &lt; 1.6) &amp; (Uw &gt; -1.0) &amp; (Uw &lt; 30.0) &amp; (node &gt;= CH[&quot;node0&quot;]) &amp; (node &lt; CH[&quot;node1&quot;]) &amp; (d_own &lt;= d_oth + 0.3) &amp; (d_own &lt; 40.0)</span>
+<span id="L329"><a href="#L329"> 329</a> Z = np.load(WORK + &quot;/gs/cov.npz&quot;); COV = {(int(a), int(b)): c for (a, b), c in zip(Z[&quot;ids&quot;], Z[&quot;cov&quot;])}</span>
+<span id="L330"><a href="#L330"> 330</a> def covered(E, N):</span>
+<span id="L331"><a href="#L331"> 331</a>     gx = np.floor(E / 20.0).astype(np.int64); gn = np.floor(N / 20.0).astype(np.int64)</span>
+<span id="L332"><a href="#L332"> 332</a>     c = np.clip(((E - gx * 20.0) / 0.2).astype(int), 0, 99); r_ = np.clip((((gn + 1) * 20.0 - N) / 0.2).astype(int), 0, 99)</span>
+<span id="L333"><a href="#L333"> 333</a>     out = np.zeros(len(E), bool); key_ = gx * 100003 + gn</span>
+<span id="L334"><a href="#L334"> 334</a>     for kk in np.unique(key_):</span>
+<span id="L335"><a href="#L335"> 335</a>         m_ = key_ == kk; t = COV.get((int(gx[m_][0]), int(gn[m_][0])))</span>
+<span id="L336"><a href="#L336"> 336</a>         if t is not None: out[m_] = t[r_[m_], c[m_]]</span>
+<span id="L337"><a href="#L337"> 337</a>     return out</span>
+<span id="L338"><a href="#L338"> 338</a> road = keep &amp; (np.abs(Uw) &lt; 0.15) &amp; covered(Ew, Nw)</span>
+<span id="L339"><a href="#L339"> 339</a> order = np.r_[np.flatnonzero(keep &amp; ~road), np.flatnonzero(road)]</span>
+<span id="L340"><a href="#L340"> 340</a> pos = np.stack([Ew, Uw, -Nw], 1)[order].astype(&quot;&lt;f4&quot;)</span>
+<span id="L341"><a href="#L341"> 341</a> cv6 = np.stack([cov[:, 0, 0], cov[:, 0, 1], cov[:, 0, 2], cov[:, 1, 1], cov[:, 1, 2], cov[:, 2, 2]], 1)[order].astype(&quot;&lt;f2&quot;)</span>
+<span id="L342"><a href="#L342"> 342</a> rgba = np.clip(np.c_[rgbv, op[:, None]][order] * 255.0 + 0.5, 0, 255).astype(np.uint8)</span>
+<span id="L343"><a href="#L343"> 343</a> meta = dict(id=A.chunk, n=int(len(order)), n_road=int(road.sum()), n_trained=int(len(mu)), lo=[round(float(v), 2) for v in pos.min(0)] if len(pos) else None,</span>
+<span id="L344"><a href="#L344"> 344</a>             hi=[round(float(v), 2) for v in pos.max(0)] if len(pos) else None, seg=CH[&quot;seg&quot;], pas=CH[&quot;pas&quot;], f0=CH[&quot;f0&quot;], f1=CH[&quot;f1&quot;], len=CH[&quot;len&quot;],</span>
+<span id="L345"><a href="#L345"> 345</a>             cams=int(ncam), poses=A.poses, ba_bad=(BA_BAD if BA_D or A.poses == &quot;ba&quot; else None), w_depth=A.w_depth, psnr_hold=round(float(hp[:, 0].mean()), 2), psnr_hold_cc=round(float(hp[:, 1].mean()), 2), psnr_hold_min=round(float(hp[:, 1].min()), 2),</span>
+<span id="L346"><a href="#L346"> 346</a>             ssim_hold=round(float(hp[:, 2].mean()), 3), psnr_train=round(float(tp.mean()), 2), iters=A.iters, pose_opt=A.pose_opt, sec=round(time.time() - t00))</span>
+<span id="L347"><a href="#L347"> 347</a> json.dump(meta, open(OUT + &quot;/meta.json&quot;, &quot;w&quot;))</span>
+<span id="L348"><a href="#L348"> 348</a> if A.export and (not A.tag or A.gs_dir != &quot;gs&quot;):                 # 带标签的试验不写站点, 除非指定了另一个导出目录</span>
+<span id="L349"><a href="#L349"> 349</a>     os.makedirs(&quot;%s/%s&quot; % (SITE, A.gs_dir), exist_ok=True)</span>
+<span id="L350"><a href="#L350"> 350</a>     open(&quot;%s/%s/%s.bin&quot; % (SITE, A.gs_dir, A.chunk), &quot;wb&quot;).write(pos.tobytes() + cv6.tobytes() + rgba.tobytes())</span>
+<span id="L351"><a href="#L351"> 351</a> say(&quot;导出 %d 个高斯 (其中贴路面的 %d 个; 训练结束时 %d 个), %.1f MB; 总用时 %.0fs&quot; % (len(order), road.sum(), len(mu), len(order) * 28 / 1e6, time.time() - t00))</span></pre></html>

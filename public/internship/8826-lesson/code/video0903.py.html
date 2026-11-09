@@ -1,0 +1,89 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>video0903.py</title><style>body{font:15px system-ui;margin:24px;background:#faf8f3}pre{overflow:auto;line-height:1.6}pre span{display:block}span:target{background:#fff1a8}header{overflow-wrap:anywhere}</style><header><a href="/notes/internship-8826/">返回8826课堂笔记</a><h1>video0903.py</h1><p>2026-11-10 服务器只读快照：/home/yjl/crack/viewer8826/build/video0903.py<br>SHA-256 07016aaf9ef7e45ca5b30fb5438447031f33d516f866728625bc076aef8e71cf</p></header><pre><span id="L1"><a href="#L1">   1</a> # -*- coding: utf-8 -*-</span>
+<span id="L2"><a href="#L2">   2</a> &quot;&quot;&quot;rec0903 原片 (1080p mp4) 的逐帧读取, 帧号与 ~/gd/frames/rec0903 的 JPEG 严格对应。</span>
+<span id="L3"><a href="#L3">   3</a> </span>
+<span id="L4"><a href="#L4">   4</a> 为什么要这一层: OpenCV 读这个 mp4 时会**悄悄跳过**若干坏样本 (不一定报错), &quot;第几次成功读取&quot;与 JPEG 帧号</span>
+<span id="L5"><a href="#L5">   5</a> (SAM 3 掩膜、旧点云的来源帧都按 JPEG 帧号) 之间隔着一个逐渐累积的偏移。2026-10-01 之前的做法是每 400 帧</span>
+<span id="L6"><a href="#L6">   6</a> 核对一次, 于是偏移发生的位置最多有 400 帧的不确定, 那一段里图像与掩膜差一帧。</span>
+<span id="L7"><a href="#L7">   7</a> 现在: 把 8791 张 JPEG 的缩略图一次性缓存, 每解出一帧都与&quot;预期帧号及其后 3 帧&quot;的缩略图比较, 逐帧定位。</span>
+<span id="L8"><a href="#L8">   8</a> &quot;&quot;&quot;</span>
+<span id="L9"><a href="#L9">   9</a> import os</span>
+<span id="L10"><a href="#L10">  10</a> import numpy as np, cv2</span>
+<span id="L11"><a href="#L11">  11</a> from multiprocessing import Pool</span>
+<span id="L12"><a href="#L12">  12</a> from common import *</span>
+<span id="L13"><a href="#L13">  13</a> </span>
+<span id="L14"><a href="#L14">  14</a> VIDEO = GD + &quot;/2026-09-03/record/0000000000000000-260903-144556-151103.mp4&quot;</span>
+<span id="L15"><a href="#L15">  15</a> N_JPEG = 8791</span>
+<span id="L16"><a href="#L16">  16</a> </span>
+<span id="L17"><a href="#L17">  17</a> def thumb(img):</span>
+<span id="L18"><a href="#L18">  18</a>     return cv2.resize(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), (120, 68), interpolation=cv2.INTER_AREA)</span>
+<span id="L19"><a href="#L19">  19</a> </span>
+<span id="L20"><a href="#L20">  20</a> def _jt(i):</span>
+<span id="L21"><a href="#L21">  21</a>     im = cv2.imread(&quot;%s/frames/rec0903/%06d.jpg&quot; % (GD, i))</span>
+<span id="L22"><a href="#L22">  22</a>     return thumb(im) if im is not None else np.zeros((68, 120), np.uint8)</span>
+<span id="L23"><a href="#L23">  23</a> </span>
+<span id="L24"><a href="#L24">  24</a> def jpeg_thumbs():</span>
+<span id="L25"><a href="#L25">  25</a>     path = WORK + &quot;/jpeg_thumbs.u8.npy&quot;</span>
+<span id="L26"><a href="#L26">  26</a>     if os.path.exists(path): return np.load(path)</span>
+<span id="L27"><a href="#L27">  27</a>     with Pool(32) as pool:</span>
+<span id="L28"><a href="#L28">  28</a>         T = np.stack(pool.map(_jt, range(N_JPEG), chunksize=64))</span>
+<span id="L29"><a href="#L29">  29</a>     np.save(path, T)</span>
+<span id="L30"><a href="#L30">  30</a>     return T</span>
+<span id="L31"><a href="#L31">  31</a> </span>
+<span id="L32"><a href="#L32">  32</a> def frame_map(rebuild=False):</span>
+<span id="L33"><a href="#L33">  33</a>     &quot;&quot;&quot;r2f: 第 r 次成功读取对应的 JPEG 帧号 (长度 = 真实帧数)&quot;&quot;&quot;</span>
+<span id="L34"><a href="#L34">  34</a>     path = WORK + &quot;/framemap0903.npy&quot;</span>
+<span id="L35"><a href="#L35">  35</a>     if os.path.exists(path) and not rebuild: return np.load(path)</span>
+<span id="L36"><a href="#L36">  36</a>     T = jpeg_thumbs().astype(np.float32)</span>
+<span id="L37"><a href="#L37">  37</a>     cap = cv2.VideoCapture(VIDEO); r2f = []; exp = 0; fails = 0; errs = []</span>
+<span id="L38"><a href="#L38">  38</a>     while exp &lt; N_JPEG:</span>
+<span id="L39"><a href="#L39">  39</a>         ok, img = cap.read()</span>
+<span id="L40"><a href="#L40">  40</a>         if not ok:</span>
+<span id="L41"><a href="#L41">  41</a>             fails += 1</span>
+<span id="L42"><a href="#L42">  42</a>             if fails &gt; 60: break</span>
+<span id="L43"><a href="#L43">  43</a>             continue</span>
+<span id="L44"><a href="#L44">  44</a>         fails = 0</span>
+<span id="L45"><a href="#L45">  45</a>         th = thumb(img).astype(np.float32)</span>
+<span id="L46"><a href="#L46">  46</a>         cand = [d for d in range(0, 5) if exp + d &lt; N_JPEG]</span>
+<span id="L47"><a href="#L47">  47</a>         e = np.array([np.mean(np.abs(T[exp + d] - th)) for d in cand])</span>
+<span id="L48"><a href="#L48">  48</a>         d = 0</span>
+<span id="L49"><a href="#L49">  49</a>         j = int(e.argmin())</span>
+<span id="L50"><a href="#L50">  50</a>         if j != 0 and e[j] &lt; 0.6 * e[0] and e[0] &gt; 2.5: d = cand[j]       # 明显更像后面的某一帧才挪</span>
+<span id="L51"><a href="#L51">  51</a>         r2f.append(exp + d); errs.append(float(e[cand.index(d)])); exp += d + 1</span>
+<span id="L52"><a href="#L52">  52</a>     cap.release()</span>
+<span id="L53"><a href="#L53">  53</a>     r2f = np.array(r2f)</span>
+<span id="L54"><a href="#L54">  54</a>     np.save(path, r2f); np.save(WORK + &quot;/framemap0903_err.npy&quot;, np.array(errs))</span>
+<span id="L55"><a href="#L55">  55</a>     return r2f</span>
+<span id="L56"><a href="#L56">  56</a> </span>
+<span id="L57"><a href="#L57">  57</a> def iter_frames(want=None, stop=None):</span>
+<span id="L58"><a href="#L58">  58</a>     &quot;&quot;&quot;按解码顺序产出 (JPEG 帧号, 真实帧序号, 图像)。want: 只要这些帧号 (其余只解码不产出)&quot;&quot;&quot;</span>
+<span id="L59"><a href="#L59">  59</a>     r2f = frame_map()</span>
+<span id="L60"><a href="#L60">  60</a>     want = None if want is None else set(int(i) for i in want)</span>
+<span id="L61"><a href="#L61">  61</a>     last = max(want) if want else N_JPEG</span>
+<span id="L62"><a href="#L62">  62</a>     cap = cv2.VideoCapture(VIDEO); r = 0; fails = 0</span>
+<span id="L63"><a href="#L63">  63</a>     while r &lt; len(r2f):</span>
+<span id="L64"><a href="#L64">  64</a>         ok, img = cap.read()</span>
+<span id="L65"><a href="#L65">  65</a>         if not ok:</span>
+<span id="L66"><a href="#L66">  66</a>             fails += 1</span>
+<span id="L67"><a href="#L67">  67</a>             if fails &gt; 60: break</span>
+<span id="L68"><a href="#L68">  68</a>             continue</span>
+<span id="L69"><a href="#L69">  69</a>         fails = 0</span>
+<span id="L70"><a href="#L70">  70</a>         f = int(r2f[r])</span>
+<span id="L71"><a href="#L71">  71</a>         if want is None or f in want: yield f, r, img</span>
+<span id="L72"><a href="#L72">  72</a>         r += 1</span>
+<span id="L73"><a href="#L73">  73</a>         if f &gt;= last or (stop is not None and f &gt;= stop): break</span>
+<span id="L74"><a href="#L74">  74</a>     cap.release()</span>
+<span id="L75"><a href="#L75">  75</a> </span>
+<span id="L76"><a href="#L76">  76</a> if __name__ == &quot;__main__&quot;:</span>
+<span id="L77"><a href="#L77">  77</a>     import time</span>
+<span id="L78"><a href="#L78">  78</a>     t0 = time.time()</span>
+<span id="L79"><a href="#L79">  79</a>     T = jpeg_thumbs(); print(&quot;JPEG 缩略图 %s, %.0fs&quot; % (T.shape, time.time() - t0), flush=True)</span>
+<span id="L80"><a href="#L80">  80</a>     r2f = frame_map(rebuild=True)</span>
+<span id="L81"><a href="#L81">  81</a>     f2r = np.full(N_JPEG, -1, int); f2r[r2f] = np.arange(len(r2f))</span>
+<span id="L82"><a href="#L82">  82</a>     bad = np.flatnonzero(f2r &lt; 0)</span>
+<span id="L83"><a href="#L83">  83</a>     err = np.load(WORK + &quot;/framemap0903_err.npy&quot;)</span>
+<span id="L84"><a href="#L84">  84</a>     print(&quot;真实帧 %d 个 (= 7 x %.2f); 没有对应画面的 JPEG 帧号 %d 个: %s&quot; % (len(r2f), len(r2f) / 7.0, len(bad), bad.tolist()))</span>
+<span id="L85"><a href="#L85">  85</a>     print(&quot;匹配误差 (缩略图平均灰度差): 中位 %.2f, p99 %.2f, 最大 %.2f; 用时 %.0fs&quot; % (np.median(err), np.percentile(err, 99), err.max(), time.time() - t0))</span>
+<span id="L86"><a href="#L86">  86</a>     # 这些&quot;多出来&quot;的 JPEG 是什么: 与前一帧/后一帧的差</span>
+<span id="L87"><a href="#L87">  87</a>     for b in bad[:13]:</span>
+<span id="L88"><a href="#L88">  88</a>         a = float(np.mean(np.abs(T[b].astype(np.float32) - T[b - 1]))); c = float(np.mean(np.abs(T[b].astype(np.float32) - T[min(b + 1, N_JPEG - 1)])))</span>
+<span id="L89"><a href="#L89">  89</a>         print(&quot;   JPEG %d: 与前一帧差 %.2f, 与后一帧差 %.2f&quot; % (b, a, c))</span></pre></html>

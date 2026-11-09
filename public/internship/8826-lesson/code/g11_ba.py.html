@@ -1,0 +1,222 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>g11_ba.py</title><style>body{font:15px system-ui;margin:24px;background:#faf8f3}pre{overflow:auto;line-height:1.6}pre span{display:block}span:target{background:#fff1a8}header{overflow-wrap:anywhere}</style><header><a href="/notes/internship-8826/">返回8826课堂笔记</a><h1>g11_ba.py</h1><p>2026-11-10 服务器只读快照：/home/yjl/crack/viewer8826/gs/g11_ba.py<br>SHA-256 3c4a5e96e0274436bd058629f71d14ccef1d88636a99943d76b9e0fb6c729136</p></header><pre><span id="L1"><a href="#L1">   1</a> # -*- coding: utf-8 -*-</span>
+<span id="L2"><a href="#L2">   2</a> &quot;&quot;&quot;g11: 一块路段的位姿光束法平差 (bundle adjustment)。只读输入; 用 geometry 环境, 只占 CPU。</span>
+<span id="L3"><a href="#L3">   3</a> 用法: python g11_ba.py --chunk s1_08</span>
+<span id="L4"><a href="#L4">   4</a> </span>
+<span id="L5"><a href="#L5">   5</a> 为什么做: 地图轨迹给每帧的位姿只有平面位置和航向 (相机高度、俯仰、侧倾取常数)。g10 量到相邻帧之间整体对不齐约 2 像素 (0.19 度),</span>
+<span id="L6"><a href="#L6">   6</a> 高斯因此只能学到模糊的画面。这里让每帧有完整的六自由度, 用图像特征把它们对齐。</span>
+<span id="L7"><a href="#L7">   7</a> </span>
+<span id="L8"><a href="#L8">   8</a> 做法:</span>
+<span id="L9"><a href="#L9">   9</a>   1. 每帧 (去畸变后的 960x540 抽帧) 提 SIFT 特征, 车辆/行人和引擎盖处不提。</span>
+<span id="L10"><a href="#L10">  10</a>   2. 相隔 1~5 帧的两帧互相匹配: 比值检验 + 互为最近邻 + 用现有位姿预筛 + 本质矩阵 RANSAC。匹配串成跨帧的轨迹 (至少 3 帧)。</span>
+<span id="L11"><a href="#L11">  11</a>   3. 用现有位姿三角化出每条轨迹的三维点作初值。</span>
+<span id="L12"><a href="#L12">  12</a>   4. 同时优化 每帧位姿的修正量 (转角 3 + 平移 3) 和 全部三维点, 使重投影误差最小 (Huber 损失)。</span>
+<span id="L13"><a href="#L13">  13</a>      约束 (都是弱约束, 用来定住整体的位置/朝向/尺度, 不妨碍逐帧修正):</span>
+<span id="L14"><a href="#L14">  14</a>        每帧相对现有位姿: 横向 0.30 m, 沿路 0.50 m, 高度 0.10 m; 俯仰/航向/侧倾 各 1 度。</span>
+<span id="L15"><a href="#L15">  15</a>        相邻帧的相对位移相对现有轨迹: 横向 3 cm, 沿路 3 cm + 2%, 高度 1.5 cm (现有轨迹的帧间位移来自条带里程计, 这部分是准的)。</span>
+<span id="L16"><a href="#L16">  16</a>      内参和畸变不动。</span>
+<span id="L17"><a href="#L17">  17</a> 输出 work/gs/ba/&lt;块&gt;.npz: frames (帧号), c2w (相机到世界的 4x4, 世界 = 绝对 ENU、z 向上), c2w0 (现有位姿), 以及统计。</span>
+<span id="L18"><a href="#L18">  18</a> &quot;&quot;&quot;</span>
+<span id="L19"><a href="#L19">  19</a> import os, sys, json, time, argparse</span>
+<span id="L20"><a href="#L20">  20</a> HERE = os.path.dirname(os.path.abspath(__file__))</span>
+<span id="L21"><a href="#L21">  21</a> sys.path.insert(0, HERE + &quot;/../build&quot;)</span>
+<span id="L22"><a href="#L22">  22</a> import numpy as np, cv2</span>
+<span id="L23"><a href="#L23">  23</a> from scipy.spatial.transform import Rotation as Rot</span>
+<span id="L24"><a href="#L24">  24</a> from multiprocessing import Pool</span>
+<span id="L25"><a href="#L25">  25</a> from common import *</span>
+<span id="L26"><a href="#L26">  26</a> cv2.setNumThreads(1)                                        # 进程池里再开 OpenCV 线程偶尔会卡死 (全线跑时 51 块里卡住过 2 块)</span>
+<span id="L27"><a href="#L27">  27</a> </span>
+<span id="L28"><a href="#L28">  28</a> ap = argparse.ArgumentParser(); ap.add_argument(&quot;--chunk&quot;, required=True); ap.add_argument(&quot;--nfeat&quot;, type=int, default=5000); ap.add_argument(&quot;--max_obs&quot;, type=int, default=160000); ap.add_argument(&quot;--max_track&quot;, type=int, default=8)</span>
+<span id="L29"><a href="#L29">  29</a> ap.add_argument(&quot;--sig_t&quot;, default=&quot;0.30,0.50,0.10&quot;); ap.add_argument(&quot;--sig_r&quot;, default=&quot;1,1,1&quot;); ap.add_argument(&quot;--tag&quot;, default=&quot;&quot;)   # 每帧相对现有位姿的约束: 横向/沿路/高度 (m); 俯仰/航向/侧倾 (度)</span>
+<span id="L30"><a href="#L30">  30</a> A = ap.parse_args(); t00 = time.time()</span>
+<span id="L31"><a href="#L31">  31</a> def say(s): print(&quot;[%5.0fs] %s&quot; % (time.time() - t00, s), flush=True)</span>
+<span id="L32"><a href="#L32">  32</a> W_, H_ = 960, 540</span>
+<span id="L33"><a href="#L33">  33</a> cfg = frontcam_cfg()</span>
+<span id="L34"><a href="#L34">  34</a> D = np.array(cfg[&quot;dist&quot;], np.float64)</span>
+<span id="L35"><a href="#L35">  35</a> Kh = np.array([[cfg[&quot;fx&quot;] / 2, 0, (cfg[&quot;cx&quot;] + 0.5) / 2 - 0.5], [0, cfg[&quot;fy&quot;] / 2, (cfg[&quot;cy&quot;] + 0.5) / 2 - 0.5], [0, 0, 1]])</span>
+<span id="L36"><a href="#L36">  36</a> FX, FY, CX, CY = Kh[0, 0], Kh[1, 1], Kh[0, 2], Kh[1, 2]</span>
+<span id="L37"><a href="#L37">  37</a> MAP1, MAP2 = cv2.initUndistortRectifyMap(Kh, D, None, Kh, (W_, H_), cv2.CV_32FC1)</span>
+<span id="L38"><a href="#L38">  38</a> r_, p_, y_ = cfg[&quot;roll&quot;], cfg[&quot;pitch&quot;], cfg[&quot;yaw&quot;]</span>
+<span id="L39"><a href="#L39">  39</a> RC2V = (np.array([[np.cos(y_), -np.sin(y_), 0], [np.sin(y_), np.cos(y_), 0], [0, 0, 1]]) @ np.array([[1, 0, 0], [0, np.cos(p_), -np.sin(p_)], [0, np.sin(p_), np.cos(p_)]])</span>
+<span id="L40"><a href="#L40">  40</a>         @ np.array([[np.cos(r_), 0, np.sin(r_)], [0, 1, 0], [-np.sin(r_), 0, np.cos(r_)]]) @ np.array([[1, 0, 0], [0, 0, 1], [0, -1, 0]], float))</span>
+<span id="L41"><a href="#L41">  41</a> TR = dict(np.load(WORK + &quot;/track0903.npz&quot;))</span>
+<span id="L42"><a href="#L42">  42</a> CH = {c[&quot;id&quot;]: c for c in json.load(open(WORK + &quot;/gs/chunks.json&quot;))}[A.chunk]</span>
+<span id="L43"><a href="#L43">  43</a> cams = np.array(CH[&quot;cams&quot;]); frames = TR[&quot;idx&quot;][cams]; n = len(cams); E0, N0 = CH[&quot;E0&quot;], CH[&quot;N0&quot;]</span>
+<span id="L44"><a href="#L44">  44</a> psi = TR[&quot;psi&quot;][cams]; V = np.stack([np.array([[np.cos(a), np.sin(a), 0], [-np.sin(a), np.cos(a), 0], [0, 0, 1]]) for a in psi])   # 车体 (右, 前, 上) -&gt; ENU</span>
+<span id="L45"><a href="#L45">  45</a> R0 = V @ RC2V; T0 = np.c_[TR[&quot;E&quot;][cams] - E0, TR[&quot;N&quot;][cams] - N0, np.full(n, IPM_HEIGHT)]</span>
+<span id="L46"><a href="#L46">  46</a> HOOD = np.ones((H_, W_), np.uint8); HOOD[512:] = 0</span>
+<span id="L47"><a href="#L47">  47</a> </span>
+<span id="L48"><a href="#L48">  48</a> def feat(k):</span>
+<span id="L49"><a href="#L49">  49</a>     f = int(frames[k]); im = cv2.imread(&quot;%s/frames/rec0903/%06d.jpg&quot; % (GD, f))</span>
+<span id="L50"><a href="#L50">  50</a>     lab = load_label(WORK + &quot;/seg0903&quot;, &quot;%06d&quot; % f, WORK + &quot;/seg0903_mark&quot;)</span>
+<span id="L51"><a href="#L51">  51</a>     ok = HOOD.copy()</span>
+<span id="L52"><a href="#L52">  52</a>     if lab is not None: ok[vehicle_mask(lab, grow=15, down=14)] = 0</span>
+<span id="L53"><a href="#L53">  53</a>     g = cv2.cvtColor(cv2.remap(im, MAP1, MAP2, cv2.INTER_LINEAR), cv2.COLOR_BGR2GRAY); m = cv2.remap(ok, MAP1, MAP2, cv2.INTER_NEAREST)</span>
+<span id="L54"><a href="#L54">  54</a>     m[:2] = 0; m[:, :2] = 0; m[:, -2:] = 0</span>
+<span id="L55"><a href="#L55">  55</a>     kp, des = cv2.SIFT_create(nfeatures=A.nfeat, contrastThreshold=0.02).detectAndCompute(g, m * 255)</span>
+<span id="L56"><a href="#L56">  56</a>     if des is None: return np.zeros((0, 2), np.float32), np.zeros((0, 128), np.float32)</span>
+<span id="L57"><a href="#L57">  57</a>     des = des / (np.abs(des).sum(1, keepdims=True) + 1e-7); des = np.sqrt(des).astype(np.float32)                 # RootSIFT</span>
+<span id="L58"><a href="#L58">  58</a>     return np.array([p.pt for p in kp], np.float32), des</span>
+<span id="L59"><a href="#L59">  59</a> </span>
+<span id="L60"><a href="#L60">  60</a> def rel(i, j):          # j 相机系里的点 = Rr @ (i 相机系里的点) + tr</span>
+<span id="L61"><a href="#L61">  61</a>     Rr = R0[j].T @ R0[i]; tr = R0[j].T @ (T0[i] - T0[j]); return Rr, tr</span>
+<span id="L62"><a href="#L62">  62</a> def match(a):</span>
+<span id="L63"><a href="#L63">  63</a>     i, j = a; (pi, di), (pj, dj) = FE[i], FE[j]</span>
+<span id="L64"><a href="#L64">  64</a>     if len(pi) &lt; 50 or len(pj) &lt; 50: return i, j, np.zeros((0, 2), int)</span>
+<span id="L65"><a href="#L65">  65</a>     bf = cv2.BFMatcher(cv2.NORM_L2); m12 = bf.knnMatch(di, dj, k=2); m21 = bf.knnMatch(dj, di, k=1)</span>
+<span id="L66"><a href="#L66">  66</a>     back = np.array([m[0].trainIdx if m else -1 for m in m21])</span>
+<span id="L67"><a href="#L67">  67</a>     q = np.array([[m[0].queryIdx, m[0].trainIdx] for m in m12 if len(m) == 2 and m[0].distance &lt; 0.8 * m[1].distance and back[m[0].trainIdx] == m[0].queryIdx], int).reshape(-1, 2)</span>
+<span id="L68"><a href="#L68">  68</a>     if len(q) &lt; 30: return i, j, np.zeros((0, 2), int)</span>
+<span id="L69"><a href="#L69">  69</a>     # 用现有位姿预筛 (现有位姿差几个像素, 门限放宽到 8 像素), 再做本质矩阵 RANSAC</span>
+<span id="L70"><a href="#L70">  70</a>     Rr, tr = rel(i, j); Ki = np.linalg.inv(Kh); tx = np.array([[0, -tr[2], tr[1]], [tr[2], 0, -tr[0]], [-tr[1], tr[0], 0]])</span>
+<span id="L71"><a href="#L71">  71</a>     x1 = np.c_[pi[q[:, 0]], np.ones(len(q))] @ Ki.T; x2 = np.c_[pj[q[:, 1]], np.ones(len(q))] @ Ki.T</span>
+<span id="L72"><a href="#L72">  72</a>     if np.linalg.norm(tr) &gt; 0.3:</span>
+<span id="L73"><a href="#L73">  73</a>         Em = tx @ Rr; l2 = x1 @ Em.T; l1 = x2 @ Em; num = (x2 * l2).sum(1) ** 2; den = l2[:, 0] ** 2 + l2[:, 1] ** 2 + l1[:, 0] ** 2 + l1[:, 1] ** 2</span>
+<span id="L74"><a href="#L74">  74</a>         q = q[np.sqrt(num / np.maximum(den, 1e-12)) * FX &lt; 8.0]</span>
+<span id="L75"><a href="#L75">  75</a>         if len(q) &lt; 30: return i, j, np.zeros((0, 2), int)</span>
+<span id="L76"><a href="#L76">  76</a>         Em2, inl = cv2.findEssentialMat(pi[q[:, 0]], pj[q[:, 1]], Kh, method=cv2.USAC_MAGSAC, prob=0.999, threshold=1.0)</span>
+<span id="L77"><a href="#L77">  77</a>         if inl is None or inl.sum() &lt; 30: return i, j, np.zeros((0, 2), int)</span>
+<span id="L78"><a href="#L78">  78</a>         q = q[inl.ravel() &gt; 0]</span>
+<span id="L79"><a href="#L79">  79</a>     else:                                                                                                          # 几乎没动: 只按转动预测的位置筛</span>
+<span id="L80"><a href="#L80">  80</a>         pr = x1 @ Rr.T; pr = pr[:, :2] / pr[:, 2:3]; q = q[np.linalg.norm((pr - x2[:, :2]) * FX, axis=1) &lt; 4.0]</span>
+<span id="L81"><a href="#L81">  81</a>     return i, j, q</span>
+<span id="L82"><a href="#L82">  82</a> </span>
+<span id="L83"><a href="#L83">  83</a> def tri(P1, P2, x1, x2):</span>
+<span id="L84"><a href="#L84">  84</a>     X = cv2.triangulatePoints(P1, P2, x1.T.astype(np.float64), x2.T.astype(np.float64)); return (X[:3] / X[3]).T</span>
+<span id="L85"><a href="#L85">  85</a> </span>
+<span id="L86"><a href="#L86">  86</a> SIG_T = np.array([float(v) for v in A.sig_t.split(&quot;,&quot;)]); SIG_R = np.radians([float(v) for v in A.sig_r.split(&quot;,&quot;)]); HK = 1.5        # 先验的标准差; Huber 损失的拐点 (像素)</span>
+<span id="L87"><a href="#L87">  87</a> def skew(a):</span>
+<span id="L88"><a href="#L88">  88</a>     S = np.zeros((len(a), 3, 3)); S[:, 0, 1] = -a[:, 2]; S[:, 0, 2] = a[:, 1]; S[:, 1, 0] = a[:, 2]; S[:, 1, 2] = -a[:, 0]; S[:, 2, 0] = -a[:, 1]; S[:, 2, 1] = a[:, 0]</span>
+<span id="L89"><a href="#L89">  89</a>     return S</span>
+<span id="L90"><a href="#L90">  90</a> def resid(R, T, X, OC, OP, OUV):</span>
+<span id="L91"><a href="#L91">  91</a>     Xc = np.einsum(&quot;ni,nij-&gt;nj&quot;, X[OP] - T[OC], R[OC]); z = np.maximum(Xc[:, 2], 0.05)</span>
+<span id="L92"><a href="#L92">  92</a>     return Xc, z, np.c_[FX * Xc[:, 0] / z + CX - OUV[:, 0], FY * Xc[:, 1] / z + CY - OUV[:, 1]]</span>
+<span id="L93"><a href="#L93">  93</a> def priors(R, T):</span>
+<span id="L94"><a href="#L94">  94</a>     d = np.einsum(&quot;nji,nj-&gt;ni&quot;, V, T - T0); w = Rot.from_matrix(np.einsum(&quot;nji,njk-&gt;nik&quot;, R0, R)).as_rotvec()</span>
+<span id="L95"><a href="#L95">  95</a>     dv = np.einsum(&quot;nji,nj-&gt;ni&quot;, V[:-1], (T[1:] - T[:-1]) - (T0[1:] - T0[:-1]))</span>
+<span id="L96"><a href="#L96">  96</a>     return d, w, dv</span>
+<span id="L97"><a href="#L97">  97</a> def cost(r, d, w, dv):</span>
+<span id="L98"><a href="#L98">  98</a>     e = np.linalg.norm(r, axis=1)</span>
+<span id="L99"><a href="#L99">  99</a>     return np.where(e &lt;= HK, 0.5 * e ** 2, HK * (e - 0.5 * HK)).sum() + 0.5 * ((d / SIG_T) ** 2).sum() + 0.5 * ((w / SIG_R) ** 2).sum() + 0.5 * ((dv / SIG_REL) ** 2).sum()</span>
+<span id="L100"><a href="#L100"> 100</a> def solve(R, T, X, OC, OP, OUV, iters=30, fix_cam=False):</span>
+<span id="L101"><a href="#L101"> 101</a>     &quot;&quot;&quot;LM + 舒尔补: 位姿修正量 (每帧 6 个: 相机系里的小转角, 车体系里的平移) 与三维点一起解; fix_cam=True 时只动三维点。&quot;&quot;&quot;</span>
+<span id="L102"><a href="#L102"> 102</a>     m = len(X); no = len(OC); lam = 1e-3</span>
+<span id="L103"><a href="#L103"> 103</a>     if not fix_cam:                                           # 同一条轨迹里观测两两配对 (舒尔补要用)</span>
+<span id="L104"><a href="#L104"> 104</a>         o = np.argsort(OP, kind=&quot;stable&quot;); cnt = np.bincount(OP, minlength=m); st = np.r_[0, np.cumsum(cnt)]</span>
+<span id="L105"><a href="#L105"> 105</a>         PK = []; PL = []</span>
+<span id="L106"><a href="#L106"> 106</a>         for L in np.unique(cnt):</span>
+<span id="L107"><a href="#L107"> 107</a>             if L == 0: continue</span>
+<span id="L108"><a href="#L108"> 108</a>             pts = np.flatnonzero(cnt == L); base = st[pts][:, None] + np.arange(L)[None, :]; idx_ = o[base]             # (点数, L)</span>
+<span id="L109"><a href="#L109"> 109</a>             PK.append(np.repeat(idx_, L, axis=1).ravel()); PL.append(np.tile(idx_, (1, L)).ravel())</span>
+<span id="L110"><a href="#L110"> 110</a>         PK = np.concatenate(PK); PL = np.concatenate(PL)</span>
+<span id="L111"><a href="#L111"> 111</a>         ar6 = np.arange(6)</span>
+<span id="L112"><a href="#L112"> 112</a>     Xc, z, r = resid(R, T, X, OC, OP, OUV); d, w, dv = priors(R, T); c_cur = cost(r, d, w, dv)</span>
+<span id="L113"><a href="#L113"> 113</a>     for it in range(iters):</span>
+<span id="L114"><a href="#L114"> 114</a>         e = np.linalg.norm(r, axis=1); wt = np.where(e &lt;= HK, 1.0, HK / np.maximum(e, 1e-9))</span>
+<span id="L115"><a href="#L115"> 115</a>         Jp = np.zeros((no, 2, 3)); Jp[:, 0, 0] = FX / z; Jp[:, 0, 2] = -FX * Xc[:, 0] / z ** 2; Jp[:, 1, 1] = FY / z; Jp[:, 1, 2] = -FY * Xc[:, 1] / z ** 2</span>
+<span id="L116"><a href="#L116"> 116</a>         Rt = R[OC].transpose(0, 2, 1); Jx = Jp @ Rt; JxW = Jx * wt[:, None, None]</span>
+<span id="L117"><a href="#L117"> 117</a>         Vp = np.zeros((m, 3, 3)); np.add.at(Vp, OP, np.einsum(&quot;kij,kil-&gt;kjl&quot;, JxW, Jx)); gx = np.zeros((m, 3)); np.add.at(gx, OP, np.einsum(&quot;kij,ki-&gt;kj&quot;, JxW, r))</span>
+<span id="L118"><a href="#L118"> 118</a>         if not fix_cam:</span>
+<span id="L119"><a href="#L119"> 119</a>             Jc = np.concatenate([Jp @ skew(Xc), -Jp @ (Rt @ V[OC])], axis=2); JcW = Jc * wt[:, None, None]</span>
+<span id="L120"><a href="#L120"> 120</a>             H = np.zeros((6 * n, 6 * n)); g = np.zeros(6 * n)</span>
+<span id="L121"><a href="#L121"> 121</a>             np.add.at(H, (6 * OC[:, None, None] + ar6[None, :, None], 6 * OC[:, None, None] + ar6[None, None, :]), np.einsum(&quot;kij,kil-&gt;kjl&quot;, JcW, Jc))</span>
+<span id="L122"><a href="#L122"> 122</a>             np.add.at(g, 6 * OC[:, None] + ar6[None, :], np.einsum(&quot;kij,ki-&gt;kj&quot;, JcW, r))</span>
+<span id="L123"><a href="#L123"> 123</a>             ii = np.arange(n)</span>
+<span id="L124"><a href="#L124"> 124</a>             for k in range(3):</span>
+<span id="L125"><a href="#L125"> 125</a>                 H[6 * ii + 3 + k, 6 * ii + 3 + k] += 1 / SIG_T[k] ** 2; g[6 * ii + 3 + k] += d[:, k] / SIG_T[k] ** 2</span>
+<span id="L126"><a href="#L126"> 126</a>                 H[6 * ii + k, 6 * ii + k] += 1 / SIG_R[k] ** 2; g[6 * ii + k] += w[:, k] / SIG_R[k] ** 2</span>
+<span id="L127"><a href="#L127"> 127</a>             Wr = 1 / SIG_REL ** 2; B = np.einsum(&quot;nji,njk-&gt;nik&quot;, V[:-1], V[1:])                                          # 相邻帧: 残差对前一帧平移是 -I, 对后一帧是 B</span>
+<span id="L128"><a href="#L128"> 128</a>             for i in range(n - 1):</span>
+<span id="L129"><a href="#L129"> 129</a>                 a = slice(6 * i + 3, 6 * i + 6); b = slice(6 * i + 9, 6 * i + 12); Sd = np.diag(Wr[i])</span>
+<span id="L130"><a href="#L130"> 130</a>                 H[a, a] += Sd; H[a, b] -= Sd @ B[i]; H[b, a] -= B[i].T @ Sd; H[b, b] += B[i].T @ Sd @ B[i]</span>
+<span id="L131"><a href="#L131"> 131</a>                 g[a] -= Wr[i] * dv[i]; g[b] += B[i].T @ (Wr[i] * dv[i])</span>
+<span id="L132"><a href="#L132"> 132</a>             Wk = np.einsum(&quot;kij,kil-&gt;kjl&quot;, JcW, Jx)                                                                      # (观测, 6, 3)</span>
+<span id="L133"><a href="#L133"> 133</a>         ok = False</span>
+<span id="L134"><a href="#L134"> 134</a>         for _try in range(8):</span>
+<span id="L135"><a href="#L135"> 135</a>             Vinv = np.linalg.inv(Vp + lam * Vp * np.eye(3)[None] + 1e-9 * np.eye(3)[None])</span>
+<span id="L136"><a href="#L136"> 136</a>             if fix_cam:</span>
+<span id="L137"><a href="#L137"> 137</a>                 dx = -np.einsum(&quot;pij,pj-&gt;pi&quot;, Vinv, gx); Rn, Tn = R, T</span>
+<span id="L138"><a href="#L138"> 138</a>             else:</span>
+<span id="L139"><a href="#L139"> 139</a>                 Y = np.einsum(&quot;kij,kjl-&gt;kil&quot;, Wk, Vinv[OP])</span>
+<span id="L140"><a href="#L140"> 140</a>                 Sm = H + lam * np.diag(np.diag(H))</span>
+<span id="L141"><a href="#L141"> 141</a>                 np.add.at(Sm, (6 * OC[PK][:, None, None] + ar6[None, :, None], 6 * OC[PL][:, None, None] + ar6[None, None, :]), -np.einsum(&quot;pij,plj-&gt;pil&quot;, Y[PK], Wk[PL]))</span>
+<span id="L142"><a href="#L142"> 142</a>                 rhs = -g.copy(); np.add.at(rhs, 6 * OC[:, None] + ar6[None, :], np.einsum(&quot;kij,kj-&gt;ki&quot;, Y, gx[OP]))</span>
+<span id="L143"><a href="#L143"> 143</a>                 dc = np.linalg.solve(Sm, rhs).reshape(n, 6)</span>
+<span id="L144"><a href="#L144"> 144</a>                 tmp = gx.copy(); np.add.at(tmp, OP, np.einsum(&quot;kij,ki-&gt;kj&quot;, Wk, dc[OC])); dx = -np.einsum(&quot;pij,pj-&gt;pi&quot;, Vinv, tmp)</span>
+<span id="L145"><a href="#L145"> 145</a>                 Rn = R @ Rot.from_rotvec(dc[:, :3]).as_matrix(); Tn = T + np.einsum(&quot;nij,nj-&gt;ni&quot;, V, dc[:, 3:])</span>
+<span id="L146"><a href="#L146"> 146</a>             Xn = X + dx; Xc2, z2, r2 = resid(Rn, Tn, Xn, OC, OP, OUV); d2, w2, dv2 = priors(Rn, Tn); c_new = cost(r2, d2, w2, dv2)</span>
+<span id="L147"><a href="#L147"> 147</a>             if c_new &lt; c_cur:</span>
+<span id="L148"><a href="#L148"> 148</a>                 gain = (c_cur - c_new) / c_cur; R, T, X, Xc, z, r, d, w, dv, c_cur = Rn, Tn, Xn, Xc2, z2, r2, d2, w2, dv2, c_new; lam = max(lam / 3, 1e-7); ok = True; break</span>
+<span id="L149"><a href="#L149"> 149</a>             lam *= 4</span>
+<span id="L150"><a href="#L150"> 150</a>         if not ok or gain &lt; 1e-5: break</span>
+<span id="L151"><a href="#L151"> 151</a>     return R, T, X, r, it + 1</span>
+<span id="L152"><a href="#L152"> 152</a> </span>
+<span id="L153"><a href="#L153"> 153</a> if __name__ == &quot;__main__&quot;:</span>
+<span id="L154"><a href="#L154"> 154</a>     with Pool(32) as pool: FE = pool.map(feat, range(n))</span>
+<span id="L155"><a href="#L155"> 155</a>     say(&quot;块 %s: %d 帧 (帧号 %d~%d), 每帧特征中位 %d 个&quot; % (A.chunk, n, frames.min(), frames.max(), np.median([len(f[0]) for f in FE])))</span>
+<span id="L156"><a href="#L156"> 156</a>     d_along = np.r_[0, np.cumsum(np.linalg.norm(np.diff(T0, axis=0), axis=1))]</span>
+<span id="L157"><a href="#L157"> 157</a>     pairs = [(i, i + d) for i in range(n) for d in (1, 2, 3, 5) if i + d &lt; n and d_along[i + d] - d_along[i] &lt; 16.0]</span>
+<span id="L158"><a href="#L158"> 158</a>     with Pool(48) as pool: MM = pool.map(match, pairs, chunksize=4)</span>
+<span id="L159"><a href="#L159"> 159</a>     say(&quot;帧对 %d 个, 通过几何检验的匹配合计 %d 个 (每对中位 %d)&quot; % (len(pairs), sum(len(m[2]) for m in MM), np.median([len(m[2]) for m in MM])))</span>
+<span id="L160"><a href="#L160"> 160</a>     # ---- 串成轨迹 (并查集)</span>
+<span id="L161"><a href="#L161"> 161</a>     off = np.r_[0, np.cumsum([len(f[0]) for f in FE])]; par = np.arange(off[-1])</span>
+<span id="L162"><a href="#L162"> 162</a>     def find(a):</span>
+<span id="L163"><a href="#L163"> 163</a>         while par[a] != a: par[a] = par[par[a]]; a = par[a]</span>
+<span id="L164"><a href="#L164"> 164</a>         return a</span>
+<span id="L165"><a href="#L165"> 165</a>     for i, j, q in MM:</span>
+<span id="L166"><a href="#L166"> 166</a>         for a, b in q:</span>
+<span id="L167"><a href="#L167"> 167</a>             ra, rb = find(off[i] + a), find(off[j] + b)</span>
+<span id="L168"><a href="#L168"> 168</a>             if ra != rb: par[rb] = ra</span>
+<span id="L169"><a href="#L169"> 169</a>     root = np.array([find(a) for a in range(off[-1])]); fr_of = np.repeat(np.arange(n), [len(f[0]) for f in FE])</span>
+<span id="L170"><a href="#L170"> 170</a>     used = np.zeros(off[-1], bool)</span>
+<span id="L171"><a href="#L171"> 171</a>     for i, j, q in MM: used[off[i] + q[:, 0]] = True; used[off[j] + q[:, 1]] = True</span>
+<span id="L172"><a href="#L172"> 172</a>     idx = np.flatnonzero(used); o = np.argsort(root[idx], kind=&quot;stable&quot;); idx = idx[o]; rr = root[idx]</span>
+<span id="L173"><a href="#L173"> 173</a>     cut = np.r_[0, np.flatnonzero(np.diff(rr)) + 1, len(rr)]</span>
+<span id="L174"><a href="#L174"> 174</a>     P_all = [np.c_[Kh @ R0[k].T, -Kh @ R0[k].T @ T0[k]] for k in range(n)]</span>
+<span id="L175"><a href="#L175"> 175</a>     oc, op, ouv, X0 = [], [], [], []; n_bad = 0; n_obs_acc = 0</span>
+<span id="L176"><a href="#L176"> 176</a>     order = np.argsort(-(cut[1:] - cut[:-1]))                                                                      # 长的轨迹先用</span>
+<span id="L177"><a href="#L177"> 177</a>     for g in order:</span>
+<span id="L178"><a href="#L178"> 178</a>         mem = idx[cut[g]:cut[g + 1]]; fs = fr_of[mem]</span>
+<span id="L179"><a href="#L179"> 179</a>         if len(mem) &lt; 3 or len(np.unique(fs)) != len(fs): n_bad += len(mem) &gt;= 3 and 1 or 0; continue</span>
+<span id="L180"><a href="#L180"> 180</a>         if len(mem) &gt; A.max_track: sel_ = np.round(np.linspace(0, len(mem) - 1, A.max_track)).astype(int); mem = mem[np.argsort(fs)][sel_]; fs = fr_of[mem]   # 长轨迹只留均匀分布的几个观测 (舒尔补的配对数随长度平方增长)</span>
+<span id="L181"><a href="#L181"> 181</a>         uv = np.stack([FE[f][0][m - off[f]] for f, m in zip(fs, mem)])</span>
+<span id="L182"><a href="#L182"> 182</a>         a, b = np.argmin(fs), np.argmax(fs); X = tri(P_all[fs[a]], P_all[fs[b]], uv[a:a + 1], uv[b:b + 1])[0]</span>
+<span id="L183"><a href="#L183"> 183</a>         ray = R0[fs[a]] @ np.array([(uv[a, 0] - CX) / FX, (uv[a, 1] - CY) / FY, 1.0]); ray /= np.linalg.norm(ray)</span>
+<span id="L184"><a href="#L184"> 184</a>         dep = (X - T0[fs[a]]) @ ray</span>
+<span id="L185"><a href="#L185"> 185</a>         if not np.isfinite(dep) or dep &lt; 1.0 or dep &gt; 400.0: X = T0[fs[a]] + ray * 400.0                           # 视差太小 (远处的楼): 放在 400 m 处, 它们主要约束转角</span>
+<span id="L186"><a href="#L186"> 186</a>         Xc = np.einsum(&quot;ni,nij-&gt;nj&quot;, X - T0[fs], R0[fs])</span>
+<span id="L187"><a href="#L187"> 187</a>         if (Xc[:, 2] &lt; 0.5).any(): continue</span>
+<span id="L188"><a href="#L188"> 188</a>         e = np.hypot(FX * Xc[:, 0] / Xc[:, 2] + CX - uv[:, 0], FY * Xc[:, 1] / Xc[:, 2] + CY - uv[:, 1])</span>
+<span id="L189"><a href="#L189"> 189</a>         if np.median(e) &gt; 15.0: continue</span>
+<span id="L190"><a href="#L190"> 190</a>         oc.append(fs); op.append(np.full(len(fs), len(X0))); ouv.append(uv); X0.append(X); n_obs_acc += len(fs)</span>
+<span id="L191"><a href="#L191"> 191</a>         if n_obs_acc &gt; A.max_obs: break</span>
+<span id="L192"><a href="#L192"> 192</a>     OC = np.concatenate(oc); OP = np.concatenate(op); OUV = np.concatenate(ouv).astype(np.float64); X0 = np.array(X0); m = len(X0)</span>
+<span id="L193"><a href="#L193"> 193</a>     step = np.linalg.norm(np.diff(T0, axis=0), axis=1); SIG_REL = np.stack([np.full(n - 1, 0.03), 0.03 + 0.02 * step, np.full(n - 1, 0.015)], 1)</span>
+<span id="L194"><a href="#L194"> 194</a>     Xc_, z_, r0 = resid(R0, T0, X0, OC, OP, OUV); e0 = np.linalg.norm(r0, axis=1); cnt = np.bincount(OC, minlength=n)</span>
+<span id="L195"><a href="#L195"> 195</a>     say(&quot;轨迹 %d 条 (丢掉同一帧出现两次的 %d 条), 观测 %d 个, 轨迹长度中位 %d 帧; 每帧观测 最少 %d / 中位 %d; 三角化初值的重投影误差 中位 %.2f 像素&quot; % (</span>
+<span id="L196"><a href="#L196"> 196</a>         m, n_bad, len(OC), np.median(np.bincount(OP)), cnt.min(), np.median(cnt), np.median(e0)))</span>
+<span id="L197"><a href="#L197"> 197</a>     # ---- &quot;平差前&quot;的公平口径: 位姿固定为现有位姿, 只优化三维点</span>
+<span id="L198"><a href="#L198"> 198</a>     _, _, Xa, ra, _ = solve(R0, T0, X0, OC, OP, OUV, iters=15, fix_cam=True); ea = np.linalg.norm(ra, axis=1)</span>
+<span id="L199"><a href="#L199"> 199</a>     say(&quot;现有位姿 + 最优三维点: 重投影误差 中位 %.2f 像素, 90%% 分位 %.2f&quot; % (np.median(ea), np.percentile(ea, 90)))</span>
+<span id="L200"><a href="#L200"> 200</a>     # ---- 平差: 两轮, 中间去掉误差大的观测 (误配、动的东西)</span>
+<span id="L201"><a href="#L201"> 201</a>     R, T, X, r1, it1 = solve(R0, T0, Xa, OC, OP, OUV, iters=30); e1 = np.linalg.norm(r1, axis=1)</span>
+<span id="L202"><a href="#L202"> 202</a>     say(&quot;第一轮 (%d 次迭代): 重投影误差 中位 %.2f 像素, 90%% 分位 %.2f&quot; % (it1, np.median(e1), np.percentile(e1, 90)))</span>
+<span id="L203"><a href="#L203"> 203</a>     keep = e1 &lt; 4.0; pc = np.bincount(OP[keep], minlength=m); keep &amp;= pc[OP] &gt;= 2</span>
+<span id="L204"><a href="#L204"> 204</a>     OC, OP, OUV = OC[keep], OP[keep], OUV[keep]; used_p = np.flatnonzero(np.bincount(OP, minlength=m) &gt; 0); remap = np.full(m, -1); remap[used_p] = np.arange(len(used_p)); OP = remap[OP]; X = X[used_p]; Xa = Xa[used_p]; m = len(X)</span>
+<span id="L205"><a href="#L205"> 205</a>     R, T, X, r2, it2 = solve(R, T, X, OC, OP, OUV, iters=30); e2 = np.linalg.norm(r2, axis=1)</span>
+<span id="L206"><a href="#L206"> 206</a>     _, _, _, rb, _ = solve(R0, T0, Xa, OC, OP, OUV, iters=15, fix_cam=True); eb = np.linalg.norm(rb, axis=1)</span>
+<span id="L207"><a href="#L207"> 207</a>     d, w, dv = priors(R, T); c = np.c_[w, d]; rot = np.degrees(np.abs(w)); tr_ = np.abs(d); e0k = eb</span>
+<span id="L208"><a href="#L208"> 208</a>     say(&quot;第二轮 (%d 次迭代, 去掉 %.1f%% 的观测): 重投影误差 中位 %.2f 像素, 90%% 分位 %.2f; 同一批观测用现有位姿是 %.2f / %.2f&quot; % (it2, 100 * (1 - keep.mean()), np.median(e2), np.percentile(e2, 90), np.median(eb), np.percentile(eb, 90)))</span>
+<span id="L209"><a href="#L209"> 209</a>     say(&quot;位姿修正量 (中位 / 90%% 分位): 俯仰 %.2f/%.2f 度, 航向 %.2f/%.2f 度, 侧倾 %.2f/%.2f 度; 横向 %.3f/%.3f m, 沿路 %.3f/%.3f m, 高度 %.3f/%.3f m&quot; % (</span>
+<span id="L210"><a href="#L210"> 210</a>         np.median(rot[:, 0]), np.percentile(rot[:, 0], 90), np.median(rot[:, 1]), np.percentile(rot[:, 1], 90), np.median(rot[:, 2]), np.percentile(rot[:, 2], 90),</span>
+<span id="L211"><a href="#L211"> 211</a>         np.median(tr_[:, 0]), np.percentile(tr_[:, 0], 90), np.median(tr_[:, 1]), np.percentile(tr_[:, 1], 90), np.median(tr_[:, 2]), np.percentile(tr_[:, 2], 90)))</span>
+<span id="L212"><a href="#L212"> 212</a>     weak = np.bincount(OC, minlength=n) &lt; 80                                                                      # 观测太少的帧 (出隧道、被车挡住): 不信平差, 留用现有位姿</span>
+<span id="L213"><a href="#L213"> 213</a>     if weak.any(): R = R.copy(); T = T.copy(); R[weak] = R0[weak]; T[weak] = T0[weak]; say(&quot;观测不足 80 个、留用现有位姿的帧: %d 个&quot; % weak.sum())</span>
+<span id="L214"><a href="#L214"> 214</a>     C = np.tile(np.eye(4), (n, 1, 1)); C[:, :3, :3] = R; C[:, :3, 3] = T + [E0, N0, 0]</span>
+<span id="L215"><a href="#L215"> 215</a>     C0 = np.tile(np.eye(4), (n, 1, 1)); C0[:, :3, :3] = R0; C0[:, :3, 3] = T0 + [E0, N0, 0]</span>
+<span id="L216"><a href="#L216"> 216</a>     os.makedirs(WORK + &quot;/gs/ba&quot;, exist_ok=True)</span>
+<span id="L217"><a href="#L217"> 217</a>     np.savez(WORK + &quot;/gs/ba/%s%s.npz&quot; % (A.chunk, A.tag), frames=frames, c2w=C, c2w0=C0, corr=c, n_obs=np.bincount(OC, minlength=n), pts=X + [E0, N0, 0],</span>
+<span id="L218"><a href="#L218"> 218</a>              reproj_before=np.percentile(e0k, [50, 90]), reproj_after=np.percentile(e2, [50, 90]))</span>
+<span id="L219"><a href="#L219"> 219</a>     sg = c.copy(); sg[:, :3] = np.degrees(sg[:, :3])</span>
+<span id="L220"><a href="#L220"> 220</a>     say(&quot;修正量的平均值 (有符号): 俯仰 %+.2f 航向 %+.2f 侧倾 %+.2f 度; 横向 %+.3f 沿路 %+.3f 高度 %+.3f m; 沿路修正在块首/块中/块尾: %+.2f / %+.2f / %+.2f m&quot; % (</span>
+<span id="L221"><a href="#L221"> 221</a>         sg[:, 0].mean(), sg[:, 1].mean(), sg[:, 2].mean(), sg[:, 3].mean(), sg[:, 4].mean(), sg[:, 5].mean(), sg[:5, 4].mean(), sg[n // 2 - 2:n // 2 + 3, 4].mean(), sg[-5:, 4].mean()))</span>
+<span id="L222"><a href="#L222"> 222</a>     say(&quot;写出 work/gs/ba/%s%s.npz&quot; % (A.chunk, A.tag))</span></pre></html>

@@ -1,0 +1,51 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>t02a_flat.py</title><style>body{font:15px system-ui;margin:24px;background:#faf8f3}pre{overflow:auto;line-height:1.6}pre span{display:block}span:target{background:#fff1a8}header{overflow-wrap:anywhere}</style><header><a href="/notes/internship-8826/">返回8826课堂笔记</a><h1>t02a_flat.py</h1><p>2026-11-10 服务器只读快照：/home/yjl/crack/viewer8826/build/t02a_flat.py<br>SHA-256 11d410cb37767e6463270cb258171c97361973ed6bbfbd99a124ffd45b117ae9</p></header><pre><span id="L1"><a href="#L1">   1</a> # -*- coding: utf-8 -*-</span>
+<span id="L2"><a href="#L2">   2</a> &quot;&quot;&quot;t02a: 路面条带的&quot;平场&quot; —— 同样的沥青, 在条带里越远越亮 (掠射角下反光更强) 、两侧偏暗 (镜头暗角)。</span>
+<span id="L3"><a href="#L3">   3</a> 不改的话, 拼图里每一帧贡献的那一截都是一头亮一头暗, 沿路出现 2 m 一道的明暗条纹。</span>
+<span id="L4"><a href="#L4">   4</a> 做法: 抽 700 张条带, 每个像素位置上取&quot;该处亮度 / 本帧路面亮度中位&quot;的中位数 (只用路面、且不是标线的像素),</span>
+<span id="L5"><a href="#L5">   5</a> 平滑后就是与内容无关的增益场; 拼图前把条带除以它。分通道做, 避免偏色。</span>
+<span id="L6"><a href="#L6">   6</a> 输出 work/flat0903.npy (H, W, 3) float32, 近边正中归一到 1。</span>
+<span id="L7"><a href="#L7">   7</a> &quot;&quot;&quot;</span>
+<span id="L8"><a href="#L8">   8</a> import numpy as np, cv2, time</span>
+<span id="L9"><a href="#L9">   9</a> from common import *</span>
+<span id="L10"><a href="#L10">  10</a> t0 = time.time()</span>
+<span id="L11"><a href="#L11">  11</a> S = np.load(WORK + &quot;/strips2.u8.npy&quot;, mmap_mode=&quot;r&quot;); RD = np.load(WORK + &quot;/road2.u8.npy&quot;, mmap_mode=&quot;r&quot;)</span>
+<span id="L12"><a href="#L12">  12</a> V = np.load(WORK + &quot;/strips2_meta.npz&quot;)[&quot;valid&quot;]</span>
+<span id="L13"><a href="#L13">  13</a> T = np.load(WORK + &quot;/track0903.npz&quot;); ks = T[&quot;k_strip&quot;][T[&quot;seg&quot;] &gt;= 0]</span>
+<span id="L14"><a href="#L14">  14</a> pick = ks[np.linspace(0, len(ks) - 1, 700).astype(int)]</span>
+<span id="L15"><a href="#L15">  15</a> H, W = V.shape</span>
+<span id="L16"><a href="#L16">  16</a> acc = np.full((len(pick), H // 2, W // 2, 3), np.nan, np.float32)          # 半分辨率足够 (增益场是平滑的)</span>
+<span id="L17"><a href="#L17">  17</a> for i, k in enumerate(pick):</span>
+<span id="L18"><a href="#L18">  18</a>     im = cv2.resize(np.asarray(S[k]), (W // 2, H // 2), interpolation=cv2.INTER_AREA).astype(np.float32)</span>
+<span id="L19"><a href="#L19">  19</a>     rd = cv2.resize(np.asarray(RD[k]), (W // 2, H // 2), interpolation=cv2.INTER_NEAREST) &gt; 0</span>
+<span id="L20"><a href="#L20">  20</a>     g = im.mean(2)</span>
+<span id="L21"><a href="#L21">  21</a>     if rd.sum() &lt; 2000: continue</span>
+<span id="L22"><a href="#L22">  22</a>     med = np.median(g[rd])</span>
+<span id="L23"><a href="#L23">  23</a>     m = rd &amp; (g &lt; 1.35 * med) &amp; (g &gt; 0.6 * med)                             # 去掉标线 (亮) 和阴影/污渍 (暗)</span>
+<span id="L24"><a href="#L24">  24</a>     cm = np.array([np.median(im[:, :, c][m]) for c in range(3)])</span>
+<span id="L25"><a href="#L25">  25</a>     r = im / cm</span>
+<span id="L26"><a href="#L26">  26</a>     r[~m] = np.nan</span>
+<span id="L27"><a href="#L27">  27</a>     acc[i] = r</span>
+<span id="L28"><a href="#L28">  28</a> cnt = np.isfinite(acc[..., 0]).sum(0)</span>
+<span id="L29"><a href="#L29">  29</a> F = np.nanmedian(acc, axis=0)</span>
+<span id="L30"><a href="#L30">  30</a> F[cnt &lt; 25] = np.nan</span>
+<span id="L31"><a href="#L31">  31</a> # 没数据的角落用最近的有效值填, 再做大尺度平滑</span>
+<span id="L32"><a href="#L32">  32</a> for c in range(3):</span>
+<span id="L33"><a href="#L33">  33</a>     f = F[:, :, c]; bad = ~np.isfinite(f)</span>
+<span id="L34"><a href="#L34">  34</a>     f2 = np.where(bad, 0, f); w = (~bad).astype(np.float32)</span>
+<span id="L35"><a href="#L35">  35</a>     num = cv2.GaussianBlur(f2, (0, 0), 9); den = cv2.GaussianBlur(w, (0, 0), 9)</span>
+<span id="L36"><a href="#L36">  36</a>     sm = num / np.maximum(den, 1e-3)</span>
+<span id="L37"><a href="#L37">  37</a>     far = den &lt; 0.05</span>
+<span id="L38"><a href="#L38">  38</a>     if far.any():</span>
+<span id="L39"><a href="#L39">  39</a>         idx = cv2.distanceTransformWithLabels(far.astype(np.uint8), cv2.DIST_L2, 3, labelType=cv2.DIST_LABEL_PIXEL)[1]</span>
+<span id="L40"><a href="#L40">  40</a>         ys, xs = np.nonzero(~far); lab = idx[~far]; lut = np.zeros(idx.max() + 1, np.float32); lut[lab] = sm[~far]</span>
+<span id="L41"><a href="#L41">  41</a>         sm = np.where(far, lut[idx], sm)</span>
+<span id="L42"><a href="#L42">  42</a>     F[:, :, c] = sm</span>
+<span id="L43"><a href="#L43">  43</a> F = cv2.resize(F, (W, H), interpolation=cv2.INTER_LINEAR)</span>
+<span id="L44"><a href="#L44">  44</a> ref = F[H - 40:H - 10, W // 2 - 60:W // 2 + 60].reshape(-1, 3).mean(0)</span>
+<span id="L45"><a href="#L45">  45</a> F = F / ref</span>
+<span id="L46"><a href="#L46">  46</a> np.save(WORK + &quot;/flat0903.npy&quot;, F.astype(np.float32))</span>
+<span id="L47"><a href="#L47">  47</a> g = F.mean(2)</span>
+<span id="L48"><a href="#L48">  48</a> print(&quot;平场: 近边正中 1.00; 远边正中 %.2f; 近边两侧 (x=±3.5 m) %.2f / %.2f; 远边两侧 (x=±8 m) %.2f / %.2f; 用时 %.0fs&quot;</span>
+<span id="L49"><a href="#L49">  49</a>       % (g[10:40, W // 2 - 60:W // 2 + 60].mean(), g[H - 40:H - 10, W // 2 - 190:W // 2 - 160].mean(), g[H - 40:H - 10, W // 2 + 160:W // 2 + 190].mean(),</span>
+<span id="L50"><a href="#L50">  50</a>          g[10:40, 40:70].mean(), g[10:40, W - 70:W - 40].mean(), time.time() - t0))</span>
+<span id="L51"><a href="#L51">  51</a> cv2.imwrite(WORK + &quot;/flat0903.png&quot;, np.clip(F * 128, 0, 255).astype(np.uint8))</span></pre></html>

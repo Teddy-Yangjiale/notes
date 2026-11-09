@@ -1,0 +1,52 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>t01d_strips.py</title><style>body{font:15px system-ui;margin:24px;background:#faf8f3}pre{overflow:auto;line-height:1.6}pre span{display:block}span:target{background:#fff1a8}header{overflow-wrap:anywhere}</style><header><a href="/notes/internship-8826/">返回8826课堂笔记</a><h1>t01d_strips.py</h1><p>2026-11-10 服务器只读快照：/home/yjl/crack/viewer3d/build/t01d_strips.py<br>SHA-256 12f4aa8182cf0122747387de4439c3fe6e51b3b136e8295f88c6a51610805e73</p></header><pre><span id="L1"><a href="#L1">   1</a> # -*- coding: utf-8 -*-</span>
+<span id="L2"><a href="#L2">   2</a> &quot;&quot;&quot;t01d: rec0903 路面条带 v2 —— 1080p 原片 + 第二轮核准的标定 + SAM 3 路面掩膜。</span>
+<span id="L3"><a href="#L3">   3</a> </span>
+<span id="L4"><a href="#L4">   4</a> 输出 (work/):</span>
+<span id="L5"><a href="#L5">   5</a>   strips2.u8.npy   (K, H, W, 3)  条带图像, 2 cm/px, x ±9 m, y 4.8~13.4 m</span>
+<span id="L6"><a href="#L6">   6</a>   road2.u8.npy     (K, H, W)     1 = 该像素是路面 (SAM 3 &quot;road&quot; 且不是车辆), 0 = 其他/视野外</span>
+<span id="L7"><a href="#L7">   7</a>   strips2_meta.npz idx (帧号), got, valid</span>
+<span id="L8"><a href="#L8">   8</a> 选帧不再依赖旧轨迹: 黑匣子车速在该帧前后 2.5 s 内超过 2 km/h 的帧都渲染 (长时间停车的中段不要)。</span>
+<span id="L9"><a href="#L9">   9</a> 帧号与 JPEG 逐帧对应 (video0903.py): 掩膜是在 JPEG 上算的, 图像与掩膜差一帧的话车辆掩膜会错位。</span>
+<span id="L10"><a href="#L10">  10</a> &quot;&quot;&quot;</span>
+<span id="L11"><a href="#L11">  11</a> import sys, time</span>
+<span id="L12"><a href="#L12">  12</a> import numpy as np, cv2</span>
+<span id="L13"><a href="#L13">  13</a> from common import *</span>
+<span id="L14"><a href="#L14">  14</a> sys.path.insert(0, STITCH)</span>
+<span id="L15"><a href="#L15">  15</a> from bev_core import BEVRenderer</span>
+<span id="L16"><a href="#L16">  16</a> </span>
+<span id="L17"><a href="#L17">  17</a> </span>
+<span id="L18"><a href="#L18">  18</a> if __name__ == &quot;__main__&quot;:</span>
+<span id="L19"><a href="#L19">  19</a>     t0 = time.time()</span>
+<span id="L20"><a href="#L20">  20</a>     rend = BEVRenderer(frontcam_cfg(), (1920, 1080), STRIP_XR, STRIP_YR, STRIP_RES)</span>
+<span id="L21"><a href="#L21">  21</a>     V = np.asarray(rend.valid); bh, bw = V.shape</span>
+<span id="L22"><a href="#L22">  22</a>     bb = np.load(WORK + &quot;/bb_track.npz&quot;); lag = np.load(WORK + &quot;/frames.npz&quot;)[&quot;lag&quot;]</span>
+<span id="L23"><a href="#L23">  23</a>     n = len(lag); t = np.arange(n) / FPS + lag</span>
+<span id="L24"><a href="#L24">  24</a>     sp = np.interp(np.arange(np.floor(t[0]) - 3, np.ceil(t[-1]) + 4), bb[&quot;t&quot;], bb[&quot;speed&quot;])</span>
+<span id="L25"><a href="#L25">  25</a>     t_grid0 = np.floor(t[0]) - 3</span>
+<span id="L26"><a href="#L26">  26</a>     vmax = np.array([sp[max(0, int(a - 2.5 - t_grid0)):int(a + 2.5 - t_grid0) + 2].max() for a in t])</span>
+<span id="L27"><a href="#L27">  27</a>     use = vmax &gt;= 2.0</span>
+<span id="L28"><a href="#L28">  28</a>     idx_use = np.flatnonzero(use)</span>
+<span id="L29"><a href="#L29">  29</a>     print(&quot;条带 %dx%d px, 有效 %.0f%%; 要渲染 %d 帧&quot; % (bw, bh, 100 * V.mean(), len(idx_use)), flush=True)</span>
+<span id="L30"><a href="#L30">  30</a>     mm = np.lib.format.open_memmap(WORK + &quot;/strips2.u8.npy&quot;, mode=&quot;w+&quot;, dtype=np.uint8, shape=(len(idx_use), bh, bw, 3))</span>
+<span id="L31"><a href="#L31">  31</a>     rm = np.lib.format.open_memmap(WORK + &quot;/road2.u8.npy&quot;, mode=&quot;w+&quot;, dtype=np.uint8, shape=(len(idx_use), bh, bw))</span>
+<span id="L32"><a href="#L32">  32</a>     got = np.zeros(len(idx_use), bool)</span>
+<span id="L33"><a href="#L33">  33</a>     pos = {int(i): k for k, i in enumerate(idx_use)}</span>
+<span id="L34"><a href="#L34">  34</a>     import video0903</span>
+<span id="L35"><a href="#L35">  35</a>     nread = 0</span>
+<span id="L36"><a href="#L36">  36</a>     for cur, r, img in video0903.iter_frames(want=idx_use):</span>
+<span id="L37"><a href="#L37">  37</a>         k = pos[cur]</span>
+<span id="L38"><a href="#L38">  38</a>         lab = load_label(WORK + &quot;/seg0903&quot;, &quot;%06d&quot; % cur, WORK + &quot;/seg0903_mark&quot;)</span>
+<span id="L39"><a href="#L39">  39</a>         if lab is None: continue</span>
+<span id="L40"><a href="#L40">  40</a>         mm[k] = rend.render(img)</span>
+<span id="L41"><a href="#L41">  41</a>         road = rend.render_nearest(cv2.resize(lab, (1920, 1080), interpolation=cv2.INTER_NEAREST)) == 1</span>
+<span id="L42"><a href="#L42">  42</a>         # 车辆掩膜向外扩一圈: 车身边缘、车底阴影常被判成路面</span>
+<span id="L43"><a href="#L43">  43</a>         veh = vehicle_mask(lab).astype(np.uint8)</span>
+<span id="L44"><a href="#L44">  44</a>         vs = rend.render_nearest(cv2.resize(veh, (1920, 1080), interpolation=cv2.INTER_NEAREST)) &gt; 0</span>
+<span id="L45"><a href="#L45">  45</a>         rm[k] = (road &amp; ~vs &amp; V).astype(np.uint8); got[k] = True</span>
+<span id="L46"><a href="#L46">  46</a>         nread += 1</span>
+<span id="L47"><a href="#L47">  47</a>         if nread % 1500 == 0: print(&quot;  已渲染 %d 帧 (帧号 %d), %.0fs&quot; % (nread, cur, time.time() - t0), flush=True)</span>
+<span id="L48"><a href="#L48">  48</a>     mm.flush(); rm.flush()</span>
+<span id="L49"><a href="#L49">  49</a>     print(&quot;条带渲染 %d / %d&quot; % (got.sum(), len(idx_use)))</span>
+<span id="L50"><a href="#L50">  50</a>     np.savez(WORK + &quot;/strips2_meta.npz&quot;, idx=idx_use, got=got, valid=V, xr=STRIP_XR, yr=STRIP_YR, res=STRIP_RES,</span>
+<span id="L51"><a href="#L51">  51</a>              cal=np.array([IPM_ROLL, IPM_PITCH_UP, IPM_YAW, IPM_HEIGHT]))</span>
+<span id="L52"><a href="#L52">  52</a>     print(&quot;写出 strips2 (%.1f GB) + road2 (%.1f GB), 用时 %.0fs&quot; % (os.path.getsize(WORK + &quot;/strips2.u8.npy&quot;) / 1e9, os.path.getsize(WORK + &quot;/road2.u8.npy&quot;) / 1e9, time.time() - t0))</span></pre></html>

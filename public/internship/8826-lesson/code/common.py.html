@@ -1,0 +1,295 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>common.py</title><style>body{font:15px system-ui;margin:24px;background:#faf8f3}pre{overflow:auto;line-height:1.6}pre span{display:block}span:target{background:#fff1a8}header{overflow-wrap:anywhere}</style><header><a href="/notes/internship-8826/">返回8826课堂笔记</a><h1>common.py</h1><p>2026-11-10 服务器只读快照：/home/yjl/crack/viewer8826/build/common.py<br>SHA-256 8300841c1b9347db56e23319196abd87fba30b63870e415a8ae1f0e07f651356</p></header><pre><span id="L1"><a href="#L1">   1</a> # -*- coding: utf-8 -*-</span>
+<span id="L2"><a href="#L2">   2</a> &quot;&quot;&quot;viewer3d 构建脚本的公共部分: 路径、坐标系、rec0903 逐帧&quot;贴路&quot;姿态。</span>
+<span id="L3"><a href="#L3">   3</a> </span>
+<span id="L4"><a href="#L4">   4</a> 坐标系 (务必只在这里定义一次):</span>
+<span id="L5"><a href="#L5">   5</a>   地理局部系 ENU   : E=东, N=北, U=上, 单位米。原点 = abc.csv 在录像时间窗内的第一个定位点,</span>
+<span id="L6"><a href="#L6">   6</a>                     换算常数与 ~/gd/tools/gps_csv.py **逐字一致** (纬向 111132 m/deg,</span>
+<span id="L7"><a href="#L7">   7</a>                     经向再乘 cos(窗内平均纬度)), 这样才能和已有的融合位姿对上。</span>
+<span id="L8"><a href="#L8">   8</a>   查看器系 (three.js, 右手): X=E, Y=U, Z=-N。</span>
+<span id="L9"><a href="#L9">   9</a> </span>
+<span id="L10"><a href="#L10">  10</a> 为什么不直接用 ~/gd 里现成的点云 (2026-10-01 核实, 见 build/mirror_check.py):</span>
+<span id="L11"><a href="#L11">  11</a>   1. fuse_full.py 把世界系标成 (x=东, y=上, z=北) —— 左手系, 而相机旋转第一列用右手叉乘构造,</span>
+<span id="L12"><a href="#L12">  12</a>      于是每帧的点被放到轨迹的地理**另一侧**。three.js 是右手系, 老查看器里局部看着对,</span>
+<span id="L13"><a href="#L13">  13</a>      但整条轨迹是真实地图的镜像; 地理真实的裂缝正射图叠上去会左右颠倒。</span>
+<span id="L14"><a href="#L14">  14</a>   2. 融合位姿把光轴当成水平, 而相机实际上仰约 4.7 度 (稠密帧路面平面拟合, 290 帧中位 -4.72)。</span>
+<span id="L15"><a href="#L15">  15</a>      结果每帧的路面是一片向远处下沉的&quot;瓦片&quot;, 60 m 处低 5 m。</span>
+<span id="L16"><a href="#L16">  16</a>   这里的改正: 由点的来源帧反算相机系坐标, 再用&quot;贴路姿态&quot;重新投到世界系 ——</span>
+<span id="L17"><a href="#L17">  17</a>   相机相对路面的姿态取常数 (上仰 CAM_PITCH_UP), 路面坡度取自轨迹自身的高程变化。</span>
+<span id="L18"><a href="#L18">  18</a> &quot;&quot;&quot;</span>
+<span id="L19"><a href="#L19">  19</a> import json</span>
+<span id="L20"><a href="#L20">  20</a> import math</span>
+<span id="L21"><a href="#L21">  21</a> import os</span>
+<span id="L22"><a href="#L22">  22</a> import sys</span>
+<span id="L23"><a href="#L23">  23</a> </span>
+<span id="L24"><a href="#L24">  24</a> import numpy as np</span>
+<span id="L25"><a href="#L25">  25</a> </span>
+<span id="L26"><a href="#L26">  26</a> HOME = os.path.expanduser(&quot;~&quot;)</span>
+<span id="L27"><a href="#L27">  27</a> GD = HOME + &quot;/gd&quot;</span>
+<span id="L28"><a href="#L28">  28</a> RUN = GD + &quot;/ABot-Recon/outputs/rec0903_hires&quot;</span>
+<span id="L29"><a href="#L29">  29</a> ROOT = HOME + &quot;/crack/viewer8826&quot;</span>
+<span id="L30"><a href="#L30">  30</a> WORK = ROOT + &quot;/work&quot;</span>
+<span id="L31"><a href="#L31">  31</a> SITE = ROOT + &quot;/site2&quot;          # v2 先建在 site2, 全部验证完再换上线 (旧版留作 site_v1)</span>
+<span id="L32"><a href="#L32">  32</a> STITCH = HOME + &quot;/crack/stitich&quot;</span>
+<span id="L33"><a href="#L33">  33</a> </span>
+<span id="L34"><a href="#L34">  34</a> ABC_CSV = GD + &quot;/2026-09-03/abc.csv&quot;</span>
+<span id="L35"><a href="#L35">  35</a> CLIP_START, CLIP_END = &quot;2026-09-03 14:45:56&quot;, &quot;2026-09-03 15:11:03&quot;</span>
+<span id="L36"><a href="#L36">  36</a> M_PER_DEG_LAT = 111_132.0</span>
+<span id="L37"><a href="#L37">  37</a> </span>
+<span id="L38"><a href="#L38">  38</a> CAM_PITCH_UP = 4.72        # deg, 点图里路面平面相对光轴的上仰 (稠密帧平面拟合中位) —— 只用于改投模型点云</span>
+<span id="L39"><a href="#L39">  39</a> CAM_YAW = -2.231           # deg, 光轴相对车道方向的偏航, BEVRenderer 约定 (消失点 367 帧, 四等分跨度 0.22)</span>
+<span id="L40"><a href="#L40">  40</a> # ---- 前摄 IPM (路面正射底图) 的标定, 2026-10-01 由两把独立的尺子定下 ----</span>
+<span id="L41"><a href="#L41">  41</a> #   纵向: &quot;IPM 位移 / GNSS 里程&quot; (build/probe_disp2.py): h=1.60 时 1.096/1.087 (近/远段), h=1.475 时 0.998/0.997;</span>
+<span id="L42"><a href="#L42">  42</a> #         近远段相等说明俯仰 5.05 是对的 (4.72 时近远差 5%)。GNSS 里程与黑匣子车速积分互校 0.989。</span>
+<span id="L43"><a href="#L43">  43</a> #   横向: 相邻车道线中心距 (build/s03a_frontcal.py): h=1.60 时 3.890 m -&gt; 要等于 0924 后摄在同一条路上</span>
+<span id="L44"><a href="#L44">  44</a> #         量到的 3.585 m, 需 h=1.475。</span>
+<span id="L45"><a href="#L45">  45</a> #   两把尺子给出同一个高度, 所以模板内参的焦距对这台前摄是对的, 有效高度 1.475 m (不是标称 1.60)。</span>
+<span id="L46"><a href="#L46">  46</a> IPM_PITCH_UP = 5.25        # deg  ┐ 2026-10-01 第二轮核准 (build/t01c_scale.py), 取代消失点法的 5.049 / -2.231 / 横滚 0:</span>
+<span id="L47"><a href="#L47">  47</a> IPM_ROLL = -1.06           # deg  │   横滚: 直路上相邻两帧条带之间不该有转角 (横滚 0 时每前进 1 m &quot;转&quot; -0.37 度)</span>
+<span id="L48"><a href="#L48">  48</a> IPM_YAW = -1.93            # deg  │   偏航: 直路上不该有横移;  俯仰: 同一对帧里远点与近点的位移应相等</span>
+<span id="L49"><a href="#L49">  49</a> IPM_HEIGHT = 1.475         # m    ┘   高度: 7 帧 (一个 GOP = 1.2 s) 的位移和 / 黑匣子定位路程 = 1.003</span>
+<span id="L50"><a href="#L50">  50</a> # 帧间隔不均匀 (同日查明): 每 7 帧里 5 个 0.16 s、2 个 0.20 s (25 fps 源按 4/4/4/5/4/4/5 抽帧)。</span>
+<span id="L51"><a href="#L51">  51</a> # &quot;单对帧位移 / (车速 / 5.827)&quot; 的中位数因此天然是 0.93, 不是尺度问题; 尺度只能拿整 7 帧的和来比。</span>
+<span id="L52"><a href="#L52">  52</a> # 隧道 (画面上三分之一的中位亮度 &lt; 80, build/probe_tunnel.py): 洞内没有卫星定位, 黑匣子给的是按车速推算的位置</span>
+<span id="L53"><a href="#L53">  53</a> # (去程出洞时一次跳回 30 m); 洞内路面只有实线、没有可跟踪的纵向纹理, 视觉里程计的前进量也定不出来。</span>
+<span id="L54"><a href="#L54">  54</a> # 所以洞内不纳入地图; 出洞后定位要十来秒才稳, 这段的定位先验也不用 (位置靠里程计从后面接上)。</span>
+<span id="L55"><a href="#L55">  55</a> TUNNEL_FRAMES = [(2760, 3483), (5454, 6129)]</span>
+<span id="L56"><a href="#L56">  56</a> GNSS_SETTLE_FRAMES = 75</span>
+<span id="L57"><a href="#L57">  57</a> STRIP_XR, STRIP_YR, STRIP_RES = (-9.0, 9.0), (4.8, 13.4), 0.02    # 路面条带的范围: 近边 4.8 m 对应原片第 1040 行 (再往下是引擎盖)</span>
+<span id="L58"><a href="#L58">  58</a> # 模型点图比这套标定&quot;胀大&quot;: 同一路面像素, 点图的距离是 IPM 的 1.27 倍、横向 1.18 倍、相机高 1.12 倍。</span>
+<span id="L59"><a href="#L59">  59</a> # 点云只作环境, 取横向一致的折中系数把每帧的点绕相机中心收缩, 让路沿/绿化带与路面正射对得上。</span>
+<span id="L60"><a href="#L60">  60</a> MODEL_SHRINK = 0.85</span>
+<span id="L61"><a href="#L61">  61</a> CAM_HEIGHT = 1.658 * MODEL_SHRINK   # m, 收缩后点云里相机到路面的垂距 (≈1.41)</span>
+<span id="L62"><a href="#L62">  62</a> FPS = 5.827                # 与 ~/gd/tools 一致: 帧 i 的时刻 = i / 5.827 s (自 14:45:56 起)。</span>
+<span id="L63"><a href="#L63">  63</a>                            # 不能用 8791/1507=5.8335 —— 实测那样到片尾会差 1.7 s, 位姿与定位差 7 m</span>
+<span id="L64"><a href="#L64">  64</a> </span>
+<span id="L65"><a href="#L65">  65</a> </span>
+<span id="L66"><a href="#L66">  66</a> def enu_origin():</span>
+<span id="L67"><a href="#L67">  67</a>     &quot;&quot;&quot;与 gps_csv.load 相同的原点和换算常数。返回 dict(lon0, lat0, m_lon, h0, t0_epoch)&quot;&quot;&quot;</span>
+<span id="L68"><a href="#L68">  68</a>     sys.path.insert(0, GD + &quot;/tools&quot;)</span>
+<span id="L69"><a href="#L69">  69</a>     import gps_csv</span>
+<span id="L70"><a href="#L70">  70</a>     g = gps_csv.load(ABC_CSV, clip_start=CLIP_START, clip_end=CLIP_END)</span>
+<span id="L71"><a href="#L71">  71</a>     m_lon = M_PER_DEG_LAT * math.cos(math.radians(float(g[&quot;lat&quot;].mean())))</span>
+<span id="L72"><a href="#L72">  72</a>     return dict(lon0=float(g[&quot;lon&quot;][0]), lat0=float(g[&quot;lat&quot;][0]), m_lon=m_lon,</span>
+<span id="L73"><a href="#L73">  73</a>                 h0=float(g[&quot;height&quot;][0]), g=g)</span>
+<span id="L74"><a href="#L74">  74</a> </span>
+<span id="L75"><a href="#L75">  75</a> </span>
+<span id="L76"><a href="#L76">  76</a> def lonlat_to_en(lon, lat, o):</span>
+<span id="L77"><a href="#L77">  77</a>     return (np.asarray(lon, float) - o[&quot;lon0&quot;]) * o[&quot;m_lon&quot;], (np.asarray(lat, float) - o[&quot;lat0&quot;]) * M_PER_DEG_LAT</span>
+<span id="L78"><a href="#L78">  78</a> </span>
+<span id="L79"><a href="#L79">  79</a> </span>
+<span id="L80"><a href="#L80">  80</a> def en_to_lonlat(e, n, o):</span>
+<span id="L81"><a href="#L81">  81</a>     return np.asarray(e, float) / o[&quot;m_lon&quot;] + o[&quot;lon0&quot;], np.asarray(n, float) / M_PER_DEG_LAT + o[&quot;lat0&quot;]</span>
+<span id="L82"><a href="#L82">  82</a> </span>
+<span id="L83"><a href="#L83">  83</a> </span>
+<span id="L84"><a href="#L84">  84</a> def rx(deg):</span>
+<span id="L85"><a href="#L85">  85</a>     c, s = math.cos(math.radians(deg)), math.sin(math.radians(deg))</span>
+<span id="L86"><a href="#L86">  86</a>     return np.array([[1, 0, 0], [0, c, -s], [0, s, c]], float)</span>
+<span id="L87"><a href="#L87">  87</a> </span>
+<span id="L88"><a href="#L88">  88</a> </span>
+<span id="L89"><a href="#L89">  89</a> def frame_lag(n):</span>
+<span id="L90"><a href="#L90">  90</a>     &quot;&quot;&quot;逐帧时延 (s): 第 i 帧的真实 GNSS 时刻 = i/FPS + lag[i]。</span>
+<span id="L91"><a href="#L91">  91</a> </span>
+<span id="L92"><a href="#L92">  92</a>     2026-10-01 实测 (build/probe_lag.py 及其细化): 把&quot;模型里程计的逐帧步长&quot;与定位记录的车速曲线分窗互相关,</span>
+<span id="L93"><a href="#L93">  93</a>     黑匣子与 abc.csv 两份独立定位记录给出同一条曲线 (两者之差中位 -0.05 s), 相关峰 0.95~1.00:</span>
+<span id="L94"><a href="#L94">  94</a>     片头 +1.6 s, 中段 +0.3~+1.7 s 起伏, 片尾 -1.0 s。码流里每 7 帧一个的秒级时间戳是均匀的,</span>
+<span id="L95"><a href="#L95">  95</a>     所以不是丢帧, 而是录像时间轴与定位时间轴之间的漂移。不改的话 40 km/h 时地图沿路错 10~25 m。</span>
+<span id="L96"><a href="#L96">  96</a>     这里对窗口估计做中值平滑后按时间线性插值; 匀速路段没有估计 (峰不尖), 靠两侧插值。</span>
+<span id="L97"><a href="#L97">  97</a>     &quot;&quot;&quot;</span>
+<span id="L98"><a href="#L98">  98</a>     path = WORK + &quot;/lag0903_fine.npy&quot;</span>
+<span id="L99"><a href="#L99">  99</a>     if not os.path.exists(path):</span>
+<span id="L100"><a href="#L100"> 100</a>         return np.zeros(n)</span>
+<span id="L101"><a href="#L101"> 101</a>     R = np.load(path)</span>
+<span id="L102"><a href="#L102"> 102</a>     t = R[:, 0]; v = np.nanmedian(R[:, 1:3], axis=1)                  # 两份定位记录的估计取中</span>
+<span id="L103"><a href="#L103"> 103</a>     ok = np.isfinite(v) &amp; (np.abs(v) &lt; 3.5)</span>
+<span id="L104"><a href="#L104"> 104</a>     t, v = t[ok], v[ok]</span>
+<span id="L105"><a href="#L105"> 105</a>     vs = np.array([np.median(v[(np.abs(t - c) &lt;= 45.0)]) for c in t]) # ±45 s 中值, 压掉单窗口野值</span>
+<span id="L106"><a href="#L106"> 106</a>     return np.interp(np.arange(n) / FPS, t, vs)</span>
+<span id="L107"><a href="#L107"> 107</a> </span>
+<span id="L108"><a href="#L108"> 108</a> </span>
+<span id="L109"><a href="#L109"> 109</a> def _gauss(x, sig):</span>
+<span id="L110"><a href="#L110"> 110</a>     k = int(sig * 6) | 1</span>
+<span id="L111"><a href="#L111"> 111</a>     ker = np.exp(-0.5 * ((np.arange(k) - k // 2) / sig) ** 2); ker /= ker.sum()</span>
+<span id="L112"><a href="#L112"> 112</a>     return np.convolve(np.pad(x, k // 2, mode=&quot;edge&quot;), ker, mode=&quot;valid&quot;)</span>
+<span id="L113"><a href="#L113"> 113</a> </span>
+<span id="L114"><a href="#L114"> 114</a> </span>
+<span id="L115"><a href="#L115"> 115</a> def road_frames(poses, smooth_xy=4.0, smooth_h=40.0, max_grade=0.08):</span>
+<span id="L116"><a href="#L116"> 116</a>     &quot;&quot;&quot;由融合位姿的**位置**重建逐帧&quot;贴路&quot;坐标架 (ENU 标注, 数组列顺序 E,U,N)。</span>
+<span id="L117"><a href="#L117"> 117</a> </span>
+<span id="L118"><a href="#L118"> 118</a>     只信位置、不信朝向 —— 2026-10-01 核实: 融合位姿的朝向在约三成行驶帧上与轨迹切向差 10 度以上</span>
+<span id="L119"><a href="#L119"> 119</a>     (第 3100 帧附近: 位姿朝向 226 度, 轨迹切向 93 度, 车速 56 km/h), 与加速度计倾角无关,</span>
+<span id="L120"><a href="#L120"> 120</a>     是位姿图里朝向只受弱约束 (相对旋转 sigma 15 度) 落进了错误解。位置则有 GNSS 直接约束 (残差中位 1.45 m)。</span>
+<span id="L121"><a href="#L121"> 121</a> </span>
+<span id="L122"><a href="#L122"> 122</a>     做法:</span>
+<span id="L123"><a href="#L123"> 123</a>       位置   按里程重采样后做高斯平滑 (sigma=4 m) —— 车辆轨迹本身没有高频抖动, 抖动来自定位噪声</span>
+<span id="L124"><a href="#L124"> 124</a>              在相邻节点间的线性摊派; 平滑后相邻帧的地面条带才接得上;</span>
+<span id="L125"><a href="#L125"> 125</a>       朝向   取平滑轨迹的切向 (即行进方向 = 直行时的车道方向);</span>
+<span id="L126"><a href="#L126"> 126</a>       高程   按里程 1 m 分箱取中位 (消掉停车漂移) 再平滑 sigma=40 m; 相机高与纵坡取自同一条剖面。</span>
+<span id="L127"><a href="#L127"> 127</a>     返回:</span>
+<span id="L128"><a href="#L128"> 128</a>        p_orig 融合位姿原始位置 (反算相机系坐标时用)</span>
+<span id="L129"><a href="#L129"> 129</a>        p      平滑后的相机位置;  fwd_h/right  水平前进方向/地理右侧;  fwd/down  沿坡前向/垂直路面向下</span>
+<span id="L130"><a href="#L130"> 130</a>        gamma  纵坡 (rad);  s  累计里程;  moving  该帧是否在动;  health  0~1, 该帧几何可信度</span>
+<span id="L131"><a href="#L131"> 131</a>     &quot;&quot;&quot;</span>
+<span id="L132"><a href="#L132"> 132</a>     P = np.asarray(poses, np.float64)</span>
+<span id="L133"><a href="#L133"> 133</a>     p_fused = P[:, :3, 3].copy()</span>
+<span id="L134"><a href="#L134"> 134</a>     n = len(p_fused)</span>
+<span id="L135"><a href="#L135"> 135</a>     # 录像帧的真实时刻 != 帧号/5.827: 见 frame_lag()。融合位姿是按名义时刻取的定位,</span>
+<span id="L136"><a href="#L136"> 136</a>     # 所以第 i 帧真正所在的位置 = 融合轨迹上&quot;名义时刻 + 时延&quot;处的位置, 即把轨迹按帧号平移 lag*FPS。</span>
+<span id="L137"><a href="#L137"> 137</a>     lag = frame_lag(n)</span>
+<span id="L138"><a href="#L138"> 138</a>     src = np.clip(np.arange(n) + lag * FPS, 0, n - 1)</span>
+<span id="L139"><a href="#L139"> 139</a>     p0 = np.stack([np.interp(src, np.arange(n), p_fused[:, c]) for c in range(3)], 1)</span>
+<span id="L140"><a href="#L140"> 140</a>     step0 = np.linalg.norm(np.diff(p0[:, [0, 2]], axis=0), axis=1)</span>
+<span id="L141"><a href="#L141"> 141</a>     s0 = np.concatenate([[0], np.cumsum(step0)])</span>
+<span id="L142"><a href="#L142"> 142</a>     grid = np.arange(0, s0[-1] + 0.5, 0.5)</span>
+<span id="L143"><a href="#L143"> 143</a>     # 里程是单调不减的; 停车帧共享同一里程, 重采样时自然合并</span>
+<span id="L144"><a href="#L144"> 144</a>     eu = np.interp(grid, s0, p0[:, 0]); nu = np.interp(grid, s0, p0[:, 2])</span>
+<span id="L145"><a href="#L145"> 145</a>     # 平滑长度: 直路上取 15 m —— 实测 (build/probe_saw.py) 同一条车道线在相邻 IPM 条带间的横向错位</span>
+<span id="L146"><a href="#L146"> 146</a>     # 从 sigma=4 m 时的 7.2 cm 降到 4.0 cm; 弯道处退回 4 m, 否则会把弯切掉 (切弯量约 sigma^2 / 2R)。</span>
+<span id="L147"><a href="#L147"> 147</a>     e4, n4 = _gauss(eu, smooth_xy / 0.5), _gauss(nu, smooth_xy / 0.5)</span>
+<span id="L148"><a href="#L148"> 148</a>     e15, n15 = _gauss(eu, 15.0 / 0.5), _gauss(nu, 15.0 / 0.5)</span>
+<span id="L149"><a href="#L149"> 149</a>     hd4 = np.unwrap(np.arctan2(np.gradient(e4), np.gradient(n4)))</span>
+<span id="L150"><a href="#L150"> 150</a>     curv = np.abs(np.degrees(np.gradient(_gauss(hd4, 8.0 / 0.5), 0.5)))        # deg / m</span>
+<span id="L151"><a href="#L151"> 151</a>     wst = np.clip(1.0 - (_gauss(curv, 12.0 / 0.5) - 0.25) / 0.5, 0.0, 1.0)     # 1 = 直路, 0 = 弯道</span>
+<span id="L152"><a href="#L152"> 152</a>     wst = _gauss(wst, 8.0 / 0.5)</span>
+<span id="L153"><a href="#L153"> 153</a>     es, ns = wst * e15 + (1 - wst) * e4, wst * n15 + (1 - wst) * n4</span>
+<span id="L154"><a href="#L154"> 154</a>     b = np.clip((s0 / 0.5).astype(int), 0, len(grid) - 1)</span>
+<span id="L155"><a href="#L155"> 155</a>     hu = np.full(len(grid), np.nan)</span>
+<span id="L156"><a href="#L156"> 156</a>     order = np.argsort(b, kind=&quot;stable&quot;); cut = np.flatnonzero(np.diff(b[order])) + 1</span>
+<span id="L157"><a href="#L157"> 157</a>     for seg in np.split(order, cut):</span>
+<span id="L158"><a href="#L158"> 158</a>         hu[b[seg[0]]] = np.median(p0[seg, 1])</span>
+<span id="L159"><a href="#L159"> 159</a>     ok = np.isfinite(hu); hu = np.interp(grid, grid[ok], hu[ok])</span>
+<span id="L160"><a href="#L160"> 160</a>     hs = _gauss(hu, smooth_h / 0.5)</span>
+<span id="L161"><a href="#L161"> 161</a>     grad = np.clip(np.gradient(hs, 0.5), -max_grade, max_grade)</span>
+<span id="L162"><a href="#L162"> 162</a>     te, tn = np.gradient(es, 0.5), np.gradient(ns, 0.5)</span>
+<span id="L163"><a href="#L163"> 163</a>     tl = np.hypot(te, tn); tl[tl &lt; 1e-6] = 1.0</span>
+<span id="L164"><a href="#L164"> 164</a>     te, tn = te / tl, tn / tl</span>
+<span id="L165"><a href="#L165"> 165</a>     p = np.stack([np.interp(s0, grid, es), np.interp(s0, grid, hs), np.interp(s0, grid, ns)], 1)</span>
+<span id="L166"><a href="#L166"> 166</a>     fh = np.stack([np.interp(s0, grid, te), np.zeros(n), np.interp(s0, grid, tn)], 1)</span>
+<span id="L167"><a href="#L167"> 167</a>     fh /= np.linalg.norm(fh, axis=1, keepdims=True)</span>
+<span id="L168"><a href="#L168"> 168</a>     right = np.stack([fh[:, 2], np.zeros(n), -fh[:, 0]], 1)          # (E,N) 顺时针转 90 度</span>
+<span id="L169"><a href="#L169"> 169</a>     gamma = np.arctan(np.interp(s0, grid, grad))</span>
+<span id="L170"><a href="#L170"> 170</a>     up = np.array([0.0, 1.0, 0.0])</span>
+<span id="L171"><a href="#L171"> 171</a>     cg, sg = np.cos(gamma)[:, None], np.sin(gamma)[:, None]</span>
+<span id="L172"><a href="#L172"> 172</a>     fwd = fh * cg + up * sg</span>
+<span id="L173"><a href="#L173"> 173</a>     down = -up * cg + fh * sg</span>
+<span id="L174"><a href="#L174"> 174</a>     moving = np.r_[step0, step0[-1]] &gt; 0.15</span>
+<span id="L175"><a href="#L175"> 175</a>     # 可信度: 平滑轨迹的曲率 (急弯处切向不稳) + 平滑前后位置差 (定位跳变) + 原位姿朝向与切向的夹角</span>
+<span id="L176"><a href="#L176"> 176</a>     f0 = P[:, :3, 2][:, [0, 2]]; f0 /= np.linalg.norm(f0, axis=1, keepdims=True)</span>
+<span id="L177"><a href="#L177"> 177</a>     cosd = np.clip((f0 * fh[:, [0, 2]]).sum(1), -1, 1)</span>
+<span id="L178"><a href="#L178"> 178</a>     dpos = np.maximum(np.hypot(p[:, 0] - p0[:, 0], p[:, 2] - p0[:, 2]) - 0.6, 0.0)   # 平滑本身带来的 0.6 m 以内不算毛病</span>
+<span id="L179"><a href="#L179"> 179</a>     turn = np.abs(np.degrees(np.gradient(np.unwrap(np.arctan2(te, tn)), 0.5)))       # deg / m</span>
+<span id="L180"><a href="#L180"> 180</a>     turn_f = np.interp(s0, grid, _gauss(turn, 6.0))</span>
+<span id="L181"><a href="#L181"> 181</a>     health = np.clip(1.0 - dpos / 2.0, 0, 1) * np.clip(1.0 - turn_f / 2.5, 0, 1)</span>
+<span id="L182"><a href="#L182"> 182</a>     return dict(p_orig=p_fused, p_lagfix=p0, lag=lag, p=p, fwd_h=fh, right=right, fwd=fwd, down=down, gamma=gamma, s=s0,</span>
+<span id="L183"><a href="#L183"> 183</a>                 moving=moving, health=health, pose_heading_dev=np.degrees(np.arccos(cosd)), smooth_shift=dpos)</span>
+<span id="L184"><a href="#L184"> 184</a> </span>
+<span id="L185"><a href="#L185"> 185</a> </span>
+<span id="L186"><a href="#L186"> 186</a> def cam_to_vehicle():</span>
+<span id="L187"><a href="#L187"> 187</a>     &quot;&quot;&quot;相机系 (x 右, y 下, z 前) -&gt; 车体/路面系 (X 右, Y 前, Z 上) 的旋转, 与 bev_core.BEVRenderer._rot 同一约定。</span>
+<span id="L188"><a href="#L188"> 188</a>     横滚取 0: 稠密帧路面平面拟合给出相机相对路面的横滚中位 0.06 度 (标定标称 1.80 度没有被数据支持)。&quot;&quot;&quot;</span>
+<span id="L189"><a href="#L189"> 189</a>     r, p, y = 0.0, math.radians(CAM_PITCH_UP), math.radians(CAM_YAW)</span>
+<span id="L190"><a href="#L190"> 190</a>     Rz = np.array([[np.cos(y), -np.sin(y), 0], [np.sin(y), np.cos(y), 0], [0, 0, 1]])</span>
+<span id="L191"><a href="#L191"> 191</a>     Rx = np.array([[1, 0, 0], [0, np.cos(p), -np.sin(p)], [0, np.sin(p), np.cos(p)]])</span>
+<span id="L192"><a href="#L192"> 192</a>     Ry = np.array([[np.cos(r), 0, np.sin(r)], [0, 1, 0], [-np.sin(r), 0, np.cos(r)]])</span>
+<span id="L193"><a href="#L193"> 193</a>     base = np.array([[1, 0, 0], [0, 0, 1], [0, -1, 0]], float)</span>
+<span id="L194"><a href="#L194"> 194</a>     return Rz @ Rx @ Ry @ base</span>
+<span id="L195"><a href="#L195"> 195</a> </span>
+<span id="L196"><a href="#L196"> 196</a> </span>
+<span id="L197"><a href="#L197"> 197</a> def reproject(xyz, frame, poses, rf, chunk=4_000_000):</span>
+<span id="L198"><a href="#L198"> 198</a>     &quot;&quot;&quot;把 ~/gd 现成点云里的点改投到地理真实的位置。xyz: (N,3) 列序 E,U,N (原样), frame: 来源帧。</span>
+<span id="L199"><a href="#L199"> 199</a>     先用原位姿把点**精确**还原到相机系 (这一步与原位姿好坏无关, 只是求逆), 再用贴路坐标架重新放置。&quot;&quot;&quot;</span>
+<span id="L200"><a href="#L200"> 200</a>     P = np.asarray(poses, np.float64)</span>
+<span id="L201"><a href="#L201"> 201</a>     Rp = P[:, :3, :3]</span>
+<span id="L202"><a href="#L202"> 202</a>     A = cam_to_vehicle()</span>
+<span id="L203"><a href="#L203"> 203</a>     out = np.empty_like(xyz, dtype=np.float32)</span>
+<span id="L204"><a href="#L204"> 204</a>     for a in range(0, len(xyz), chunk):</span>
+<span id="L205"><a href="#L205"> 205</a>         b = min(len(xyz), a + chunk)</span>
+<span id="L206"><a href="#L206"> 206</a>         F = frame[a:b]</span>
+<span id="L207"><a href="#L207"> 207</a>         rel = xyz[a:b].astype(np.float64) - rf[&quot;p_orig&quot;][F]</span>
+<span id="L208"><a href="#L208"> 208</a>         pc = np.einsum(&quot;nji,nj-&gt;ni&quot;, Rp[F], rel) * MODEL_SHRINK      # R&#x27;^T (X - p), 再绕相机中心收缩</span>
+<span id="L209"><a href="#L209"> 209</a>         pv = pc @ A.T                                                # (X 右, Y 前, Z 上)</span>
+<span id="L210"><a href="#L210"> 210</a>         out[a:b] = (rf[&quot;p&quot;][F] + rf[&quot;right&quot;][F] * pv[:, [0]] + rf[&quot;fwd&quot;][F] * pv[:, [1]]</span>
+<span id="L211"><a href="#L211"> 211</a>                     - rf[&quot;down&quot;][F] * pv[:, [2]]).astype(np.float32)</span>
+<span id="L212"><a href="#L212"> 212</a>     return out</span>
+<span id="L213"><a href="#L213"> 213</a> </span>
+<span id="L214"><a href="#L214"> 214</a> </span>
+<span id="L215"><a href="#L215"> 215</a> class RoadField:</span>
+<span id="L216"><a href="#L216"> 216</a>     &quot;&quot;&quot;路面高程场: 任意 (E,N) -&gt; 路面高 U。取最近的行驶帧, 相机高减去 IPM_HEIGHT, 再按纵坡外推。横坡不计。&quot;&quot;&quot;</span>
+<span id="L217"><a href="#L217"> 217</a> </span>
+<span id="L218"><a href="#L218"> 218</a>     def __init__(self, frames):</span>
+<span id="L219"><a href="#L219"> 219</a>         from scipy.spatial import cKDTree</span>
+<span id="L220"><a href="#L220"> 220</a>         mv = np.flatnonzero(frames[&quot;moving&quot;])</span>
+<span id="L221"><a href="#L221"> 221</a>         self.idx = mv</span>
+<span id="L222"><a href="#L222"> 222</a>         self.p = frames[&quot;p&quot;][mv]; self.fh = frames[&quot;fwd_h&quot;][mv]; self.g = np.tan(frames[&quot;gamma&quot;][mv])</span>
+<span id="L223"><a href="#L223"> 223</a>         self.tree = cKDTree(self.p[:, [0, 2]])</span>
+<span id="L224"><a href="#L224"> 224</a> </span>
+<span id="L225"><a href="#L225"> 225</a>     def __call__(self, e, n, return_index=False):</span>
+<span id="L226"><a href="#L226"> 226</a>         q = np.stack([np.asarray(e, float).ravel(), np.asarray(n, float).ravel()], 1)</span>
+<span id="L227"><a href="#L227"> 227</a>         d, k = self.tree.query(q)</span>
+<span id="L228"><a href="#L228"> 228</a>         lon = (q[:, 0] - self.p[k, 0]) * self.fh[k, 0] + (q[:, 1] - self.p[k, 2]) * self.fh[k, 2]</span>
+<span id="L229"><a href="#L229"> 229</a>         u = self.p[k, 1] - IPM_HEIGHT + self.g[k] * lon</span>
+<span id="L230"><a href="#L230"> 230</a>         if return_index:</span>
+<span id="L231"><a href="#L231"> 231</a>             return u.reshape(np.shape(e)), self.idx[k].reshape(np.shape(e)), d.reshape(np.shape(e))</span>
+<span id="L232"><a href="#L232"> 232</a>         return u.reshape(np.shape(e))</span>
+<span id="L233"><a href="#L233"> 233</a> </span>
+<span id="L234"><a href="#L234"> 234</a> </span>
+<span id="L235"><a href="#L235"> 235</a> def frontcam_cfg():</span>
+<span id="L236"><a href="#L236"> 236</a>     &quot;&quot;&quot;前摄 IPM 配置 (BEVRenderer 约定, 弧度)&quot;&quot;&quot;</span>
+<span id="L237"><a href="#L237"> 237</a>     fc = json.load(open(WORK + &quot;/frontcam0903.json&quot;))</span>
+<span id="L238"><a href="#L238"> 238</a>     return dict(fx=fc[&quot;fx&quot;], fy=fc[&quot;fy&quot;], cx=fc[&quot;cx&quot;], cy=fc[&quot;cy&quot;], dist=fc[&quot;dist&quot;], height=IPM_HEIGHT,</span>
+<span id="L239"><a href="#L239"> 239</a>                 roll=math.radians(IPM_ROLL), pitch=math.radians(IPM_PITCH_UP), yaw=math.radians(IPM_YAW))</span>
+<span id="L240"><a href="#L240"> 240</a> </span>
+<span id="L241"><a href="#L241"> 241</a> </span>
+<span id="L242"><a href="#L242"> 242</a> def clean_label(lab, max_hole=160):</span>
+<span id="L243"><a href="#L243"> 243</a>     &quot;&quot;&quot;SAM 3 标签图 (0 其他 / 1 路面 / 2 车辆) 的清理: 被路面包住的小块&quot;其他&quot; (道钉、标线边缘的碎点) 填成路面。</span>
+<span id="L244"><a href="#L244"> 244</a>     不填的话, 这些小洞在每一帧里都在, 经羽化后会在正射图的标线端头留下 40 cm 的黑洞。锥桶、行人属于&quot;车辆&quot;类, 不受影响。&quot;&quot;&quot;</span>
+<span id="L245"><a href="#L245"> 245</a>     import cv2</span>
+<span id="L246"><a href="#L246"> 246</a>     other = (lab == 0).astype(np.uint8)</span>
+<span id="L247"><a href="#L247"> 247</a>     n, cc, st, _ = cv2.connectedComponentsWithStats(other, connectivity=4)</span>
+<span id="L248"><a href="#L248"> 248</a>     h, w = lab.shape</span>
+<span id="L249"><a href="#L249"> 249</a>     out = lab.copy()</span>
+<span id="L250"><a href="#L250"> 250</a>     for i in range(1, n):</span>
+<span id="L251"><a href="#L251"> 251</a>         x, y, bw, bh, area = st[i]</span>
+<span id="L252"><a href="#L252"> 252</a>         if area &gt; max_hole or x == 0 or y == 0 or x + bw &gt;= w or y + bh &gt;= h: continue</span>
+<span id="L253"><a href="#L253"> 253</a>         m = cc[y:y + bh, x:x + bw] == i</span>
+<span id="L254"><a href="#L254"> 254</a>         ring = cv2.dilate(m.astype(np.uint8), np.ones((3, 3), np.uint8), borderType=cv2.BORDER_CONSTANT)</span>
+<span id="L255"><a href="#L255"> 255</a>         y0, x0 = max(0, y - 1), max(0, x - 1)</span>
+<span id="L256"><a href="#L256"> 256</a>         box = lab[y0:y + bh + 1, x0:x + bw + 1]</span>
+<span id="L257"><a href="#L257"> 257</a>         mm = cv2.dilate((cc[y0:y + bh + 1, x0:x + bw + 1] == i).astype(np.uint8), np.ones((3, 3), np.uint8)) &gt; 0</span>
+<span id="L258"><a href="#L258"> 258</a>         nb = box[mm &amp; (cc[y0:y + bh + 1, x0:x + bw + 1] != i)]</span>
+<span id="L259"><a href="#L259"> 259</a>         if len(nb) and (nb == 1).mean() &gt; 0.9: out[y:y + bh, x:x + bw][m] = 1</span>
+<span id="L260"><a href="#L260"> 260</a>     return out</span>
+<span id="L261"><a href="#L261"> 261</a> </span>
+<span id="L262"><a href="#L262"> 262</a> </span>
+<span id="L263"><a href="#L263"> 263</a> def load_label(seg_dir, stem, mark_dir=None):</span>
+<span id="L264"><a href="#L264"> 264</a>     &quot;&quot;&quot;读一帧的 SAM 3 标签 (0 其他 / 1 路面 / 2 车辆), 并把&quot;标线&quot;掩膜并进路面。</span>
+<span id="L265"><a href="#L265"> 265</a> </span>
+<span id="L266"><a href="#L266"> 266</a>     SAM 3 的 &quot;road&quot; 会把近处的大块白色标线 (箭头、近处的虚线, 后摄俯视角度下几乎所有白线) 当成&quot;不是路面&quot;抠出去。</span>
+<span id="L267"><a href="#L267"> 267</a>     标线是路面的一部分, 也是配准的主要依据, 所以另跑一遍 &quot;road marking&quot; (t00_seg_mark.py), 挨着路面的标线连通块整块算作路面。</span>
+<span id="L268"><a href="#L268"> 268</a>     找不到文件返回 None。&quot;&quot;&quot;</span>
+<span id="L269"><a href="#L269"> 269</a>     import cv2</span>
+<span id="L270"><a href="#L270"> 270</a>     lab = cv2.imread(&quot;%s/%s.png&quot; % (seg_dir, stem), 0)</span>
+<span id="L271"><a href="#L271"> 271</a>     if lab is None: return None</span>
+<span id="L272"><a href="#L272"> 272</a>     if mark_dir:</span>
+<span id="L273"><a href="#L273"> 273</a>         mark = cv2.imread(&quot;%s/%s.png&quot; % (mark_dir, stem), 0)</span>
+<span id="L274"><a href="#L274"> 274</a>         if mark is not None and mark.shape == lab.shape:</span>
+<span id="L275"><a href="#L275"> 275</a>             cand = ((mark &gt; 0) &amp; (lab == 0)).astype(np.uint8)</span>
+<span id="L276"><a href="#L276"> 276</a>             if cand.any():</span>
+<span id="L277"><a href="#L277"> 277</a>                 near_road = cv2.dilate((lab == 1).astype(np.uint8), np.ones((9, 9), np.uint8)) &gt; 0</span>
+<span id="L278"><a href="#L278"> 278</a>                 ncc, cc = cv2.connectedComponents(cand, connectivity=8)</span>
+<span id="L279"><a href="#L279"> 279</a>                 touch = np.unique(cc[near_road &amp; (cand &gt; 0)])</span>
+<span id="L280"><a href="#L280"> 280</a>                 lab = lab.copy(); lab[np.isin(cc, touch[touch &gt; 0])] = 1</span>
+<span id="L281"><a href="#L281"> 281</a>     return clean_label(lab, max_hole=400)</span>
+<span id="L282"><a href="#L282"> 282</a> </span>
+<span id="L283"><a href="#L283"> 283</a> </span>
+<span id="L284"><a href="#L284"> 284</a> def vehicle_mask(lab, grow=5, down=14):</span>
+<span id="L285"><a href="#L285"> 285</a>     &quot;&quot;&quot;车辆/行人掩膜 (标签 2) 外扩: 四周 grow 像素, 向下再多 down 像素。</span>
+<span id="L286"><a href="#L286"> 286</a>     向下多扩是为了盖住车底的阴影 —— 阴影在分割里算&quot;路面&quot;, 但它跟着车走, 贴进正射图就是沿车道的一串暗斑。</span>
+<span id="L287"><a href="#L287"> 287</a>     lab 是 960x540 (或同比例) 的标签图; 返回 bool。&quot;&quot;&quot;</span>
+<span id="L288"><a href="#L288"> 288</a>     import cv2</span>
+<span id="L289"><a href="#L289"> 289</a>     v = (lab == 2).astype(np.uint8)</span>
+<span id="L290"><a href="#L290"> 290</a>     if not v.any(): return v.astype(bool)</span>
+<span id="L291"><a href="#L291"> 291</a>     out = cv2.dilate(v, np.ones((grow, grow), np.uint8))</span>
+<span id="L292"><a href="#L292"> 292</a>     if down &gt; 0:</span>
+<span id="L293"><a href="#L293"> 293</a>         k = np.ones((down + 1, 5), np.uint8)</span>
+<span id="L294"><a href="#L294"> 294</a>         out |= cv2.dilate(v, k, anchor=(2, down))          # 锚点放在核的最下一行: 结果向下延伸 down 个像素</span>
+<span id="L295"><a href="#L295"> 295</a>     return out &gt; 0</span></pre></html>

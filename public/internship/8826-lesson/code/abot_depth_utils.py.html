@@ -1,0 +1,15 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>abot_depth_utils.py</title><style>body{font:15px system-ui;margin:24px;background:#faf8f3}pre{overflow:auto;line-height:1.6}pre span{display:block}span:target{background:#fff1a8}header{overflow-wrap:anywhere}</style><header><a href="/notes/internship-8826/">返回8826课堂笔记</a><h1>abot_depth_utils.py</h1><p>2026-11-10 服务器只读快照：/home/yjl/gd/ABot-Recon/abot_recon/modeling/pi3/models/depth_utils.py<br>SHA-256 7b4483a7ae6f1ca7473d2c16ec80a361257d0b0c651edfe0a75d355bd41aef4f</p></header><pre><span id="L1"><a href="#L1">   1</a> from __future__ import annotations</span>
+<span id="L2"><a href="#L2">   2</a> </span>
+<span id="L3"><a href="#L3">   3</a> from typing import Optional</span>
+<span id="L4"><a href="#L4">   4</a> </span>
+<span id="L5"><a href="#L5">   5</a> import torch</span>
+<span id="L6"><a href="#L6">   6</a> </span>
+<span id="L7"><a href="#L7">   7</a> </span>
+<span id="L8"><a href="#L8">   8</a> def depth_from_log_z(</span>
+<span id="L9"><a href="#L9">   9</a>     log_z: torch.Tensor,</span>
+<span id="L10"><a href="#L10">  10</a>     log_z_max: Optional[float] = None,</span>
+<span id="L11"><a href="#L11">  11</a> ) -&gt; torch.Tensor:</span>
+<span id="L12"><a href="#L12">  12</a>     &quot;&quot;&quot;Convert point-head log-depth to depth with an optional overflow guard.&quot;&quot;&quot;</span>
+<span id="L13"><a href="#L13">  13</a>     if log_z_max is not None:</span>
+<span id="L14"><a href="#L14">  14</a>         log_z = log_z.clamp(max=float(log_z_max))</span>
+<span id="L15"><a href="#L15">  15</a>     return torch.exp(log_z)</span></pre></html>

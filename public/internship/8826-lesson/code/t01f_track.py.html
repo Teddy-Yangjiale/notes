@@ -1,0 +1,171 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>t01f_track.py</title><style>body{font:15px system-ui;margin:24px;background:#faf8f3}pre{overflow:auto;line-height:1.6}pre span{display:block}span:target{background:#fff1a8}header{overflow-wrap:anywhere}</style><header><a href="/notes/internship-8826/">返回8826课堂笔记</a><h1>t01f_track.py</h1><p>2026-11-10 服务器只读快照：/home/yjl/crack/viewer8826/build/t01f_track.py<br>SHA-256 df406f4f1fd2efdc3d00b8dd8571160712095a6ec93f8cf160048eeab7ebc5fe</p></header><pre><span id="L1"><a href="#L1">   1</a> # -*- coding: utf-8 -*-</span>
+<span id="L2"><a href="#L2">   2</a> &quot;&quot;&quot;t01f: rec0903 逐帧位姿 v2 —— 位姿图: 视觉里程计 (条带间刚体变换) + 黑匣子 1 Hz 定位。</span>
+<span id="L3"><a href="#L3">   3</a> </span>
+<span id="L4"><a href="#L4">   4</a> 为什么重做 (2026-10-01): 旧轨迹取自 ~/gd 的融合位姿, 而融合位姿依赖的 abc.csv 有大段缺口 (最长 58 s / 876 m),</span>
+<span id="L5"><a href="#L5">   5</a> 缺口里靠模型里程计撑着, 漂出几十到上百米的鼓包; 黑匣子有连续的每秒定位 (与 abc.csv 互校中位 0.24 m)。</span>
+<span id="L6"><a href="#L6">   6</a> 分工: 相邻帧之间的相对位置和朝向由视觉里程计定 (横向 ~1 cm, 转角 ~0.05 度), 百米以上的走向由定位定。</span>
+<span id="L7"><a href="#L7">   7</a> 节点: 每张条带一个 (E, N, psi); psi 是条带 +y 轴 (车头方向) 的方位角, 自北顺时针。</span>
+<span id="L8"><a href="#L8">   8</a>   条带点 (x 右, y 前) -&gt; 世界: E = pE + x cos(psi) + y sin(psi),  N = pN - x sin(psi) + y cos(psi)</span>
+<span id="L9"><a href="#L9">   9</a> 里程计边 (A 在前): p_B = p_A + M(psi_A) t,  psi_B = psi_A - dth   (t01a 的约定 p_A = R(dth) p_B + t)</span>
+<span id="L10"><a href="#L10">  10</a> 输出 work/track0903.npz</span>
+<span id="L11"><a href="#L11">  11</a> &quot;&quot;&quot;</span>
+<span id="L12"><a href="#L12">  12</a> import sys, time</span>
+<span id="L13"><a href="#L13">  13</a> import numpy as np</span>
+<span id="L14"><a href="#L14">  14</a> import scipy.sparse as sp</span>
+<span id="L15"><a href="#L15">  15</a> from scipy.sparse.linalg import spsolve</span>
+<span id="L16"><a href="#L16">  16</a> from common import *</span>
+<span id="L17"><a href="#L17">  17</a> </span>
+<span id="L18"><a href="#L18">  18</a> def wrap(a): return (a + np.pi) % (2 * np.pi) - np.pi</span>
+<span id="L19"><a href="#L19">  19</a> </span>
+<span id="L20"><a href="#L20">  20</a> if __name__ == &quot;__main__&quot;:</span>
+<span id="L21"><a href="#L21">  21</a>     t0 = time.time()</span>
+<span id="L22"><a href="#L22">  22</a>     M = np.load(WORK + &quot;/strips2_meta.npz&quot;); idx_all = M[&quot;idx&quot;]; got = M[&quot;got&quot;]</span>
+<span id="L23"><a href="#L23">  23</a>     T = np.load(WORK + &quot;/time0903.npz&quot;); tf = T[&quot;t&quot;]</span>
+<span id="L24"><a href="#L24">  24</a>     bb = np.load(WORK + &quot;/bb_track.npz&quot;)</span>
+<span id="L25"><a href="#L25">  25</a>     keep = np.flatnonzero(got); idx = idx_all[keep]; K = len(idx)</span>
+<span id="L26"><a href="#L26">  26</a>     k_of = np.full(len(idx_all), -1, int); k_of[keep] = np.arange(K)</span>
+<span id="L27"><a href="#L27">  27</a>     t = tf[idx]</span>
+<span id="L28"><a href="#L28">  28</a>     arc = np.concatenate([[0], np.cumsum(np.hypot(np.diff(bb[&quot;E&quot;]), np.diff(bb[&quot;N&quot;])))])</span>
+<span id="L29"><a href="#L29">  29</a>     GE, GN = np.interp(t, bb[&quot;t&quot;], bb[&quot;E&quot;]), np.interp(t, bb[&quot;t&quot;], bb[&quot;N&quot;])</span>
+<span id="L30"><a href="#L30">  30</a>     GS = np.interp(t, bb[&quot;t&quot;], arc)</span>
+<span id="L31"><a href="#L31">  31</a>     # 定位航向: 2 s 基线的位移方向; 车速 &lt; 1.5 m/s 时沿用上一个可信值</span>
+<span id="L32"><a href="#L32">  32</a>     e2, n2 = np.interp(t + 1.0, bb[&quot;t&quot;], bb[&quot;E&quot;]) - np.interp(t - 1.0, bb[&quot;t&quot;], bb[&quot;E&quot;]), np.interp(t + 1.0, bb[&quot;t&quot;], bb[&quot;N&quot;]) - np.interp(t - 1.0, bb[&quot;t&quot;], bb[&quot;N&quot;])</span>
+<span id="L33"><a href="#L33">  33</a>     gh = np.arctan2(e2, n2); mv = np.hypot(e2, n2) &gt; 3.0</span>
+<span id="L34"><a href="#L34">  34</a>     last = gh[np.argmax(mv)]</span>
+<span id="L35"><a href="#L35">  35</a>     for i in range(K):</span>
+<span id="L36"><a href="#L36">  36</a>         if mv[i]: last = gh[i]</span>
+<span id="L37"><a href="#L37">  37</a>         else: gh[i] = last</span>
+<span id="L38"><a href="#L38">  38</a>     gh = np.unwrap(gh)</span>
+<span id="L39"><a href="#L39">  39</a> </span>
+<span id="L40"><a href="#L40">  40</a>     z = np.load(WORK + &quot;/vo0903.npz&quot;); R = z[&quot;R&quot;]; keys = list(z[&quot;keys&quot;]); c = {k: R[:, i] for i, k in enumerate(keys)}</span>
+<span id="L41"><a href="#L41">  41</a>     ea = k_of[c[&quot;ka&quot;].astype(int)]; eb = k_of[c[&quot;kb&quot;].astype(int)]</span>
+<span id="L42"><a href="#L42">  42</a>     ok = np.isfinite(c[&quot;dy&quot;]) &amp; (c[&quot;ninl&quot;] &gt;= 12) &amp; (ea &gt;= 0) &amp; (eb &gt;= 0)</span>
+<span id="L43"><a href="#L43">  43</a>     ea, eb = ea[ok], eb[ok]</span>
+<span id="L44"><a href="#L44">  44</a>     dx, dy, dth, ninl = c[&quot;dx&quot;][ok], c[&quot;dy&quot;][ok], c[&quot;dth&quot;][ok], c[&quot;ninl&quot;][ok]</span>
+<span id="L45"><a href="#L45">  45</a>     q = np.sqrt(np.clip(60.0 / ninl, 1.0, 9.0))                       # 内点少的对放宽</span>
+<span id="L46"><a href="#L46">  46</a>     sx = 0.015 * q; sy = (0.02 + 0.02 * np.abs(dy)) * q; sth = np.radians(0.05) * q</span>
+<span id="L47"><a href="#L47">  47</a>     # ---- [改 2026-10-10, 副本] 相邻边的转角换成整幅画面两视几何量的 (audit8821/d01), 见 audit8821/README.md ----</span>
+<span id="L48"><a href="#L48">  48</a>     TV = np.load(os.path.expanduser(&quot;~/crack/audit8821/out/rot0903.npz&quot;)); A_ = TV[&quot;R&quot;]</span>
+<span id="L49"><a href="#L49">  49</a>     assert (TV[&quot;idx&quot;] == idx).all()</span>
+<span id="L50"><a href="#L50">  50</a>     adj1 = (eb - ea) == 1</span>
+<span id="L51"><a href="#L51">  51</a>     has_tv = adj1 &amp; np.isfinite(A_[ea, 0]) &amp; (A_[ea, 4] &gt; 8)</span>
+<span id="L52"><a href="#L52">  52</a>     dth_new = np.where(has_tv, -A_[ea, 0], dth)</span>
+<span id="L53"><a href="#L53">  53</a>     dx = dx - (dth - dth_new) * 9.1                                   # 条带中心 (车前约 9.1 m) 处的对应不变</span>
+<span id="L54"><a href="#L54">  54</a>     dth = dth_new</span>
+<span id="L55"><a href="#L55">  55</a>     sth = np.where(has_tv, np.radians(0.06), np.radians(0.20) * q)</span>
+<span id="L56"><a href="#L56">  56</a>     print(&quot;[改] 相邻里程计边 %d 条, 其中转角换成两视几何的 %d 条 (%.0f%%)&quot; % (adj1.sum(), has_tv.sum(), 100 * has_tv.sum() / adj1.sum()))</span>
+<span id="L57"><a href="#L57">  57</a>     # 相邻节点之间没有里程计的, 用定位补一条松的边, 保证图连通</span>
+<span id="L58"><a href="#L58">  58</a>     has = set(zip(ea.tolist(), eb.tolist()))</span>
+<span id="L59"><a href="#L59">  59</a>     fa, fb_, fdx, fdy, fdth = [], [], [], [], []</span>
+<span id="L60"><a href="#L60">  60</a>     for k in range(K - 1):</span>
+<span id="L61"><a href="#L61">  61</a>         if (k, k + 1) in has: continue</span>
+<span id="L62"><a href="#L62">  62</a>         fa.append(k); fb_.append(k + 1)</span>
+<span id="L63"><a href="#L63">  63</a>         d = GS[k + 1] - GS[k]</span>
+<span id="L64"><a href="#L64">  64</a>         fdx.append(0.0); fdy.append(d); fdth.append(-(gh[k + 1] - gh[k]))</span>
+<span id="L65"><a href="#L65">  65</a>     nf = len(fa)</span>
+<span id="L66"><a href="#L66">  66</a>     ea = np.r_[ea, fa].astype(int); eb = np.r_[eb, fb_].astype(int)</span>
+<span id="L67"><a href="#L67">  67</a>     dx = np.r_[dx, fdx]; dy = np.r_[dy, fdy]; dth = np.r_[dth, fdth]</span>
+<span id="L68"><a href="#L68">  68</a>     sx = np.r_[sx, np.full(nf, 0.30)]; sy = np.r_[sy, 0.30 + 0.10 * np.abs(np.array(fdy))]; sth = np.r_[sth, np.full(nf, np.radians(2.0))]</span>
+<span id="L69"><a href="#L69">  69</a>     is_vo = np.r_[np.ones(len(ea) - nf, bool), np.zeros(nf, bool)]</span>
+<span id="L70"><a href="#L70">  70</a>     print(&quot;节点 %d; 里程计边 %d (相邻 %d, 隔一 %d), 定位补边 %d&quot; % (K, is_vo.sum(), ((eb - ea == 1) &amp; is_vo).sum(), ((eb - ea == 2) &amp; is_vo).sum(), nf))</span>
+<span id="L71"><a href="#L71">  71</a> </span>
+<span id="L72"><a href="#L72">  72</a>     SG = 2.0                                                          # 定位先验 sigma (m), Huber 1.5 sigma</span>
+<span id="L73"><a href="#L73">  73</a>     tun = np.zeros(K, bool); gnss_ok = np.ones(K, bool)</span>
+<span id="L74"><a href="#L74">  74</a>     for a, b in TUNNEL_FRAMES:</span>
+<span id="L75"><a href="#L75">  75</a>         tun |= (idx &gt;= a) &amp; (idx &lt;= b); gnss_ok &amp;= ~((idx &gt;= a) &amp; (idx &lt;= b + GNSS_SETTLE_FRAMES))</span>
+<span id="L76"><a href="#L76">  76</a>     print(&quot;隧道内节点 %d, 定位不可用节点 %d&quot; % (tun.sum(), (~gnss_ok).sum()))</span>
+<span id="L77"><a href="#L77">  77</a>     x = np.r_[GE, GN, gh].copy()                                      # 初值: 定位位置 + 定位航向</span>
+<span id="L78"><a href="#L78">  78</a>     E_, N_, P_ = slice(0, K), slice(K, 2 * K), slice(2 * K, 3 * K)</span>
+<span id="L79"><a href="#L79">  79</a>     ne = len(ea)</span>
+<span id="L80"><a href="#L80">  80</a>     # 隧道里和出洞后那十来秒: 定位是推算的, 只留一个很松的先验 (sigma 15 m) 让方程组有解, 不让它定形状</span>
+<span id="L81"><a href="#L81">  81</a>     sg = np.where(gnss_ok, SG, 15.0)</span>
+<span id="L82"><a href="#L82">  82</a>     def hub(r, k):</span>
+<span id="L83"><a href="#L83">  83</a>         a = np.abs(r); return np.where(a &lt;= k, 1.0, np.sqrt(k / np.maximum(a, 1e-9)))</span>
+<span id="L84"><a href="#L84">  84</a>     def build(x):</span>
+<span id="L85"><a href="#L85">  85</a>         Ev, Nv, Pv = x[E_], x[N_], x[P_]</span>
+<span id="L86"><a href="#L86">  86</a>         cA, sA = np.cos(Pv[ea]), np.sin(Pv[ea])</span>
+<span id="L87"><a href="#L87">  87</a>         dE, dN = Ev[eb] - Ev[ea], Nv[eb] - Nv[ea]</span>
+<span id="L88"><a href="#L88">  88</a>         lat = dE * cA - dN * sA; fwd = dE * sA + dN * cA</span>
+<span id="L89"><a href="#L89">  89</a>         r1 = (lat - dx) / sx; r2 = (fwd - dy) / sy; r3 = wrap(Pv[ea] - Pv[eb] - dth) / sth</span>
+<span id="L90"><a href="#L90">  90</a>         w1, w2, w3 = hub(r1, 2.5), hub(r2, 2.5), hub(r3, 2.5)        # 里程计边也用 Huber: 个别错配不该把整条链拽歪</span>
+<span id="L91"><a href="#L91">  91</a>         gE, gN = (Ev - GE) / sg, (Nv - GN) / sg</span>
+<span id="L92"><a href="#L92">  92</a>         wg = hub(np.hypot(gE, gN), 1.5)</span>
+<span id="L93"><a href="#L93">  93</a>         rows, cols, vals = [], [], []</span>
+<span id="L94"><a href="#L94">  94</a>         def add(rw, cl, v): rows.append(rw); cols.append(cl); vals.append(v)</span>
+<span id="L95"><a href="#L95">  95</a>         e_i = np.arange(ne)</span>
+<span id="L96"><a href="#L96">  96</a>         add(e_i, eb, w1 * cA / sx); add(e_i, K + eb, -w1 * sA / sx); add(e_i, ea, -w1 * cA / sx); add(e_i, K + ea, w1 * sA / sx); add(e_i, 2 * K + ea, -w1 * fwd / sx)</span>
+<span id="L97"><a href="#L97">  97</a>         o = ne</span>
+<span id="L98"><a href="#L98">  98</a>         add(o + e_i, eb, w2 * sA / sy); add(o + e_i, K + eb, w2 * cA / sy); add(o + e_i, ea, -w2 * sA / sy); add(o + e_i, K + ea, -w2 * cA / sy); add(o + e_i, 2 * K + ea, w2 * lat / sy)</span>
+<span id="L99"><a href="#L99">  99</a>         o = 2 * ne</span>
+<span id="L100"><a href="#L100"> 100</a>         add(o + e_i, 2 * K + ea, w3 / sth); add(o + e_i, 2 * K + eb, -w3 / sth)</span>
+<span id="L101"><a href="#L101"> 101</a>         o = 3 * ne; k_i = np.arange(K)</span>
+<span id="L102"><a href="#L102"> 102</a>         add(o + k_i, k_i, wg / sg); add(o + K + k_i, K + k_i, wg / sg)</span>
+<span id="L103"><a href="#L103"> 103</a>         J = sp.csr_matrix((np.concatenate(vals), (np.concatenate(rows), np.concatenate(cols))), shape=(3 * ne + 2 * K, 3 * K))</span>
+<span id="L104"><a href="#L104"> 104</a>         r = np.r_[w1 * r1, w2 * r2, w3 * r3, wg * gE, wg * gN]</span>
+<span id="L105"><a href="#L105"> 105</a>         # 鲁棒代价 (Huber): 用它判断一步是否被接受</span>
+<span id="L106"><a href="#L106"> 106</a>         def rho(r, k):</span>
+<span id="L107"><a href="#L107"> 107</a>             a = np.abs(r); return np.where(a &lt;= k, 0.5 * a * a, k * (a - 0.5 * k))</span>
+<span id="L108"><a href="#L108"> 108</a>         cost = float(rho(r1, 2.5).sum() + rho(r2, 2.5).sum() + rho(r3, 2.5).sum() + rho(np.hypot(gE, gN), 1.5).sum())</span>
+<span id="L109"><a href="#L109"> 109</a>         return J, r, cost</span>
+<span id="L110"><a href="#L110"> 110</a>     lam = 1e-4</span>
+<span id="L111"><a href="#L111"> 111</a>     J, r, cost = build(x)</span>
+<span id="L112"><a href="#L112"> 112</a>     for it in range(80):</span>
+<span id="L113"><a href="#L113"> 113</a>         H = (J.T @ J).tocsc(); g = J.T @ r</span>
+<span id="L114"><a href="#L114"> 114</a>         Hd = H + sp.diags(lam * H.diagonal() + 1e-9, format=&quot;csc&quot;)</span>
+<span id="L115"><a href="#L115"> 115</a>         step = spsolve(Hd, -g)</span>
+<span id="L116"><a href="#L116"> 116</a>         J2, r2_, cost2 = build(x + step)</span>
+<span id="L117"><a href="#L117"> 117</a>         if cost2 &lt; cost:</span>
+<span id="L118"><a href="#L118"> 118</a>             x = x + step; J, r = J2, r2_</span>
+<span id="L119"><a href="#L119"> 119</a>             mp, ma = np.abs(step[:2 * K]).max(), np.degrees(np.abs(step[2 * K:]).max())</span>
+<span id="L120"><a href="#L120"> 120</a>             if it % 5 == 0 or (mp &lt; 2e-3 and ma &lt; 2e-3): print(&quot;  迭代 %2d: 代价 %.1f -&gt; %.1f, 最大步长 位置 %.3f m / 朝向 %.3f deg, lambda %.0e&quot; % (it, cost, cost2, mp, ma, lam), flush=True)</span>
+<span id="L121"><a href="#L121"> 121</a>             done = (cost - cost2) &lt; 1e-4 * cost and mp &lt; 5e-3</span>
+<span id="L122"><a href="#L122"> 122</a>             cost = cost2; lam = max(lam / 3, 1e-7)</span>
+<span id="L123"><a href="#L123"> 123</a>             if done: break</span>
+<span id="L124"><a href="#L124"> 124</a>         else:</span>
+<span id="L125"><a href="#L125"> 125</a>             lam = min(lam * 10, 1e4)</span>
+<span id="L126"><a href="#L126"> 126</a>     Ev, Nv, Pv = x[E_], x[N_], x[P_]</span>
+<span id="L127"><a href="#L127"> 127</a>     # ---- 质量 ----</span>
+<span id="L128"><a href="#L128"> 128</a>     cA, sA = np.cos(Pv[ea]), np.sin(Pv[ea]); dE, dN = Ev[eb] - Ev[ea], Nv[eb] - Nv[ea]</span>
+<span id="L129"><a href="#L129"> 129</a>     rl = dE * cA - dN * sA - dx; rf = dE * sA + dN * cA - dy; rt = np.degrees(wrap(Pv[ea] - Pv[eb] - dth))</span>
+<span id="L130"><a href="#L130"> 130</a>     adj = is_vo &amp; (eb - ea == 1)</span>
+<span id="L131"><a href="#L131"> 131</a>     print(&quot;里程计相邻边残差: 横向 中位 |%.1f| mm (p95 %.1f), 纵向 中位 |%.1f| mm (p95 %.1f), 转角 中位 |%.3f| deg (p95 %.3f)&quot;</span>
+<span id="L132"><a href="#L132"> 132</a>           % (1000 * np.median(np.abs(rl[adj])), 1000 * np.percentile(np.abs(rl[adj]), 95), 1000 * np.median(np.abs(rf[adj])), 1000 * np.percentile(np.abs(rf[adj]), 95),</span>
+<span id="L133"><a href="#L133"> 133</a>              np.median(np.abs(rt[adj])), np.percentile(np.abs(rt[adj]), 95)))</span>
+<span id="L134"><a href="#L134"> 134</a>     gl = (Ev - GE) * np.cos(Pv) - (Nv - GN) * np.sin(Pv); gf = (Ev - GE) * np.sin(Pv) + (Nv - GN) * np.cos(Pv)</span>
+<span id="L135"><a href="#L135"> 135</a>     print(&quot;相对黑匣子定位: 横向 中位 %+.2f m (|.| p50 %.2f, p95 %.2f), 沿路 中位 %+.2f m (|.| p50 %.2f, p95 %.2f)&quot;</span>
+<span id="L136"><a href="#L136"> 136</a>           % (np.median(gl), np.median(np.abs(gl)), np.percentile(np.abs(gl), 95), np.median(gf), np.median(np.abs(gf)), np.percentile(np.abs(gf), 95)))</span>
+<span id="L137"><a href="#L137"> 137</a>     print(&quot;朝向 - 定位航向: 中位 %+.2f deg, |.| p95 %.2f deg (行驶中)&quot; % (np.degrees(np.median(wrap(Pv - gh)[mv])), np.degrees(np.percentile(np.abs(wrap(Pv - gh)[mv]), 95))))</span>
+<span id="L138"><a href="#L138"> 138</a>     # 每个节点: 前后相邻边是不是里程计给的</span>
+<span id="L139"><a href="#L139"> 139</a>     vo_prev = np.zeros(K, bool); vo_next = np.zeros(K, bool)</span>
+<span id="L140"><a href="#L140"> 140</a>     vo_next[ea[adj]] = True; vo_prev[eb[adj]] = True</span>
+<span id="L141"><a href="#L141"> 141</a>     s = np.concatenate([[0], np.cumsum(np.hypot(np.diff(Ev), np.diff(Nv)))])</span>
+<span id="L142"><a href="#L142"> 142</a>     # ---- 程 (pass): 最南端的掉头点之前是去程 0, 之后是回程 1 ----</span>
+<span id="L143"><a href="#L143"> 143</a>     turn = int(np.argmin(Nv)); pas = (np.arange(K) &gt; turn).astype(int)</span>
+<span id="L144"><a href="#L144"> 144</a>     # ---- 可用段: 不在隧道里; 里程计断开不超过 8 个节点 (约 20 m); 段长 &gt;= 60 m ----</span>
+<span id="L145"><a href="#L145"> 145</a>     conn = vo_prev | vo_next</span>
+<span id="L146"><a href="#L146"> 146</a>     gapfill = conn.copy()</span>
+<span id="L147"><a href="#L147"> 147</a>     i = 0</span>
+<span id="L148"><a href="#L148"> 148</a>     while i &lt; K:</span>
+<span id="L149"><a href="#L149"> 149</a>         if not conn[i]:</span>
+<span id="L150"><a href="#L150"> 150</a>             j = i</span>
+<span id="L151"><a href="#L151"> 151</a>             while j &lt; K and not conn[j]: j += 1</span>
+<span id="L152"><a href="#L152"> 152</a>             if j - i &lt;= 8 and i &gt; 0 and j &lt; K: gapfill[i:j] = True</span>
+<span id="L153"><a href="#L153"> 153</a>             i = j</span>
+<span id="L154"><a href="#L154"> 154</a>         else: i += 1</span>
+<span id="L155"><a href="#L155"> 155</a>     usable = gapfill &amp; ~tun</span>
+<span id="L156"><a href="#L156"> 156</a>     seg = np.full(K, -1, int); ns = 0; i = 0; rows = []</span>
+<span id="L157"><a href="#L157"> 157</a>     while i &lt; K:</span>
+<span id="L158"><a href="#L158"> 158</a>         if usable[i]:</span>
+<span id="L159"><a href="#L159"> 159</a>             j = i</span>
+<span id="L160"><a href="#L160"> 160</a>             while j &lt; K and usable[j] and (j == i or (idx[j] - idx[j - 1] &lt; 400 and pas[j] == pas[j - 1])): j += 1</span>
+<span id="L161"><a href="#L161"> 161</a>             if s[j - 1] - s[i] &gt;= 60.0:</span>
+<span id="L162"><a href="#L162"> 162</a>                 seg[i:j] = ns; rows.append((ns, idx[i], idx[j - 1], s[j - 1] - s[i], pas[i])); ns += 1</span>
+<span id="L163"><a href="#L163"> 163</a>             i = j</span>
+<span id="L164"><a href="#L164"> 164</a>         else: i += 1</span>
+<span id="L165"><a href="#L165"> 165</a>     print(&quot;去程节点 %d (到帧 %d 掉头), 回程节点 %d&quot; % ((pas == 0).sum(), idx[turn], (pas == 1).sum()))</span>
+<span id="L166"><a href="#L166"> 166</a>     print(&quot;可用段 %d 个, 合计 %.2f km (全程 %.2f km):&quot; % (ns, sum(r[3] for r in rows) / 1000, s[-1] / 1000))</span>
+<span id="L167"><a href="#L167"> 167</a>     for r in rows: print(&quot;   段 %d: 帧 %d~%d, 长 %.0f m, %s&quot; % (r[0], r[1], r[2], r[3], &quot;去程&quot; if r[4] == 0 else &quot;回程&quot;))</span>
+<span id="L168"><a href="#L168"> 168</a>     np.savez(WORK + &quot;/track0903.npz&quot;, idx=idx, t=t, E=Ev, N=Nv, psi=Pv, s=s, GE=GE, GN=GN, gh=gh, vo_prev=vo_prev, vo_next=vo_next,</span>
+<span id="L169"><a href="#L169"> 169</a>              gnss_lat=gl, gnss_fwd=gf, edges=np.stack([ea, eb, is_vo.astype(int)], 1), edge_res=np.stack([rl, rf, rt], 1),</span>
+<span id="L170"><a href="#L170"> 170</a>              tun=tun, gnss_ok=gnss_ok, pas=pas, seg=seg, k_strip=keep)</span>
+<span id="L171"><a href="#L171"> 171</a>     print(&quot;里程 %.2f km; 有里程计相连的相邻对 %.1f%%; 用时 %.0fs&quot; % (s[-1] / 1000, 100 * adj.sum() / (K - 1), time.time() - t0))</span></pre></html>

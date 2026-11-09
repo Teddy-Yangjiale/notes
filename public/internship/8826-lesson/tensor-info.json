@@ -1,0 +1,34 @@
+{
+  "local_points": {
+    "shape": [
+      1759,
+      420,
+      756,
+      3
+    ],
+    "dtype": "torch.float32",
+    "file": "/home/yjl/gd/ABot-Recon/outputs/rec0903_hires/local_points.pt",
+    "frame_index": 708
+  },
+  "colors": {
+    "shape": [
+      1759,
+      420,
+      756,
+      3
+    ],
+    "dtype": "torch.uint8",
+    "file": "/home/yjl/gd/ABot-Recon/outputs/rec0903_hires/colors.pt",
+    "frame_index": 708
+  },
+  "confidence": {
+    "shape": [
+      1759,
+      420,
+      756
+    ],
+    "dtype": "torch.float32",
+    "file": "/home/yjl/gd/ABot-Recon/outputs/rec0903_hires/confidence.pt",
+    "frame_index": 708
+  }
+}
