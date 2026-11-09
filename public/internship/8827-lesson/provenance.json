@@ -1,0 +1,25 @@
+{
+  "kind": "saved inputs and CPU diagnostics",
+  "files": [
+    {
+      "source": "/home/yjl/crack/city8827/work/frames/003484.jpg",
+      "sha256": "824a8cbb8a97076bd3c556d9a3bfb2561d911162da9def30f653437d177b2d31"
+    },
+    {
+      "source": "/home/yjl/crack/city8827/work/masks/003484.png",
+      "sha256": "3e2b9ac482ab730db91f783f88e6090aef31ab19c904cfff4abcd21b796fcdc3"
+    },
+    {
+      "source": "/home/yjl/crack/city8827/work/depth/003484.npz",
+      "sha256": "860cbb19eb9f3cad7abd36e9b6b2ab3ee7eec6d7050bf38928df371cc2b5733a"
+    },
+    {
+      "source": "/home/yjl/crack/city8827/work/poses.npz",
+      "sha256": "0ce640372b65fa97db86c6250bba2155d79d87aa453edaa539b4fa3931645610"
+    },
+    {
+      "source": "/home/yjl/crack/city8827/work/cam.json",
+      "sha256": "9f56c39195f4c9fc1dca9d115b9d19d61a246aa8c6d0ff7c5c046eb36cfd3ebf"
+    }
+  ]
+}

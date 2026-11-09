@@ -1,0 +1,187 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>mcmc.py</title><style>body{font:15px system-ui;margin:24px;background:#faf8f3}pre{overflow:auto;line-height:1.6}pre span{display:block}span:target{background:#fff1a8}header{overflow-wrap:anywhere}</style><header><a href="/notes/internship-8827/">返回8827课堂笔记</a><h1>mcmc.py</h1><p>服务器文件哈希核验：2026-11-10；SHA-256 0c2fc042833f39fae0b785de07d0472fe0d1f22437108b0d04a45c0e4fe67c16</p></header><pre><span id="L1"><a href="#L1">   1</a> import math</span>
+<span id="L2"><a href="#L2">   2</a> from dataclasses import dataclass</span>
+<span id="L3"><a href="#L3">   3</a> from typing import Any, Dict, Union</span>
+<span id="L4"><a href="#L4">   4</a> </span>
+<span id="L5"><a href="#L5">   5</a> import torch</span>
+<span id="L6"><a href="#L6">   6</a> from torch import Tensor</span>
+<span id="L7"><a href="#L7">   7</a> </span>
+<span id="L8"><a href="#L8">   8</a> from .base import Strategy</span>
+<span id="L9"><a href="#L9">   9</a> from .ops import inject_noise_to_position, relocate, sample_add</span>
+<span id="L10"><a href="#L10">  10</a> </span>
+<span id="L11"><a href="#L11">  11</a> </span>
+<span id="L12"><a href="#L12">  12</a> @dataclass</span>
+<span id="L13"><a href="#L13">  13</a> class MCMCStrategy(Strategy):</span>
+<span id="L14"><a href="#L14">  14</a>     &quot;&quot;&quot;Strategy that follows the paper:</span>
+<span id="L15"><a href="#L15">  15</a> </span>
+<span id="L16"><a href="#L16">  16</a>     `3D Gaussian Splatting as Markov Chain Monte Carlo &lt;https://arxiv.org/abs/2404.09591&gt;`_</span>
+<span id="L17"><a href="#L17">  17</a> </span>
+<span id="L18"><a href="#L18">  18</a>     This strategy will:</span>
+<span id="L19"><a href="#L19">  19</a> </span>
+<span id="L20"><a href="#L20">  20</a>     - Periodically teleport GSs with low opacity to a place that has high opacity.</span>
+<span id="L21"><a href="#L21">  21</a>     - Periodically introduce new GSs sampled based on the opacity distribution.</span>
+<span id="L22"><a href="#L22">  22</a>     - Periodically perturb the GSs locations.</span>
+<span id="L23"><a href="#L23">  23</a> </span>
+<span id="L24"><a href="#L24">  24</a>     Args:</span>
+<span id="L25"><a href="#L25">  25</a>         cap_max (int): Maximum number of GSs. Default to 1_000_000.</span>
+<span id="L26"><a href="#L26">  26</a>         noise_lr (float): MCMC samping noise learning rate. Default to 5e5.</span>
+<span id="L27"><a href="#L27">  27</a>         refine_start_iter (int): Start refining GSs after this iteration. Default to 500.</span>
+<span id="L28"><a href="#L28">  28</a>         refine_stop_iter (int): Stop refining GSs after this iteration. Default to 25_000.</span>
+<span id="L29"><a href="#L29">  29</a>         refine_every (int): Refine GSs every this steps. Default to 100.</span>
+<span id="L30"><a href="#L30">  30</a>         min_opacity (float): GSs with opacity below this value will be pruned. Default to 0.005.</span>
+<span id="L31"><a href="#L31">  31</a>         verbose (bool): Whether to print verbose information. Default to False.</span>
+<span id="L32"><a href="#L32">  32</a> </span>
+<span id="L33"><a href="#L33">  33</a>     Examples:</span>
+<span id="L34"><a href="#L34">  34</a> </span>
+<span id="L35"><a href="#L35">  35</a>         &gt;&gt;&gt; from gsplat import MCMCStrategy, rasterization</span>
+<span id="L36"><a href="#L36">  36</a>         &gt;&gt;&gt; params: Dict[str, torch.nn.Parameter] | torch.nn.ParameterDict = ...</span>
+<span id="L37"><a href="#L37">  37</a>         &gt;&gt;&gt; optimizers: Dict[str, torch.optim.Optimizer] = ...</span>
+<span id="L38"><a href="#L38">  38</a>         &gt;&gt;&gt; strategy = MCMCStrategy()</span>
+<span id="L39"><a href="#L39">  39</a>         &gt;&gt;&gt; strategy.check_sanity(params, optimizers)</span>
+<span id="L40"><a href="#L40">  40</a>         &gt;&gt;&gt; strategy_state = strategy.initialize_state()</span>
+<span id="L41"><a href="#L41">  41</a>         &gt;&gt;&gt; for step in range(1000):</span>
+<span id="L42"><a href="#L42">  42</a>         ...     render_image, render_alpha, info = rasterization(...)</span>
+<span id="L43"><a href="#L43">  43</a>         ...     loss = ...</span>
+<span id="L44"><a href="#L44">  44</a>         ...     loss.backward()</span>
+<span id="L45"><a href="#L45">  45</a>         ...     strategy.step_post_backward(params, optimizers, strategy_state, step, info, lr=1e-3)</span>
+<span id="L46"><a href="#L46">  46</a> </span>
+<span id="L47"><a href="#L47">  47</a>     &quot;&quot;&quot;</span>
+<span id="L48"><a href="#L48">  48</a> </span>
+<span id="L49"><a href="#L49">  49</a>     cap_max: int = 1_000_000</span>
+<span id="L50"><a href="#L50">  50</a>     noise_lr: float = 5e5</span>
+<span id="L51"><a href="#L51">  51</a>     refine_start_iter: int = 500</span>
+<span id="L52"><a href="#L52">  52</a>     refine_stop_iter: int = 25_000</span>
+<span id="L53"><a href="#L53">  53</a>     refine_every: int = 100</span>
+<span id="L54"><a href="#L54">  54</a>     min_opacity: float = 0.005</span>
+<span id="L55"><a href="#L55">  55</a>     verbose: bool = False</span>
+<span id="L56"><a href="#L56">  56</a> </span>
+<span id="L57"><a href="#L57">  57</a>     def initialize_state(self) -&gt; Dict[str, Any]:</span>
+<span id="L58"><a href="#L58">  58</a>         &quot;&quot;&quot;Initialize and return the running state for this strategy.&quot;&quot;&quot;</span>
+<span id="L59"><a href="#L59">  59</a>         n_max = 51</span>
+<span id="L60"><a href="#L60">  60</a>         binoms = torch.zeros((n_max, n_max))</span>
+<span id="L61"><a href="#L61">  61</a>         for n in range(n_max):</span>
+<span id="L62"><a href="#L62">  62</a>             for k in range(n + 1):</span>
+<span id="L63"><a href="#L63">  63</a>                 binoms[n, k] = math.comb(n, k)</span>
+<span id="L64"><a href="#L64">  64</a>         return {&quot;binoms&quot;: binoms}</span>
+<span id="L65"><a href="#L65">  65</a> </span>
+<span id="L66"><a href="#L66">  66</a>     def check_sanity(</span>
+<span id="L67"><a href="#L67">  67</a>         self,</span>
+<span id="L68"><a href="#L68">  68</a>         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],</span>
+<span id="L69"><a href="#L69">  69</a>         optimizers: Dict[str, torch.optim.Optimizer],</span>
+<span id="L70"><a href="#L70">  70</a>     ):</span>
+<span id="L71"><a href="#L71">  71</a>         &quot;&quot;&quot;Sanity check for the parameters and optimizers.</span>
+<span id="L72"><a href="#L72">  72</a> </span>
+<span id="L73"><a href="#L73">  73</a>         Check if:</span>
+<span id="L74"><a href="#L74">  74</a>             * `params` and `optimizers` have the same keys.</span>
+<span id="L75"><a href="#L75">  75</a>             * Each optimizer has exactly one param_group, corresponding to each parameter.</span>
+<span id="L76"><a href="#L76">  76</a>             * The following keys are present: {&quot;means&quot;, &quot;scales&quot;, &quot;quats&quot;, &quot;opacities&quot;}.</span>
+<span id="L77"><a href="#L77">  77</a> </span>
+<span id="L78"><a href="#L78">  78</a>         Raises:</span>
+<span id="L79"><a href="#L79">  79</a>             AssertionError: If any of the above conditions is not met.</span>
+<span id="L80"><a href="#L80">  80</a> </span>
+<span id="L81"><a href="#L81">  81</a>         .. note::</span>
+<span id="L82"><a href="#L82">  82</a>             It is not required but highly recommended for the user to call this function</span>
+<span id="L83"><a href="#L83">  83</a>             after initializing the strategy to ensure the convention of the parameters</span>
+<span id="L84"><a href="#L84">  84</a>             and optimizers is as expected.</span>
+<span id="L85"><a href="#L85">  85</a>         &quot;&quot;&quot;</span>
+<span id="L86"><a href="#L86">  86</a> </span>
+<span id="L87"><a href="#L87">  87</a>         super().check_sanity(params, optimizers)</span>
+<span id="L88"><a href="#L88">  88</a>         # The following keys are required for this strategy.</span>
+<span id="L89"><a href="#L89">  89</a>         for key in [&quot;means&quot;, &quot;scales&quot;, &quot;quats&quot;, &quot;opacities&quot;]:</span>
+<span id="L90"><a href="#L90">  90</a>             assert key in params, f&quot;{key} is required in params but missing.&quot;</span>
+<span id="L91"><a href="#L91">  91</a> </span>
+<span id="L92"><a href="#L92">  92</a>     # def step_pre_backward(</span>
+<span id="L93"><a href="#L93">  93</a>     #     self,</span>
+<span id="L94"><a href="#L94">  94</a>     #     params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],</span>
+<span id="L95"><a href="#L95">  95</a>     #     optimizers: Dict[str, torch.optim.Optimizer],</span>
+<span id="L96"><a href="#L96">  96</a>     #     # state: Dict[str, Any],</span>
+<span id="L97"><a href="#L97">  97</a>     #     step: int,</span>
+<span id="L98"><a href="#L98">  98</a>     #     info: Dict[str, Any],</span>
+<span id="L99"><a href="#L99">  99</a>     # ):</span>
+<span id="L100"><a href="#L100"> 100</a>     #     &quot;&quot;&quot;Callback function to be executed before the `loss.backward()` call.&quot;&quot;&quot;</span>
+<span id="L101"><a href="#L101"> 101</a>     #     pass</span>
+<span id="L102"><a href="#L102"> 102</a> </span>
+<span id="L103"><a href="#L103"> 103</a>     def step_post_backward(</span>
+<span id="L104"><a href="#L104"> 104</a>         self,</span>
+<span id="L105"><a href="#L105"> 105</a>         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],</span>
+<span id="L106"><a href="#L106"> 106</a>         optimizers: Dict[str, torch.optim.Optimizer],</span>
+<span id="L107"><a href="#L107"> 107</a>         state: Dict[str, Any],</span>
+<span id="L108"><a href="#L108"> 108</a>         step: int,</span>
+<span id="L109"><a href="#L109"> 109</a>         info: Dict[str, Any],</span>
+<span id="L110"><a href="#L110"> 110</a>         lr: float,</span>
+<span id="L111"><a href="#L111"> 111</a>     ):</span>
+<span id="L112"><a href="#L112"> 112</a>         &quot;&quot;&quot;Callback function to be executed after the `loss.backward()` call.</span>
+<span id="L113"><a href="#L113"> 113</a> </span>
+<span id="L114"><a href="#L114"> 114</a>         Args:</span>
+<span id="L115"><a href="#L115"> 115</a>             lr (float): Learning rate for &quot;means&quot; attribute of the GS.</span>
+<span id="L116"><a href="#L116"> 116</a>         &quot;&quot;&quot;</span>
+<span id="L117"><a href="#L117"> 117</a>         # move to the correct device</span>
+<span id="L118"><a href="#L118"> 118</a>         state[&quot;binoms&quot;] = state[&quot;binoms&quot;].to(params[&quot;means&quot;].device)</span>
+<span id="L119"><a href="#L119"> 119</a> </span>
+<span id="L120"><a href="#L120"> 120</a>         binoms = state[&quot;binoms&quot;]</span>
+<span id="L121"><a href="#L121"> 121</a> </span>
+<span id="L122"><a href="#L122"> 122</a>         if (</span>
+<span id="L123"><a href="#L123"> 123</a>             step &lt; self.refine_stop_iter</span>
+<span id="L124"><a href="#L124"> 124</a>             and step &gt; self.refine_start_iter</span>
+<span id="L125"><a href="#L125"> 125</a>             and step % self.refine_every == 0</span>
+<span id="L126"><a href="#L126"> 126</a>         ):</span>
+<span id="L127"><a href="#L127"> 127</a>             # teleport GSs</span>
+<span id="L128"><a href="#L128"> 128</a>             n_relocated_gs = self._relocate_gs(params, optimizers, binoms)</span>
+<span id="L129"><a href="#L129"> 129</a>             if self.verbose:</span>
+<span id="L130"><a href="#L130"> 130</a>                 print(f&quot;Step {step}: Relocated {n_relocated_gs} GSs.&quot;)</span>
+<span id="L131"><a href="#L131"> 131</a> </span>
+<span id="L132"><a href="#L132"> 132</a>             # add new GSs</span>
+<span id="L133"><a href="#L133"> 133</a>             n_new_gs = self._add_new_gs(params, optimizers, binoms)</span>
+<span id="L134"><a href="#L134"> 134</a>             if self.verbose:</span>
+<span id="L135"><a href="#L135"> 135</a>                 print(</span>
+<span id="L136"><a href="#L136"> 136</a>                     f&quot;Step {step}: Added {n_new_gs} GSs. &quot;</span>
+<span id="L137"><a href="#L137"> 137</a>                     f&quot;Now having {len(params[&#x27;means&#x27;])} GSs.&quot;</span>
+<span id="L138"><a href="#L138"> 138</a>                 )</span>
+<span id="L139"><a href="#L139"> 139</a> </span>
+<span id="L140"><a href="#L140"> 140</a>             torch.cuda.empty_cache()</span>
+<span id="L141"><a href="#L141"> 141</a> </span>
+<span id="L142"><a href="#L142"> 142</a>         # add noise to GSs</span>
+<span id="L143"><a href="#L143"> 143</a>         inject_noise_to_position(</span>
+<span id="L144"><a href="#L144"> 144</a>             params=params, optimizers=optimizers, state={}, scaler=lr * self.noise_lr</span>
+<span id="L145"><a href="#L145"> 145</a>         )</span>
+<span id="L146"><a href="#L146"> 146</a> </span>
+<span id="L147"><a href="#L147"> 147</a>     @torch.no_grad()</span>
+<span id="L148"><a href="#L148"> 148</a>     def _relocate_gs(</span>
+<span id="L149"><a href="#L149"> 149</a>         self,</span>
+<span id="L150"><a href="#L150"> 150</a>         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],</span>
+<span id="L151"><a href="#L151"> 151</a>         optimizers: Dict[str, torch.optim.Optimizer],</span>
+<span id="L152"><a href="#L152"> 152</a>         binoms: Tensor,</span>
+<span id="L153"><a href="#L153"> 153</a>     ) -&gt; int:</span>
+<span id="L154"><a href="#L154"> 154</a>         opacities = torch.sigmoid(params[&quot;opacities&quot;].flatten())</span>
+<span id="L155"><a href="#L155"> 155</a>         dead_mask = opacities &lt;= self.min_opacity</span>
+<span id="L156"><a href="#L156"> 156</a>         n_gs = dead_mask.sum().item()</span>
+<span id="L157"><a href="#L157"> 157</a>         if n_gs &gt; 0:</span>
+<span id="L158"><a href="#L158"> 158</a>             relocate(</span>
+<span id="L159"><a href="#L159"> 159</a>                 params=params,</span>
+<span id="L160"><a href="#L160"> 160</a>                 optimizers=optimizers,</span>
+<span id="L161"><a href="#L161"> 161</a>                 state={},</span>
+<span id="L162"><a href="#L162"> 162</a>                 mask=dead_mask,</span>
+<span id="L163"><a href="#L163"> 163</a>                 binoms=binoms,</span>
+<span id="L164"><a href="#L164"> 164</a>                 min_opacity=self.min_opacity,</span>
+<span id="L165"><a href="#L165"> 165</a>             )</span>
+<span id="L166"><a href="#L166"> 166</a>         return n_gs</span>
+<span id="L167"><a href="#L167"> 167</a> </span>
+<span id="L168"><a href="#L168"> 168</a>     @torch.no_grad()</span>
+<span id="L169"><a href="#L169"> 169</a>     def _add_new_gs(</span>
+<span id="L170"><a href="#L170"> 170</a>         self,</span>
+<span id="L171"><a href="#L171"> 171</a>         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],</span>
+<span id="L172"><a href="#L172"> 172</a>         optimizers: Dict[str, torch.optim.Optimizer],</span>
+<span id="L173"><a href="#L173"> 173</a>         binoms: Tensor,</span>
+<span id="L174"><a href="#L174"> 174</a>     ) -&gt; int:</span>
+<span id="L175"><a href="#L175"> 175</a>         current_n_points = len(params[&quot;means&quot;])</span>
+<span id="L176"><a href="#L176"> 176</a>         n_target = min(self.cap_max, int(1.05 * current_n_points))</span>
+<span id="L177"><a href="#L177"> 177</a>         n_gs = max(0, n_target - current_n_points)</span>
+<span id="L178"><a href="#L178"> 178</a>         if n_gs &gt; 0:</span>
+<span id="L179"><a href="#L179"> 179</a>             sample_add(</span>
+<span id="L180"><a href="#L180"> 180</a>                 params=params,</span>
+<span id="L181"><a href="#L181"> 181</a>                 optimizers=optimizers,</span>
+<span id="L182"><a href="#L182"> 182</a>                 state={},</span>
+<span id="L183"><a href="#L183"> 183</a>                 n=n_gs,</span>
+<span id="L184"><a href="#L184"> 184</a>                 binoms=binoms,</span>
+<span id="L185"><a href="#L185"> 185</a>                 min_opacity=self.min_opacity,</span>
+<span id="L186"><a href="#L186"> 186</a>             )</span>
+<span id="L187"><a href="#L187"> 187</a>         return n_gs</span></pre></html>

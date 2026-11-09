@@ -1,0 +1,76 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>cc_common.py</title><style>body{font:15px system-ui;margin:24px;background:#faf8f3}pre{overflow:auto;line-height:1.6}pre span{display:block}span:target{background:#fff1a8}header{overflow-wrap:anywhere}</style><header><a href="/notes/internship-8827/">返回8827课堂笔记</a><h1>cc_common.py</h1><p>服务器文件哈希核验：2026-11-10；SHA-256 b271c6e78df789d4b1b44da06f0dee9d2c6ee2cf086cda4405703886b7a128da</p></header><pre><span id="L1"><a href="#L1">   1</a> # -*- coding: utf-8 -*-</span>
+<span id="L2"><a href="#L2">   2</a> &quot;&quot;&quot;city8827 (0903 前摄一段路的自由漫游重建) 的公共部分。</span>
+<span id="L3"><a href="#L3">   3</a> 数据基准统一用 **8826** 这一套 (~/crack/viewer8826: 两视几何重解的轨迹、以它为准的点云和路面瓦片, 以及每块的光束法平差位姿);</span>
+<span id="L4"><a href="#L4">   4</a> 8821 的轨迹与它在这段上差 0.7 m (最大 2.2 m), 不能混用。只读使用 viewer8826 和 ~/gd; 自己的东西全写在 ~/crack/city8827。</span>
+<span id="L5"><a href="#L5">   5</a> 坐标: 全局 ENU (E, N, U), 米; 相机系 x 右 y 下 z 前; c2w 见 work/poses.npz。&quot;&quot;&quot;</span>
+<span id="L6"><a href="#L6">   6</a> import os, sys, json, math</span>
+<span id="L7"><a href="#L7">   7</a> import numpy as np, cv2</span>
+<span id="L8"><a href="#L8">   8</a> </span>
+<span id="L9"><a href="#L9">   9</a> HOME = os.path.expanduser(&quot;~&quot;)</span>
+<span id="L10"><a href="#L10">  10</a> V26 = HOME + &quot;/crack/viewer8826&quot;; VW = V26 + &quot;/work&quot;; SITE26 = V26 + &quot;/site2&quot;</span>
+<span id="L11"><a href="#L11">  11</a> ROOT = HOME + &quot;/crack/city8827&quot;; WORK = ROOT + &quot;/work&quot;; SITE = ROOT + &quot;/site&quot;</span>
+<span id="L12"><a href="#L12">  12</a> sys.path.insert(0, V26 + &quot;/build&quot;)</span>
+<span id="L13"><a href="#L13">  13</a> import common as C                                                 # 只读: 标定常数 (8826 的 build 是 8821 的拷贝, 内外参相同)</span>
+<span id="L14"><a href="#L14">  14</a> </span>
+<span id="L15"><a href="#L15">  15</a> def ffmpeg_exe():</span>
+<span id="L16"><a href="#L16">  16</a>     import imageio_ffmpeg</span>
+<span id="L17"><a href="#L17">  17</a>     return imageio_ffmpeg.get_ffmpeg_exe()</span>
+<span id="L18"><a href="#L18">  18</a> </span>
+<span id="L19"><a href="#L19">  19</a> class Cam:</span>
+<span id="L20"><a href="#L20">  20</a>     &quot;&quot;&quot;0903 前摄 (核准后的标定)。scale: 相对 1920x1080 的缩放&quot;&quot;&quot;</span>
+<span id="L21"><a href="#L21">  21</a>     def __init__(self, scale=1.0):</span>
+<span id="L22"><a href="#L22">  22</a>         cfg = C.frontcam_cfg(); self.scale = scale</span>
+<span id="L23"><a href="#L23">  23</a>         self.fx, self.fy, self.cx, self.cy = cfg[&quot;fx&quot;] * scale, cfg[&quot;fy&quot;] * scale, cfg[&quot;cx&quot;] * scale, cfg[&quot;cy&quot;] * scale</span>
+<span id="L24"><a href="#L24">  24</a>         self.K = np.array([[self.fx, 0, self.cx], [0, self.fy, self.cy], [0, 0, 1.0]]); self.D = np.array(cfg[&quot;dist&quot;], np.float64)</span>
+<span id="L25"><a href="#L25">  25</a>         self.h = cfg[&quot;height&quot;]; r, p, y = cfg[&quot;roll&quot;], cfg[&quot;pitch&quot;], cfg[&quot;yaw&quot;]</span>
+<span id="L26"><a href="#L26">  26</a>         Rz = np.array([[np.cos(y), -np.sin(y), 0], [np.sin(y), np.cos(y), 0], [0, 0, 1]]); Rx = np.array([[1, 0, 0], [0, np.cos(p), -np.sin(p)], [0, np.sin(p), np.cos(p)]])</span>
+<span id="L27"><a href="#L27">  27</a>         Ry = np.array([[np.cos(r), 0, np.sin(r)], [0, 1, 0], [-np.sin(r), 0, np.cos(r)]]); base = np.array([[1, 0, 0], [0, 0, 1], [0, -1, 0]], float)</span>
+<span id="L28"><a href="#L28">  28</a>         self.R = Rz @ Rx @ Ry @ base                               # 相机系 -&gt; 车身系</span>
+<span id="L29"><a href="#L29">  29</a>     def undistort(self, img):</span>
+<span id="L30"><a href="#L30">  30</a>         return cv2.undistort(img, self.K, self.D)</span>
+<span id="L31"><a href="#L31">  31</a> </span>
+<span id="L32"><a href="#L32">  32</a> class Track:</span>
+<span id="L33"><a href="#L33">  33</a>     &quot;&quot;&quot;8826 的逐帧平面位姿 (track0903.npz): 帧号 -&gt; (E, N, psi)。psi 为方位角 (自北顺时针)&quot;&quot;&quot;</span>
+<span id="L34"><a href="#L34">  34</a>     def __init__(self):</span>
+<span id="L35"><a href="#L35">  35</a>         T = np.load(VW + &quot;/track0903.npz&quot;); self.T = T</span>
+<span id="L36"><a href="#L36">  36</a>         self.idx, self.E, self.N, self.psi, self.seg, self.s, self.t = T[&quot;idx&quot;], T[&quot;E&quot;], T[&quot;N&quot;], np.unwrap(T[&quot;psi&quot;]), T[&quot;seg&quot;], T[&quot;s&quot;], T[&quot;t&quot;]</span>
+<span id="L37"><a href="#L37">  37</a>         self.row = {int(i): k for k, i in enumerate(self.idx)}</span>
+<span id="L38"><a href="#L38">  38</a>     def pose(self, frame):</span>
+<span id="L39"><a href="#L39">  39</a>         k = self.row[int(frame)]; return float(self.E[k]), float(self.N[k]), float(self.psi[k])</span>
+<span id="L40"><a href="#L40">  40</a> </span>
+<span id="L41"><a href="#L41">  41</a> def local_to_world(x, y, pose):</span>
+<span id="L42"><a href="#L42">  42</a>     E0, N0, a = pose; c, s = math.cos(a), math.sin(a); return E0 + x * c + y * s, N0 - x * s + y * c</span>
+<span id="L43"><a href="#L43">  43</a> def world_to_local(E, N, pose):</span>
+<span id="L44"><a href="#L44">  44</a>     E0, N0, a = pose; c, s = math.cos(a), math.sin(a); dE, dN = E - E0, N - N0; return dE * c - dN * s, dE * s + dN * c</span>
+<span id="L45"><a href="#L45">  45</a> </span>
+<span id="L46"><a href="#L46">  46</a> class Poses:</span>
+<span id="L47"><a href="#L47">  47</a>     &quot;&quot;&quot;work/poses.npz (e02 写出): 帧号 -&gt; c2w (4x4, ENU)&quot;&quot;&quot;</span>
+<span id="L48"><a href="#L48">  48</a>     def __init__(self):</span>
+<span id="L49"><a href="#L49">  49</a>         z = np.load(WORK + &quot;/poses.npz&quot;); self.frames = [int(f) for f in z[&quot;frames&quot;]]; self.c2w = z[&quot;c2w&quot;]; self.src = z[&quot;src&quot;]; self.row = {f: k for k, f in enumerate(self.frames)}</span>
+<span id="L50"><a href="#L50">  50</a>     def __getitem__(self, f): return self.c2w[self.row[int(f)]]</span>
+<span id="L51"><a href="#L51">  51</a> </span>
+<span id="L52"><a href="#L52">  52</a> class Cloud:</span>
+<span id="L53"><a href="#L53">  53</a>     &quot;&quot;&quot;8826 的环境点云瓦片 (site2/tiles 细 40 m, tiles1 粗 160 m): uint16 位置 x3 + uint16 帧号 + uint8 颜色 x3 (RGB)&quot;&quot;&quot;</span>
+<span id="L54"><a href="#L54">  54</a>     def __init__(self):</span>
+<span id="L55"><a href="#L55">  55</a>         d = json.load(open(SITE26 + &quot;/index.json&quot;)); self.fine = d[&quot;tiles&quot;]; self.coarse = d[&quot;tiles1&quot;]; self.cache = {}; self.tick = 0</span>
+<span id="L56"><a href="#L56">  56</a>         for sub, L in ((&quot;tiles&quot;, self.fine), (&quot;tiles1&quot;, self.coarse)):</span>
+<span id="L57"><a href="#L57">  57</a>             for t in L: t[&quot;sub&quot;] = sub; t[&quot;cE&quot;] = t[&quot;lo&quot;][0] + 0.5 * t[&quot;span&quot;][0]; t[&quot;cN&quot;] = -(t[&quot;lo&quot;][2] + 0.5 * t[&quot;span&quot;][2]); t[&quot;rad&quot;] = 0.5 * math.hypot(t[&quot;span&quot;][0], t[&quot;span&quot;][2])</span>
+<span id="L58"><a href="#L58">  58</a>     def load(self, t):</span>
+<span id="L59"><a href="#L59">  59</a>         key = (t[&quot;sub&quot;], t[&quot;id&quot;]); e = self.cache.get(key)</span>
+<span id="L60"><a href="#L60">  60</a>         if e is None:</span>
+<span id="L61"><a href="#L61">  61</a>             buf = np.fromfile(&quot;%s/%s/%s.bin&quot; % (SITE26, t[&quot;sub&quot;], t[&quot;id&quot;]), np.uint8); n = t[&quot;n&quot;]</span>
+<span id="L62"><a href="#L62">  62</a>             q = buf[:n * 6].view(&quot;&lt;u2&quot;).reshape(n, 3).astype(np.float32); col = buf[n * 8:n * 11].reshape(n, 3); fr = buf[n * 6:n * 8].view(&quot;&lt;u2&quot;)</span>
+<span id="L63"><a href="#L63">  63</a>             pos = np.array(t[&quot;lo&quot;], np.float32) + q / 65535.0 * np.array(t[&quot;span&quot;], np.float32)</span>
+<span id="L64"><a href="#L64">  64</a>             e = [np.c_[pos[:, 0], -pos[:, 2], pos[:, 1]].astype(np.float32), col.copy(), fr.astype(np.int32), self.tick]      # (E, N, 上), RGB, 来源帧</span>
+<span id="L65"><a href="#L65">  65</a>             self.cache[key] = e</span>
+<span id="L66"><a href="#L66">  66</a>         e[3] = self.tick; return e[0], e[1], e[2]</span>
+<span id="L67"><a href="#L67">  67</a>     def gc(self, keep=30):</span>
+<span id="L68"><a href="#L68">  68</a>         self.tick += 1</span>
+<span id="L69"><a href="#L69">  69</a>         for k in [k for k, e in self.cache.items() if self.tick - e[3] &gt; keep]: del self.cache[k]</span>
+<span id="L70"><a href="#L70">  70</a>     def near(self, E0, N0, r_fine=140.0, r_coarse=420.0):</span>
+<span id="L71"><a href="#L71">  71</a>         out = []</span>
+<span id="L72"><a href="#L72">  72</a>         for t in self.fine:</span>
+<span id="L73"><a href="#L73">  73</a>             if math.hypot(t[&quot;cE&quot;] - E0, t[&quot;cN&quot;] - N0) &lt; r_fine + t[&quot;rad&quot;]: out.append(self.load(t) + (False,))</span>
+<span id="L74"><a href="#L74">  74</a>         for t in self.coarse:</span>
+<span id="L75"><a href="#L75">  75</a>             if math.hypot(t[&quot;cE&quot;] - E0, t[&quot;cN&quot;] - N0) &lt; r_coarse + t[&quot;rad&quot;]: out.append(self.load(t) + (True,))</span>
+<span id="L76"><a href="#L76">  76</a>         return out</span></pre></html>

@@ -1,0 +1,1774 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>rendering.py</title><style>body{font:15px system-ui;margin:24px;background:#faf8f3}pre{overflow:auto;line-height:1.6}pre span{display:block}span:target{background:#fff1a8}header{overflow-wrap:anywhere}</style><header><a href="/notes/internship-8827/">返回8827课堂笔记</a><h1>rendering.py</h1><p>服务器文件哈希核验：2026-11-10；SHA-256 6b5e4101035031afbb26bed7e496382c7502f9d8bc7cc9a432f290674a4d9133</p></header><pre><span id="L1"><a href="#L1">   1</a> import math</span>
+<span id="L2"><a href="#L2">   2</a> from typing import Dict, Optional, Tuple</span>
+<span id="L3"><a href="#L3">   3</a> </span>
+<span id="L4"><a href="#L4">   4</a> import torch</span>
+<span id="L5"><a href="#L5">   5</a> import torch.distributed</span>
+<span id="L6"><a href="#L6">   6</a> import torch.nn.functional as F</span>
+<span id="L7"><a href="#L7">   7</a> from torch import Tensor</span>
+<span id="L8"><a href="#L8">   8</a> from typing_extensions import Literal</span>
+<span id="L9"><a href="#L9">   9</a> </span>
+<span id="L10"><a href="#L10">  10</a> from .cuda._wrapper import (</span>
+<span id="L11"><a href="#L11">  11</a>     RollingShutterType,</span>
+<span id="L12"><a href="#L12">  12</a>     FThetaCameraDistortionParameters,</span>
+<span id="L13"><a href="#L13">  13</a>     FThetaPolynomialType,</span>
+<span id="L14"><a href="#L14">  14</a>     fully_fused_projection,</span>
+<span id="L15"><a href="#L15">  15</a>     fully_fused_projection_2dgs,</span>
+<span id="L16"><a href="#L16">  16</a>     fully_fused_projection_with_ut,</span>
+<span id="L17"><a href="#L17">  17</a>     isect_offset_encode,</span>
+<span id="L18"><a href="#L18">  18</a>     isect_tiles,</span>
+<span id="L19"><a href="#L19">  19</a>     rasterize_to_pixels,</span>
+<span id="L20"><a href="#L20">  20</a>     rasterize_to_pixels_2dgs,</span>
+<span id="L21"><a href="#L21">  21</a>     rasterize_to_pixels_eval3d,</span>
+<span id="L22"><a href="#L22">  22</a>     spherical_harmonics,</span>
+<span id="L23"><a href="#L23">  23</a> )</span>
+<span id="L24"><a href="#L24">  24</a> from .distributed import (</span>
+<span id="L25"><a href="#L25">  25</a>     all_gather_int32,</span>
+<span id="L26"><a href="#L26">  26</a>     all_gather_tensor_list,</span>
+<span id="L27"><a href="#L27">  27</a>     all_to_all_int32,</span>
+<span id="L28"><a href="#L28">  28</a>     all_to_all_tensor_list,</span>
+<span id="L29"><a href="#L29">  29</a> )</span>
+<span id="L30"><a href="#L30">  30</a> from .utils import depth_to_normal, get_projection_matrix</span>
+<span id="L31"><a href="#L31">  31</a> </span>
+<span id="L32"><a href="#L32">  32</a> </span>
+<span id="L33"><a href="#L33">  33</a> def rasterization(</span>
+<span id="L34"><a href="#L34">  34</a>     means: Tensor,  # [..., N, 3]</span>
+<span id="L35"><a href="#L35">  35</a>     quats: Tensor,  # [..., N, 4]</span>
+<span id="L36"><a href="#L36">  36</a>     scales: Tensor,  # [..., N, 3]</span>
+<span id="L37"><a href="#L37">  37</a>     opacities: Tensor,  # [..., N]</span>
+<span id="L38"><a href="#L38">  38</a>     colors: Tensor,  # [..., (C,) N, D] or [..., (C,) N, K, 3]</span>
+<span id="L39"><a href="#L39">  39</a>     viewmats: Tensor,  # [..., C, 4, 4]</span>
+<span id="L40"><a href="#L40">  40</a>     Ks: Tensor,  # [..., C, 3, 3]</span>
+<span id="L41"><a href="#L41">  41</a>     width: int,</span>
+<span id="L42"><a href="#L42">  42</a>     height: int,</span>
+<span id="L43"><a href="#L43">  43</a>     near_plane: float = 0.01,</span>
+<span id="L44"><a href="#L44">  44</a>     far_plane: float = 1e10,</span>
+<span id="L45"><a href="#L45">  45</a>     radius_clip: float = 0.0,</span>
+<span id="L46"><a href="#L46">  46</a>     eps2d: float = 0.3,</span>
+<span id="L47"><a href="#L47">  47</a>     sh_degree: Optional[int] = None,</span>
+<span id="L48"><a href="#L48">  48</a>     packed: bool = True,</span>
+<span id="L49"><a href="#L49">  49</a>     tile_size: int = 16,</span>
+<span id="L50"><a href="#L50">  50</a>     backgrounds: Optional[Tensor] = None,</span>
+<span id="L51"><a href="#L51">  51</a>     render_mode: Literal[&quot;RGB&quot;, &quot;D&quot;, &quot;ED&quot;, &quot;RGB+D&quot;, &quot;RGB+ED&quot;] = &quot;RGB&quot;,</span>
+<span id="L52"><a href="#L52">  52</a>     sparse_grad: bool = False,</span>
+<span id="L53"><a href="#L53">  53</a>     absgrad: bool = False,</span>
+<span id="L54"><a href="#L54">  54</a>     rasterize_mode: Literal[&quot;classic&quot;, &quot;antialiased&quot;] = &quot;classic&quot;,</span>
+<span id="L55"><a href="#L55">  55</a>     channel_chunk: int = 32,</span>
+<span id="L56"><a href="#L56">  56</a>     distributed: bool = False,</span>
+<span id="L57"><a href="#L57">  57</a>     camera_model: Literal[&quot;pinhole&quot;, &quot;ortho&quot;, &quot;fisheye&quot;, &quot;ftheta&quot;] = &quot;pinhole&quot;,</span>
+<span id="L58"><a href="#L58">  58</a>     segmented: bool = False,</span>
+<span id="L59"><a href="#L59">  59</a>     covars: Optional[Tensor] = None,</span>
+<span id="L60"><a href="#L60">  60</a>     with_ut: bool = False,</span>
+<span id="L61"><a href="#L61">  61</a>     with_eval3d: bool = False,</span>
+<span id="L62"><a href="#L62">  62</a>     # distortion</span>
+<span id="L63"><a href="#L63">  63</a>     radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]</span>
+<span id="L64"><a href="#L64">  64</a>     tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]</span>
+<span id="L65"><a href="#L65">  65</a>     thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]</span>
+<span id="L66"><a href="#L66">  66</a>     ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,</span>
+<span id="L67"><a href="#L67">  67</a>     # rolling shutter</span>
+<span id="L68"><a href="#L68">  68</a>     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,</span>
+<span id="L69"><a href="#L69">  69</a>     viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]</span>
+<span id="L70"><a href="#L70">  70</a> ) -&gt; Tuple[Tensor, Tensor, Dict]:</span>
+<span id="L71"><a href="#L71">  71</a>     &quot;&quot;&quot;Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).</span>
+<span id="L72"><a href="#L72">  72</a> </span>
+<span id="L73"><a href="#L73">  73</a>     This function provides a handful features for 3D Gaussian rasterization, which</span>
+<span id="L74"><a href="#L74">  74</a>     we detail in the following notes. A complete profiling of the these features</span>
+<span id="L75"><a href="#L75">  75</a>     can be found in the :ref:`profiling` page.</span>
+<span id="L76"><a href="#L76">  76</a> </span>
+<span id="L77"><a href="#L77">  77</a>     .. note::</span>
+<span id="L78"><a href="#L78">  78</a>         **Multi-GPU Distributed Rasterization**: This function can be used in a multi-GPU</span>
+<span id="L79"><a href="#L79">  79</a>         distributed scenario by setting `distributed` to True. When `distributed` is True,</span>
+<span id="L80"><a href="#L80">  80</a>         a subset of total Gaussians could be passed into this function in each rank, and</span>
+<span id="L81"><a href="#L81">  81</a>         the function will collaboratively render a set of images using Gaussians from all ranks. Note</span>
+<span id="L82"><a href="#L82">  82</a>         to achieve balanced computation, it is recommended (not enforced) to have similar number of</span>
+<span id="L83"><a href="#L83">  83</a>         Gaussians in each rank. But we do enforce that the number of cameras to be rendered</span>
+<span id="L84"><a href="#L84">  84</a>         in each rank is the same. The function will return the rendered images</span>
+<span id="L85"><a href="#L85">  85</a>         corresponds to the input cameras in each rank, and allows for gradients to flow back to the</span>
+<span id="L86"><a href="#L86">  86</a>         Gaussians living in other ranks. For the details, please refer to the paper</span>
+<span id="L87"><a href="#L87">  87</a>         `On Scaling Up 3D Gaussian Splatting Training &lt;https://arxiv.org/abs/2406.18533&gt;`_.</span>
+<span id="L88"><a href="#L88">  88</a> </span>
+<span id="L89"><a href="#L89">  89</a>     .. note::</span>
+<span id="L90"><a href="#L90">  90</a>         **Batch Rasterization**: This function allows for rasterizing a set of 3D Gaussians</span>
+<span id="L91"><a href="#L91">  91</a>         to a batch of images in one go, by simplly providing the batched `viewmats` and `Ks`.</span>
+<span id="L92"><a href="#L92">  92</a> </span>
+<span id="L93"><a href="#L93">  93</a>     .. note::</span>
+<span id="L94"><a href="#L94">  94</a>         **Support N-D Features**: If `sh_degree` is None,</span>
+<span id="L95"><a href="#L95">  95</a>         the `colors` is expected to be with shape [..., N, D] or [..., C, N, D], in which D is the channel of</span>
+<span id="L96"><a href="#L96">  96</a>         the features to be rendered. The computation is slow when D &gt; 32 at the moment.</span>
+<span id="L97"><a href="#L97">  97</a>         If `sh_degree` is set, the `colors` is expected to be the SH coefficients with</span>
+<span id="L98"><a href="#L98">  98</a>         shape [..., N, K, 3] or [..., C, N, K, 3], where K is the number of SH bases. In this case, it is expected</span>
+<span id="L99"><a href="#L99">  99</a>         that :math:`(\\textit{sh_degree} + 1) ^ 2 \\leq K`, where `sh_degree` controls the</span>
+<span id="L100"><a href="#L100"> 100</a>         activated bases in the SH coefficients.</span>
+<span id="L101"><a href="#L101"> 101</a> </span>
+<span id="L102"><a href="#L102"> 102</a>     .. note::</span>
+<span id="L103"><a href="#L103"> 103</a>         **Depth Rendering**: This function supports colors or/and depths via `render_mode`.</span>
+<span id="L104"><a href="#L104"> 104</a>         The supported modes are &quot;RGB&quot;, &quot;D&quot;, &quot;ED&quot;, &quot;RGB+D&quot;, and &quot;RGB+ED&quot;. &quot;RGB&quot; renders the</span>
+<span id="L105"><a href="#L105"> 105</a>         colored image that respects the `colors` argument. &quot;D&quot; renders the accumulated z-depth</span>
+<span id="L106"><a href="#L106"> 106</a>         :math:`\\sum_i w_i z_i`. &quot;ED&quot; renders the expected z-depth</span>
+<span id="L107"><a href="#L107"> 107</a>         :math:`\\frac{\\sum_i w_i z_i}{\\sum_i w_i}`. &quot;RGB+D&quot; and &quot;RGB+ED&quot; render both</span>
+<span id="L108"><a href="#L108"> 108</a>         the colored image and the depth, in which the depth is the last channel of the output.</span>
+<span id="L109"><a href="#L109"> 109</a> </span>
+<span id="L110"><a href="#L110"> 110</a>     .. note::</span>
+<span id="L111"><a href="#L111"> 111</a>         **Memory-Speed Trade-off**: The `packed` argument provides a trade-off between</span>
+<span id="L112"><a href="#L112"> 112</a>         memory footprint and runtime. If `packed` is True, the intermediate results are</span>
+<span id="L113"><a href="#L113"> 113</a>         packed into sparse tensors, which is more memory efficient but might be slightly</span>
+<span id="L114"><a href="#L114"> 114</a>         slower. This is especially helpful when the scene is large and each camera sees only</span>
+<span id="L115"><a href="#L115"> 115</a>         a small portion of the scene. If `packed` is False, the intermediate results are</span>
+<span id="L116"><a href="#L116"> 116</a>         with shape [..., C, N, ...], which is faster but might consume more memory.</span>
+<span id="L117"><a href="#L117"> 117</a> </span>
+<span id="L118"><a href="#L118"> 118</a>     .. note::</span>
+<span id="L119"><a href="#L119"> 119</a>         **Sparse Gradients**: If `sparse_grad` is True, the gradients for {means, quats, scales}</span>
+<span id="L120"><a href="#L120"> 120</a>         will be stored in a `COO sparse layout &lt;https://pytorch.org/docs/stable/generated/torch.sparse_coo_tensor.html&gt;`_.</span>
+<span id="L121"><a href="#L121"> 121</a>         This can be helpful for saving memory</span>
+<span id="L122"><a href="#L122"> 122</a>         for training when the scene is large and each iteration only activates a small portion</span>
+<span id="L123"><a href="#L123"> 123</a>         of the Gaussians. Usually a sparse optimizer is required to work with sparse gradients,</span>
+<span id="L124"><a href="#L124"> 124</a>         such as `torch.optim.SparseAdam &lt;https://pytorch.org/docs/stable/generated/torch.optim.SparseAdam.html#sparseadam&gt;`_.</span>
+<span id="L125"><a href="#L125"> 125</a>         This argument is only effective when `packed` is True.</span>
+<span id="L126"><a href="#L126"> 126</a> </span>
+<span id="L127"><a href="#L127"> 127</a>     .. note::</span>
+<span id="L128"><a href="#L128"> 128</a>         **Speed-up for Large Scenes**: The `radius_clip` argument is extremely helpful for</span>
+<span id="L129"><a href="#L129"> 129</a>         speeding up large scale scenes or scenes with large depth of fields. Gaussians with</span>
+<span id="L130"><a href="#L130"> 130</a>         2D radius smaller or equal than this value (in pixel unit) will be skipped during rasterization.</span>
+<span id="L131"><a href="#L131"> 131</a>         This will skip all the far-away Gaussians that are too small to be seen in the image.</span>
+<span id="L132"><a href="#L132"> 132</a>         But be warned that if there are close-up Gaussians that are also below this threshold, they will</span>
+<span id="L133"><a href="#L133"> 133</a>         also get skipped (which is rarely happened in practice). This is by default disabled by setting</span>
+<span id="L134"><a href="#L134"> 134</a>         `radius_clip` to 0.0.</span>
+<span id="L135"><a href="#L135"> 135</a> </span>
+<span id="L136"><a href="#L136"> 136</a>     .. note::</span>
+<span id="L137"><a href="#L137"> 137</a>         **Antialiased Rendering**: If `rasterize_mode` is &quot;antialiased&quot;, the function will</span>
+<span id="L138"><a href="#L138"> 138</a>         apply a view-dependent compensation factor</span>
+<span id="L139"><a href="#L139"> 139</a>         :math:`\\rho=\\sqrt{\\frac{Det(\\Sigma)}{Det(\\Sigma+ \\epsilon I)}}` to Gaussian</span>
+<span id="L140"><a href="#L140"> 140</a>         opacities, where :math:`\\Sigma` is the projected 2D covariance matrix and :math:`\\epsilon`</span>
+<span id="L141"><a href="#L141"> 141</a>         is the `eps2d`. This will make the rendered image more antialiased, as proposed in</span>
+<span id="L142"><a href="#L142"> 142</a>         the paper `Mip-Splatting: Alias-free 3D Gaussian Splatting &lt;https://arxiv.org/pdf/2311.16493&gt;`_.</span>
+<span id="L143"><a href="#L143"> 143</a> </span>
+<span id="L144"><a href="#L144"> 144</a>     .. note::</span>
+<span id="L145"><a href="#L145"> 145</a>         **AbsGrad**: If `absgrad` is True, the absolute gradients of the projected</span>
+<span id="L146"><a href="#L146"> 146</a>         2D means will be computed during the backward pass, which could be accessed by</span>
+<span id="L147"><a href="#L147"> 147</a>         `meta[&quot;means2d&quot;].absgrad`. This is an implementation of the paper</span>
+<span id="L148"><a href="#L148"> 148</a>         `AbsGS: Recovering Fine Details for 3D Gaussian Splatting &lt;https://arxiv.org/abs/2404.10484&gt;`_,</span>
+<span id="L149"><a href="#L149"> 149</a>         which is shown to be more effective for splitting Gaussians during training.</span>
+<span id="L150"><a href="#L150"> 150</a> </span>
+<span id="L151"><a href="#L151"> 151</a>     .. note::</span>
+<span id="L152"><a href="#L152"> 152</a>         **Camera Distortion and Rolling Shutter**: The function supports rendering with opencv</span>
+<span id="L153"><a href="#L153"> 153</a>         distortion formula for pinhole and fisheye cameras (`radial_coeffs`, `tangential_coeffs`, `thin_prism_coeffs`).</span>
+<span id="L154"><a href="#L154"> 154</a>         It also supports rolling shutter rendering with the `rolling_shutter` argument. We take</span>
+<span id="L155"><a href="#L155"> 155</a>         reference from the paper `3DGUT: Enabling Distorted Cameras and Secondary Rays in Gaussian Splatting</span>
+<span id="L156"><a href="#L156"> 156</a>         &lt;https://arxiv.org/abs/2412.12507&gt;`_.</span>
+<span id="L157"><a href="#L157"> 157</a> </span>
+<span id="L158"><a href="#L158"> 158</a>     .. warning::</span>
+<span id="L159"><a href="#L159"> 159</a>         This function is currently not differentiable w.r.t. the camera intrinsics `Ks`.</span>
+<span id="L160"><a href="#L160"> 160</a> </span>
+<span id="L161"><a href="#L161"> 161</a>     Args:</span>
+<span id="L162"><a href="#L162"> 162</a>         means: The 3D centers of the Gaussians. [..., N, 3]</span>
+<span id="L163"><a href="#L163"> 163</a>         quats: The quaternions of the Gaussians (wxyz convension). It&#x27;s not required to be normalized. [..., N, 4]</span>
+<span id="L164"><a href="#L164"> 164</a>         scales: The scales of the Gaussians. [..., N, 3]</span>
+<span id="L165"><a href="#L165"> 165</a>         opacities: The opacities of the Gaussians. [..., N]</span>
+<span id="L166"><a href="#L166"> 166</a>         colors: The colors of the Gaussians. [..., (C,) N, D] or [..., (C,) N, K, 3] for SH coefficients.</span>
+<span id="L167"><a href="#L167"> 167</a>         viewmats: The world-to-cam transformation of the cameras. [..., C, 4, 4]</span>
+<span id="L168"><a href="#L168"> 168</a>         Ks: The camera intrinsics. [..., C, 3, 3]</span>
+<span id="L169"><a href="#L169"> 169</a>         width: The width of the image.</span>
+<span id="L170"><a href="#L170"> 170</a>         height: The height of the image.</span>
+<span id="L171"><a href="#L171"> 171</a>         near_plane: The near plane for clipping. Default is 0.01.</span>
+<span id="L172"><a href="#L172"> 172</a>         far_plane: The far plane for clipping. Default is 1e10.</span>
+<span id="L173"><a href="#L173"> 173</a>         radius_clip: Gaussians with 2D radius smaller or equal than this value will be</span>
+<span id="L174"><a href="#L174"> 174</a>             skipped. This is extremely helpful for speeding up large scale scenes.</span>
+<span id="L175"><a href="#L175"> 175</a>             Default is 0.0.</span>
+<span id="L176"><a href="#L176"> 176</a>         eps2d: An epsilon added to the egienvalues of projected 2D covariance matrices.</span>
+<span id="L177"><a href="#L177"> 177</a>             This will prevents the projected GS to be too small. For example eps2d=0.3</span>
+<span id="L178"><a href="#L178"> 178</a>             leads to minimal 3 pixel unit. Default is 0.3.</span>
+<span id="L179"><a href="#L179"> 179</a>         sh_degree: The SH degree to use, which can be smaller than the total</span>
+<span id="L180"><a href="#L180"> 180</a>             number of bands. If set, the `colors` should be [..., (C,) N, K, 3] SH coefficients,</span>
+<span id="L181"><a href="#L181"> 181</a>             else the `colors` should be [..., (C,) N, D] post-activation color values. Default is None.</span>
+<span id="L182"><a href="#L182"> 182</a>         packed: Whether to use packed mode which is more memory efficient but might or</span>
+<span id="L183"><a href="#L183"> 183</a>             might not be as fast. Default is True.</span>
+<span id="L184"><a href="#L184"> 184</a>         tile_size: The size of the tiles for rasterization. Default is 16.</span>
+<span id="L185"><a href="#L185"> 185</a>             (Note: other values are not tested)</span>
+<span id="L186"><a href="#L186"> 186</a>         backgrounds: The background colors. [..., C, D]. Default is None.</span>
+<span id="L187"><a href="#L187"> 187</a>         render_mode: The rendering mode. Supported modes are &quot;RGB&quot;, &quot;D&quot;, &quot;ED&quot;, &quot;RGB+D&quot;,</span>
+<span id="L188"><a href="#L188"> 188</a>             and &quot;RGB+ED&quot;. &quot;RGB&quot; renders the colored image, &quot;D&quot; renders the accumulated depth, and</span>
+<span id="L189"><a href="#L189"> 189</a>             &quot;ED&quot; renders the expected depth. Default is &quot;RGB&quot;.</span>
+<span id="L190"><a href="#L190"> 190</a>         sparse_grad: If true, the gradients for {means, quats, scales} will be stored in</span>
+<span id="L191"><a href="#L191"> 191</a>             a COO sparse layout. This can be helpful for saving memory. Default is False.</span>
+<span id="L192"><a href="#L192"> 192</a>         absgrad: If true, the absolute gradients of the projected 2D means</span>
+<span id="L193"><a href="#L193"> 193</a>             will be computed during the backward pass, which could be accessed by</span>
+<span id="L194"><a href="#L194"> 194</a>             `meta[&quot;means2d&quot;].absgrad`. Default is False.</span>
+<span id="L195"><a href="#L195"> 195</a>         rasterize_mode: The rasterization mode. Supported modes are &quot;classic&quot; and</span>
+<span id="L196"><a href="#L196"> 196</a>             &quot;antialiased&quot;. Default is &quot;classic&quot;.</span>
+<span id="L197"><a href="#L197"> 197</a>         channel_chunk: The number of channels to render in one go. Default is 32.</span>
+<span id="L198"><a href="#L198"> 198</a>             If the required rendering channels are larger than this value, the rendering</span>
+<span id="L199"><a href="#L199"> 199</a>             will be done looply in chunks.</span>
+<span id="L200"><a href="#L200"> 200</a>         distributed: Whether to use distributed rendering. Default is False. If True,</span>
+<span id="L201"><a href="#L201"> 201</a>             The input Gaussians are expected to be a subset of scene in each rank, and</span>
+<span id="L202"><a href="#L202"> 202</a>             the function will collaboratively render the images for all ranks.</span>
+<span id="L203"><a href="#L203"> 203</a>         camera_model: The camera model to use. Supported models are &quot;pinhole&quot;, &quot;ortho&quot;,</span>
+<span id="L204"><a href="#L204"> 204</a>             &quot;fisheye&quot;, and &quot;ftheta&quot;. Default is &quot;pinhole&quot;.</span>
+<span id="L205"><a href="#L205"> 205</a>         segmented: Whether to use segmented radix sort. Default is False.</span>
+<span id="L206"><a href="#L206"> 206</a>             Segmented radix sort performs sorting in segments, which is more efficient for the sorting operation itself.</span>
+<span id="L207"><a href="#L207"> 207</a>             However, since it requires offset indices as input, additional global memory access is needed, which results</span>
+<span id="L208"><a href="#L208"> 208</a>             in slower overall performance in most use cases.</span>
+<span id="L209"><a href="#L209"> 209</a>         covars: Optional covariance matrices of the Gaussians. If provided, the `quats` and</span>
+<span id="L210"><a href="#L210"> 210</a>             `scales` will be ignored. [..., N, 3, 3], Default is None.</span>
+<span id="L211"><a href="#L211"> 211</a>         with_ut: Whether to use Unscented Transform (UT) for projection. Default is False.</span>
+<span id="L212"><a href="#L212"> 212</a>         with_eval3d: Whether to calculate Gaussian response in 3D world space, instead</span>
+<span id="L213"><a href="#L213"> 213</a>             of 2D image space. Default is False.</span>
+<span id="L214"><a href="#L214"> 214</a>         radial_coeffs: Opencv pinhole/fisheye radial distortion coefficients. Default is None.</span>
+<span id="L215"><a href="#L215"> 215</a>             For pinhole camera, the shape should be [..., C, 6]. For fisheye camera, the shape</span>
+<span id="L216"><a href="#L216"> 216</a>             should be [..., C, 4].</span>
+<span id="L217"><a href="#L217"> 217</a>         tangential_coeffs: Opencv pinhole tangential distortion coefficients. Default is None.</span>
+<span id="L218"><a href="#L218"> 218</a>             The shape should be [..., C, 2] if provided.</span>
+<span id="L219"><a href="#L219"> 219</a>         thin_prism_coeffs: Opencv pinhole thin prism distortion coefficients. Default is None.</span>
+<span id="L220"><a href="#L220"> 220</a>             The shape should be [..., C, 4] if provided.</span>
+<span id="L221"><a href="#L221"> 221</a>         ftheta_coeffs: F-Theta camera distortion coefficients shared for all cameras.</span>
+<span id="L222"><a href="#L222"> 222</a>             Default is None. See `FThetaCameraDistortionParameters` for details.</span>
+<span id="L223"><a href="#L223"> 223</a>         rolling_shutter: The rolling shutter type. Default `RollingShutterType.GLOBAL` means</span>
+<span id="L224"><a href="#L224"> 224</a>             global shutter.</span>
+<span id="L225"><a href="#L225"> 225</a>         viewmats_rs: The second viewmat when rolling shutter is used. Default is None.</span>
+<span id="L226"><a href="#L226"> 226</a> </span>
+<span id="L227"><a href="#L227"> 227</a>     Returns:</span>
+<span id="L228"><a href="#L228"> 228</a>         A tuple:</span>
+<span id="L229"><a href="#L229"> 229</a> </span>
+<span id="L230"><a href="#L230"> 230</a>         **render_colors**: The rendered colors. [..., C, height, width, X].</span>
+<span id="L231"><a href="#L231"> 231</a>         X depends on the `render_mode` and input `colors`. If `render_mode` is &quot;RGB&quot;,</span>
+<span id="L232"><a href="#L232"> 232</a>         X is D; if `render_mode` is &quot;D&quot; or &quot;ED&quot;, X is 1; if `render_mode` is &quot;RGB+D&quot; or</span>
+<span id="L233"><a href="#L233"> 233</a>         &quot;RGB+ED&quot;, X is D+1.</span>
+<span id="L234"><a href="#L234"> 234</a> </span>
+<span id="L235"><a href="#L235"> 235</a>         **render_alphas**: The rendered alphas. [..., C, height, width, 1].</span>
+<span id="L236"><a href="#L236"> 236</a> </span>
+<span id="L237"><a href="#L237"> 237</a>         **meta**: A dictionary of intermediate results of the rasterization.</span>
+<span id="L238"><a href="#L238"> 238</a> </span>
+<span id="L239"><a href="#L239"> 239</a>     Examples:</span>
+<span id="L240"><a href="#L240"> 240</a> </span>
+<span id="L241"><a href="#L241"> 241</a>     .. code-block:: python</span>
+<span id="L242"><a href="#L242"> 242</a> </span>
+<span id="L243"><a href="#L243"> 243</a>         &gt;&gt;&gt; # define Gaussians</span>
+<span id="L244"><a href="#L244"> 244</a>         &gt;&gt;&gt; means = torch.randn((100, 3), device=device)</span>
+<span id="L245"><a href="#L245"> 245</a>         &gt;&gt;&gt; quats = torch.randn((100, 4), device=device)</span>
+<span id="L246"><a href="#L246"> 246</a>         &gt;&gt;&gt; scales = torch.rand((100, 3), device=device) * 0.1</span>
+<span id="L247"><a href="#L247"> 247</a>         &gt;&gt;&gt; colors = torch.rand((100, 3), device=device)</span>
+<span id="L248"><a href="#L248"> 248</a>         &gt;&gt;&gt; opacities = torch.rand((100,), device=device)</span>
+<span id="L249"><a href="#L249"> 249</a>         &gt;&gt;&gt; # define cameras</span>
+<span id="L250"><a href="#L250"> 250</a>         &gt;&gt;&gt; viewmats = torch.eye(4, device=device)[None, :, :]</span>
+<span id="L251"><a href="#L251"> 251</a>         &gt;&gt;&gt; Ks = torch.tensor([</span>
+<span id="L252"><a href="#L252"> 252</a>         &gt;&gt;&gt;    [300., 0., 150.], [0., 300., 100.], [0., 0., 1.]], device=device)[None, :, :]</span>
+<span id="L253"><a href="#L253"> 253</a>         &gt;&gt;&gt; width, height = 300, 200</span>
+<span id="L254"><a href="#L254"> 254</a>         &gt;&gt;&gt; # render</span>
+<span id="L255"><a href="#L255"> 255</a>         &gt;&gt;&gt; colors, alphas, meta = rasterization(</span>
+<span id="L256"><a href="#L256"> 256</a>         &gt;&gt;&gt;    means, quats, scales, opacities, colors, viewmats, Ks, width, height</span>
+<span id="L257"><a href="#L257"> 257</a>         &gt;&gt;&gt; )</span>
+<span id="L258"><a href="#L258"> 258</a>         &gt;&gt;&gt; print (colors.shape, alphas.shape)</span>
+<span id="L259"><a href="#L259"> 259</a>         torch.Size([1, 200, 300, 3]) torch.Size([1, 200, 300, 1])</span>
+<span id="L260"><a href="#L260"> 260</a>         &gt;&gt;&gt; print (meta.keys())</span>
+<span id="L261"><a href="#L261"> 261</a>         dict_keys([&#x27;camera_ids&#x27;, &#x27;gaussian_ids&#x27;, &#x27;radii&#x27;, &#x27;means2d&#x27;, &#x27;depths&#x27;, &#x27;conics&#x27;,</span>
+<span id="L262"><a href="#L262"> 262</a>         &#x27;opacities&#x27;, &#x27;tile_width&#x27;, &#x27;tile_height&#x27;, &#x27;tiles_per_gauss&#x27;, &#x27;isect_ids&#x27;,</span>
+<span id="L263"><a href="#L263"> 263</a>         &#x27;flatten_ids&#x27;, &#x27;isect_offsets&#x27;, &#x27;width&#x27;, &#x27;height&#x27;, &#x27;tile_size&#x27;])</span>
+<span id="L264"><a href="#L264"> 264</a> </span>
+<span id="L265"><a href="#L265"> 265</a>     &quot;&quot;&quot;</span>
+<span id="L266"><a href="#L266"> 266</a>     meta = {}</span>
+<span id="L267"><a href="#L267"> 267</a> </span>
+<span id="L268"><a href="#L268"> 268</a>     batch_dims = means.shape[:-2]</span>
+<span id="L269"><a href="#L269"> 269</a>     num_batch_dims = len(batch_dims)</span>
+<span id="L270"><a href="#L270"> 270</a>     B = math.prod(batch_dims)</span>
+<span id="L271"><a href="#L271"> 271</a>     N = means.shape[-2]</span>
+<span id="L272"><a href="#L272"> 272</a>     C = viewmats.shape[-3]</span>
+<span id="L273"><a href="#L273"> 273</a>     I = B * C</span>
+<span id="L274"><a href="#L274"> 274</a>     device = means.device</span>
+<span id="L275"><a href="#L275"> 275</a>     assert means.shape == batch_dims + (N, 3), means.shape</span>
+<span id="L276"><a href="#L276"> 276</a>     if covars is None:</span>
+<span id="L277"><a href="#L277"> 277</a>         assert quats.shape == batch_dims + (N, 4), quats.shape</span>
+<span id="L278"><a href="#L278"> 278</a>         assert scales.shape == batch_dims + (N, 3), scales.shape</span>
+<span id="L279"><a href="#L279"> 279</a>     else:</span>
+<span id="L280"><a href="#L280"> 280</a>         assert covars.shape == batch_dims + (N, 3, 3), covars.shape</span>
+<span id="L281"><a href="#L281"> 281</a>         quats, scales = None, None</span>
+<span id="L282"><a href="#L282"> 282</a>         # convert covars from 3x3 matrix to upper-triangular 6D vector</span>
+<span id="L283"><a href="#L283"> 283</a>         tri_indices = ([0, 0, 0, 1, 1, 2], [0, 1, 2, 1, 2, 2])</span>
+<span id="L284"><a href="#L284"> 284</a>         covars = covars[..., tri_indices[0], tri_indices[1]]</span>
+<span id="L285"><a href="#L285"> 285</a>     assert opacities.shape == batch_dims + (N,), opacities.shape</span>
+<span id="L286"><a href="#L286"> 286</a>     assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape</span>
+<span id="L287"><a href="#L287"> 287</a>     assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape</span>
+<span id="L288"><a href="#L288"> 288</a>     assert render_mode in [&quot;RGB&quot;, &quot;D&quot;, &quot;ED&quot;, &quot;RGB+D&quot;, &quot;RGB+ED&quot;], render_mode</span>
+<span id="L289"><a href="#L289"> 289</a> </span>
+<span id="L290"><a href="#L290"> 290</a>     def reshape_view(C: int, world_view: torch.Tensor, N_world: list) -&gt; torch.Tensor:</span>
+<span id="L291"><a href="#L291"> 291</a>         view_list = list(</span>
+<span id="L292"><a href="#L292"> 292</a>             map(</span>
+<span id="L293"><a href="#L293"> 293</a>                 lambda x: x.split(int(x.shape[0] / C), dim=0),</span>
+<span id="L294"><a href="#L294"> 294</a>                 world_view.split([C * N_i for N_i in N_world], dim=0),</span>
+<span id="L295"><a href="#L295"> 295</a>             )</span>
+<span id="L296"><a href="#L296"> 296</a>         )</span>
+<span id="L297"><a href="#L297"> 297</a>         return torch.stack([torch.cat(l, dim=0) for l in zip(*view_list)], dim=0)</span>
+<span id="L298"><a href="#L298"> 298</a> </span>
+<span id="L299"><a href="#L299"> 299</a>     if sh_degree is None:</span>
+<span id="L300"><a href="#L300"> 300</a>         # treat colors as post-activation values, should be in shape [..., N, D] or [..., C, N, D]</span>
+<span id="L301"><a href="#L301"> 301</a>         assert (</span>
+<span id="L302"><a href="#L302"> 302</a>             colors.dim() == num_batch_dims + 2</span>
+<span id="L303"><a href="#L303"> 303</a>             and colors.shape[:-1] == batch_dims + (N,)</span>
+<span id="L304"><a href="#L304"> 304</a>         ) or (</span>
+<span id="L305"><a href="#L305"> 305</a>             colors.dim() == num_batch_dims + 3</span>
+<span id="L306"><a href="#L306"> 306</a>             and colors.shape[:-1] == batch_dims + (C, N)</span>
+<span id="L307"><a href="#L307"> 307</a>         ), colors.shape</span>
+<span id="L308"><a href="#L308"> 308</a>         if distributed:</span>
+<span id="L309"><a href="#L309"> 309</a>             assert (</span>
+<span id="L310"><a href="#L310"> 310</a>                 colors.dim() == num_batch_dims + 2</span>
+<span id="L311"><a href="#L311"> 311</a>             ), &quot;Distributed mode only supports per-Gaussian colors.&quot;</span>
+<span id="L312"><a href="#L312"> 312</a>     else:</span>
+<span id="L313"><a href="#L313"> 313</a>         # treat colors as SH coefficients, should be in shape [..., N, K, 3] or [..., C, N, K, 3]</span>
+<span id="L314"><a href="#L314"> 314</a>         # Allowing for activating partial SH bands</span>
+<span id="L315"><a href="#L315"> 315</a>         assert (</span>
+<span id="L316"><a href="#L316"> 316</a>             colors.dim() == num_batch_dims + 3</span>
+<span id="L317"><a href="#L317"> 317</a>             and colors.shape[:-2] == batch_dims + (N,)</span>
+<span id="L318"><a href="#L318"> 318</a>             and colors.shape[-1] == 3</span>
+<span id="L319"><a href="#L319"> 319</a>         ) or (</span>
+<span id="L320"><a href="#L320"> 320</a>             colors.dim() == num_batch_dims + 4</span>
+<span id="L321"><a href="#L321"> 321</a>             and colors.shape[:-2] == batch_dims + (C, N)</span>
+<span id="L322"><a href="#L322"> 322</a>             and colors.shape[-1] == 3</span>
+<span id="L323"><a href="#L323"> 323</a>         ), colors.shape</span>
+<span id="L324"><a href="#L324"> 324</a>         assert (sh_degree + 1) ** 2 &lt;= colors.shape[-2], colors.shape</span>
+<span id="L325"><a href="#L325"> 325</a>         if distributed:</span>
+<span id="L326"><a href="#L326"> 326</a>             assert (</span>
+<span id="L327"><a href="#L327"> 327</a>                 colors.dim() == num_batch_dims + 3</span>
+<span id="L328"><a href="#L328"> 328</a>             ), &quot;Distributed mode only supports per-Gaussian colors.&quot;</span>
+<span id="L329"><a href="#L329"> 329</a> </span>
+<span id="L330"><a href="#L330"> 330</a>     if absgrad:</span>
+<span id="L331"><a href="#L331"> 331</a>         assert not distributed, &quot;AbsGrad is not supported in distributed mode.&quot;</span>
+<span id="L332"><a href="#L332"> 332</a> </span>
+<span id="L333"><a href="#L333"> 333</a>     if (</span>
+<span id="L334"><a href="#L334"> 334</a>         radial_coeffs is not None</span>
+<span id="L335"><a href="#L335"> 335</a>         or tangential_coeffs is not None</span>
+<span id="L336"><a href="#L336"> 336</a>         or thin_prism_coeffs is not None</span>
+<span id="L337"><a href="#L337"> 337</a>         or ftheta_coeffs is not None</span>
+<span id="L338"><a href="#L338"> 338</a>         or rolling_shutter != RollingShutterType.GLOBAL</span>
+<span id="L339"><a href="#L339"> 339</a>     ):</span>
+<span id="L340"><a href="#L340"> 340</a>         assert (</span>
+<span id="L341"><a href="#L341"> 341</a>             with_ut</span>
+<span id="L342"><a href="#L342"> 342</a>         ), &quot;Distortion and rolling shutter are only supported with `with_ut=True`.&quot;</span>
+<span id="L343"><a href="#L343"> 343</a> </span>
+<span id="L344"><a href="#L344"> 344</a>     if rolling_shutter != RollingShutterType.GLOBAL:</span>
+<span id="L345"><a href="#L345"> 345</a>         assert (</span>
+<span id="L346"><a href="#L346"> 346</a>             viewmats_rs is not None</span>
+<span id="L347"><a href="#L347"> 347</a>         ), &quot;Rolling shutter requires to provide viewmats_rs.&quot;</span>
+<span id="L348"><a href="#L348"> 348</a>     else:</span>
+<span id="L349"><a href="#L349"> 349</a>         assert (</span>
+<span id="L350"><a href="#L350"> 350</a>             viewmats_rs is None</span>
+<span id="L351"><a href="#L351"> 351</a>         ), &quot;viewmats_rs should be None for global rolling shutter.&quot;</span>
+<span id="L352"><a href="#L352"> 352</a> </span>
+<span id="L353"><a href="#L353"> 353</a>     if with_ut or with_eval3d:</span>
+<span id="L354"><a href="#L354"> 354</a>         assert (quats is not None) and (</span>
+<span id="L355"><a href="#L355"> 355</a>             scales is not None</span>
+<span id="L356"><a href="#L356"> 356</a>         ), &quot;UT and eval3d requires to provide quats and scales.&quot;</span>
+<span id="L357"><a href="#L357"> 357</a>         assert packed is False, &quot;Packed mode is not supported with UT.&quot;</span>
+<span id="L358"><a href="#L358"> 358</a>         assert sparse_grad is False, &quot;Sparse grad is not supported with UT.&quot;</span>
+<span id="L359"><a href="#L359"> 359</a> </span>
+<span id="L360"><a href="#L360"> 360</a>     # Implement the multi-GPU strategy proposed in</span>
+<span id="L361"><a href="#L361"> 361</a>     # `On Scaling Up 3D Gaussian Splatting Training &lt;https://arxiv.org/abs/2406.18533&gt;`.</span>
+<span id="L362"><a href="#L362"> 362</a>     #</span>
+<span id="L363"><a href="#L363"> 363</a>     # If in distributed mode, we distribute the projection computation over Gaussians</span>
+<span id="L364"><a href="#L364"> 364</a>     # and the rasterize computation over cameras. So first we gather the cameras</span>
+<span id="L365"><a href="#L365"> 365</a>     # from all ranks for projection.</span>
+<span id="L366"><a href="#L366"> 366</a>     if distributed:</span>
+<span id="L367"><a href="#L367"> 367</a>         assert batch_dims == (), &quot;Distributed mode does not support batch dimensions&quot;</span>
+<span id="L368"><a href="#L368"> 368</a>         world_rank = torch.distributed.get_rank()</span>
+<span id="L369"><a href="#L369"> 369</a>         world_size = torch.distributed.get_world_size()</span>
+<span id="L370"><a href="#L370"> 370</a> </span>
+<span id="L371"><a href="#L371"> 371</a>         # Gather the number of Gaussians in each rank.</span>
+<span id="L372"><a href="#L372"> 372</a>         N_world = all_gather_int32(world_size, N, device=device)</span>
+<span id="L373"><a href="#L373"> 373</a> </span>
+<span id="L374"><a href="#L374"> 374</a>         # Enforce that the number of cameras is the same across all ranks.</span>
+<span id="L375"><a href="#L375"> 375</a>         C_world = [C] * world_size</span>
+<span id="L376"><a href="#L376"> 376</a>         viewmats, Ks = all_gather_tensor_list(world_size, [viewmats, Ks])</span>
+<span id="L377"><a href="#L377"> 377</a>         if viewmats_rs is not None:</span>
+<span id="L378"><a href="#L378"> 378</a>             (viewmats_rs,) = all_gather_tensor_list(world_size, [viewmats_rs])</span>
+<span id="L379"><a href="#L379"> 379</a> </span>
+<span id="L380"><a href="#L380"> 380</a>         # Silently change C from local #Cameras to global #Cameras.</span>
+<span id="L381"><a href="#L381"> 381</a>         C = len(viewmats)</span>
+<span id="L382"><a href="#L382"> 382</a> </span>
+<span id="L383"><a href="#L383"> 383</a>     if with_ut:</span>
+<span id="L384"><a href="#L384"> 384</a>         proj_results = fully_fused_projection_with_ut(</span>
+<span id="L385"><a href="#L385"> 385</a>             means,</span>
+<span id="L386"><a href="#L386"> 386</a>             quats,</span>
+<span id="L387"><a href="#L387"> 387</a>             scales,</span>
+<span id="L388"><a href="#L388"> 388</a>             opacities,  # use opacities to compute a tigher bound for radii.</span>
+<span id="L389"><a href="#L389"> 389</a>             viewmats,</span>
+<span id="L390"><a href="#L390"> 390</a>             Ks,</span>
+<span id="L391"><a href="#L391"> 391</a>             width,</span>
+<span id="L392"><a href="#L392"> 392</a>             height,</span>
+<span id="L393"><a href="#L393"> 393</a>             eps2d=eps2d,</span>
+<span id="L394"><a href="#L394"> 394</a>             near_plane=near_plane,</span>
+<span id="L395"><a href="#L395"> 395</a>             far_plane=far_plane,</span>
+<span id="L396"><a href="#L396"> 396</a>             radius_clip=radius_clip,</span>
+<span id="L397"><a href="#L397"> 397</a>             calc_compensations=(rasterize_mode == &quot;antialiased&quot;),</span>
+<span id="L398"><a href="#L398"> 398</a>             camera_model=camera_model,</span>
+<span id="L399"><a href="#L399"> 399</a>             radial_coeffs=radial_coeffs,</span>
+<span id="L400"><a href="#L400"> 400</a>             tangential_coeffs=tangential_coeffs,</span>
+<span id="L401"><a href="#L401"> 401</a>             thin_prism_coeffs=thin_prism_coeffs,</span>
+<span id="L402"><a href="#L402"> 402</a>             ftheta_coeffs=ftheta_coeffs,</span>
+<span id="L403"><a href="#L403"> 403</a>             rolling_shutter=rolling_shutter,</span>
+<span id="L404"><a href="#L404"> 404</a>             viewmats_rs=viewmats_rs,</span>
+<span id="L405"><a href="#L405"> 405</a>         )</span>
+<span id="L406"><a href="#L406"> 406</a> </span>
+<span id="L407"><a href="#L407"> 407</a>     else:</span>
+<span id="L408"><a href="#L408"> 408</a>         # Project Gaussians to 2D. Directly pass in {quats, scales} is faster than precomputing covars.</span>
+<span id="L409"><a href="#L409"> 409</a>         proj_results = fully_fused_projection(</span>
+<span id="L410"><a href="#L410"> 410</a>             means,</span>
+<span id="L411"><a href="#L411"> 411</a>             covars,</span>
+<span id="L412"><a href="#L412"> 412</a>             quats,</span>
+<span id="L413"><a href="#L413"> 413</a>             scales,</span>
+<span id="L414"><a href="#L414"> 414</a>             viewmats,</span>
+<span id="L415"><a href="#L415"> 415</a>             Ks,</span>
+<span id="L416"><a href="#L416"> 416</a>             width,</span>
+<span id="L417"><a href="#L417"> 417</a>             height,</span>
+<span id="L418"><a href="#L418"> 418</a>             eps2d=eps2d,</span>
+<span id="L419"><a href="#L419"> 419</a>             packed=packed,</span>
+<span id="L420"><a href="#L420"> 420</a>             near_plane=near_plane,</span>
+<span id="L421"><a href="#L421"> 421</a>             far_plane=far_plane,</span>
+<span id="L422"><a href="#L422"> 422</a>             radius_clip=radius_clip,</span>
+<span id="L423"><a href="#L423"> 423</a>             sparse_grad=sparse_grad,</span>
+<span id="L424"><a href="#L424"> 424</a>             calc_compensations=(rasterize_mode == &quot;antialiased&quot;),</span>
+<span id="L425"><a href="#L425"> 425</a>             camera_model=camera_model,</span>
+<span id="L426"><a href="#L426"> 426</a>             opacities=opacities,  # use opacities to compute a tigher bound for radii.</span>
+<span id="L427"><a href="#L427"> 427</a>         )</span>
+<span id="L428"><a href="#L428"> 428</a> </span>
+<span id="L429"><a href="#L429"> 429</a>     if packed:</span>
+<span id="L430"><a href="#L430"> 430</a>         # The results are packed into shape [nnz, ...]. All elements are valid.</span>
+<span id="L431"><a href="#L431"> 431</a>         (</span>
+<span id="L432"><a href="#L432"> 432</a>             batch_ids,</span>
+<span id="L433"><a href="#L433"> 433</a>             camera_ids,</span>
+<span id="L434"><a href="#L434"> 434</a>             gaussian_ids,</span>
+<span id="L435"><a href="#L435"> 435</a>             radii,</span>
+<span id="L436"><a href="#L436"> 436</a>             means2d,</span>
+<span id="L437"><a href="#L437"> 437</a>             depths,</span>
+<span id="L438"><a href="#L438"> 438</a>             conics,</span>
+<span id="L439"><a href="#L439"> 439</a>             compensations,</span>
+<span id="L440"><a href="#L440"> 440</a>         ) = proj_results</span>
+<span id="L441"><a href="#L441"> 441</a>         opacities = opacities.view(B, N)[batch_ids, gaussian_ids]  # [nnz]</span>
+<span id="L442"><a href="#L442"> 442</a>         image_ids = batch_ids * C + camera_ids</span>
+<span id="L443"><a href="#L443"> 443</a>     else:</span>
+<span id="L444"><a href="#L444"> 444</a>         # The results are with shape [..., C, N, ...]. Only the elements with radii &gt; 0 are valid.</span>
+<span id="L445"><a href="#L445"> 445</a>         radii, means2d, depths, conics, compensations = proj_results</span>
+<span id="L446"><a href="#L446"> 446</a>         opacities = torch.broadcast_to(</span>
+<span id="L447"><a href="#L447"> 447</a>             opacities[..., None, :], batch_dims + (C, N)</span>
+<span id="L448"><a href="#L448"> 448</a>         )  # [..., C, N]</span>
+<span id="L449"><a href="#L449"> 449</a>         batch_ids, camera_ids, gaussian_ids = None, None, None</span>
+<span id="L450"><a href="#L450"> 450</a>         image_ids = None</span>
+<span id="L451"><a href="#L451"> 451</a> </span>
+<span id="L452"><a href="#L452"> 452</a>     if compensations is not None:</span>
+<span id="L453"><a href="#L453"> 453</a>         opacities = opacities * compensations</span>
+<span id="L454"><a href="#L454"> 454</a> </span>
+<span id="L455"><a href="#L455"> 455</a>     meta.update(</span>
+<span id="L456"><a href="#L456"> 456</a>         {</span>
+<span id="L457"><a href="#L457"> 457</a>             # global batch and camera ids</span>
+<span id="L458"><a href="#L458"> 458</a>             &quot;batch_ids&quot;: batch_ids,</span>
+<span id="L459"><a href="#L459"> 459</a>             &quot;camera_ids&quot;: camera_ids,</span>
+<span id="L460"><a href="#L460"> 460</a>             # local gaussian_ids</span>
+<span id="L461"><a href="#L461"> 461</a>             &quot;gaussian_ids&quot;: gaussian_ids,</span>
+<span id="L462"><a href="#L462"> 462</a>             &quot;radii&quot;: radii,</span>
+<span id="L463"><a href="#L463"> 463</a>             &quot;means2d&quot;: means2d,</span>
+<span id="L464"><a href="#L464"> 464</a>             &quot;depths&quot;: depths,</span>
+<span id="L465"><a href="#L465"> 465</a>             &quot;conics&quot;: conics,</span>
+<span id="L466"><a href="#L466"> 466</a>             &quot;opacities&quot;: opacities,</span>
+<span id="L467"><a href="#L467"> 467</a>         }</span>
+<span id="L468"><a href="#L468"> 468</a>     )</span>
+<span id="L469"><a href="#L469"> 469</a> </span>
+<span id="L470"><a href="#L470"> 470</a>     # Turn colors into [..., C, N, D] or [..., nnz, D] to pass into rasterize_to_pixels()</span>
+<span id="L471"><a href="#L471"> 471</a>     if sh_degree is None:</span>
+<span id="L472"><a href="#L472"> 472</a>         # Colors are post-activation values, with shape [..., N, D] or [..., C, N, D]</span>
+<span id="L473"><a href="#L473"> 473</a>         if packed:</span>
+<span id="L474"><a href="#L474"> 474</a>             if colors.dim() == num_batch_dims + 2:</span>
+<span id="L475"><a href="#L475"> 475</a>                 # Turn [..., N, D] into [nnz, D]</span>
+<span id="L476"><a href="#L476"> 476</a>                 colors = colors.view(B, N, -1)[batch_ids, gaussian_ids]</span>
+<span id="L477"><a href="#L477"> 477</a>             else:</span>
+<span id="L478"><a href="#L478"> 478</a>                 # Turn [..., C, N, D] into [nnz, D]</span>
+<span id="L479"><a href="#L479"> 479</a>                 colors = colors.view(B, C, N, -1)[batch_ids, camera_ids, gaussian_ids]</span>
+<span id="L480"><a href="#L480"> 480</a>         else:</span>
+<span id="L481"><a href="#L481"> 481</a>             if colors.dim() == num_batch_dims + 2:</span>
+<span id="L482"><a href="#L482"> 482</a>                 # Turn [..., N, D] into [..., C, N, D]</span>
+<span id="L483"><a href="#L483"> 483</a>                 colors = torch.broadcast_to(</span>
+<span id="L484"><a href="#L484"> 484</a>                     colors[..., None, :, :], batch_dims + (C, N, -1)</span>
+<span id="L485"><a href="#L485"> 485</a>                 )</span>
+<span id="L486"><a href="#L486"> 486</a>             else:</span>
+<span id="L487"><a href="#L487"> 487</a>                 # colors is already [..., C, N, D]</span>
+<span id="L488"><a href="#L488"> 488</a>                 pass</span>
+<span id="L489"><a href="#L489"> 489</a>     else:</span>
+<span id="L490"><a href="#L490"> 490</a>         # Colors are SH coefficients, with shape [..., N, K, 3] or [..., C, N, K, 3]</span>
+<span id="L491"><a href="#L491"> 491</a>         campos = torch.inverse(viewmats)[..., :3, 3]  # [..., C, 3]</span>
+<span id="L492"><a href="#L492"> 492</a>         if viewmats_rs is not None:</span>
+<span id="L493"><a href="#L493"> 493</a>             campos_rs = torch.inverse(viewmats_rs)[..., :3, 3]</span>
+<span id="L494"><a href="#L494"> 494</a>             campos = 0.5 * (campos + campos_rs)  # [..., C, 3]</span>
+<span id="L495"><a href="#L495"> 495</a>         if packed:</span>
+<span id="L496"><a href="#L496"> 496</a>             dirs = (</span>
+<span id="L497"><a href="#L497"> 497</a>                 means.view(B, N, 3)[batch_ids, gaussian_ids]</span>
+<span id="L498"><a href="#L498"> 498</a>                 - campos.view(B, C, 3)[batch_ids, camera_ids]</span>
+<span id="L499"><a href="#L499"> 499</a>             )  # [nnz, 3]</span>
+<span id="L500"><a href="#L500"> 500</a>             masks = (radii &gt; 0).all(dim=-1)  # [nnz]</span>
+<span id="L501"><a href="#L501"> 501</a>             if colors.dim() == num_batch_dims + 3:</span>
+<span id="L502"><a href="#L502"> 502</a>                 # Turn [..., N, K, 3] into [nnz, 3]</span>
+<span id="L503"><a href="#L503"> 503</a>                 shs = colors.view(B, N, -1, 3)[batch_ids, gaussian_ids]  # [nnz, K, 3]</span>
+<span id="L504"><a href="#L504"> 504</a>             else:</span>
+<span id="L505"><a href="#L505"> 505</a>                 # Turn [..., C, N, K, 3] into [nnz, 3]</span>
+<span id="L506"><a href="#L506"> 506</a>                 shs = colors.view(B, C, N, -1, 3)[</span>
+<span id="L507"><a href="#L507"> 507</a>                     batch_ids, camera_ids, gaussian_ids</span>
+<span id="L508"><a href="#L508"> 508</a>                 ]  # [nnz, K, 3]</span>
+<span id="L509"><a href="#L509"> 509</a>             colors = spherical_harmonics(sh_degree, dirs, shs, masks=masks)  # [nnz, 3]</span>
+<span id="L510"><a href="#L510"> 510</a>         else:</span>
+<span id="L511"><a href="#L511"> 511</a>             dirs = means[..., None, :, :] - campos[..., None, :]  # [..., C, N, 3]</span>
+<span id="L512"><a href="#L512"> 512</a>             masks = (radii &gt; 0).all(dim=-1)  # [..., C, N]</span>
+<span id="L513"><a href="#L513"> 513</a>             if colors.dim() == num_batch_dims + 3:</span>
+<span id="L514"><a href="#L514"> 514</a>                 # Turn [..., N, K, 3] into [..., C, N, K, 3]</span>
+<span id="L515"><a href="#L515"> 515</a>                 shs = torch.broadcast_to(</span>
+<span id="L516"><a href="#L516"> 516</a>                     colors[..., None, :, :, :], batch_dims + (C, N, -1, 3)</span>
+<span id="L517"><a href="#L517"> 517</a>                 )</span>
+<span id="L518"><a href="#L518"> 518</a>             else:</span>
+<span id="L519"><a href="#L519"> 519</a>                 # colors is already [..., C, N, K, 3]</span>
+<span id="L520"><a href="#L520"> 520</a>                 shs = colors</span>
+<span id="L521"><a href="#L521"> 521</a>             colors = spherical_harmonics(</span>
+<span id="L522"><a href="#L522"> 522</a>                 sh_degree, dirs, shs, masks=masks</span>
+<span id="L523"><a href="#L523"> 523</a>             )  # [..., C, N, 3]</span>
+<span id="L524"><a href="#L524"> 524</a>         # make it apple-to-apple with Inria&#x27;s CUDA Backend.</span>
+<span id="L525"><a href="#L525"> 525</a>         colors = torch.clamp_min(colors + 0.5, 0.0)</span>
+<span id="L526"><a href="#L526"> 526</a> </span>
+<span id="L527"><a href="#L527"> 527</a>     # If in distributed mode, we need to scatter the GSs to the destination ranks, based</span>
+<span id="L528"><a href="#L528"> 528</a>     # on which cameras they are visible to, which we already figured out in the projection</span>
+<span id="L529"><a href="#L529"> 529</a>     # stage.</span>
+<span id="L530"><a href="#L530"> 530</a>     if distributed:</span>
+<span id="L531"><a href="#L531"> 531</a>         if packed:</span>
+<span id="L532"><a href="#L532"> 532</a>             # count how many elements need to be sent to each rank</span>
+<span id="L533"><a href="#L533"> 533</a>             cnts = torch.bincount(camera_ids, minlength=C)  # all cameras</span>
+<span id="L534"><a href="#L534"> 534</a>             cnts = cnts.split(C_world, dim=0)</span>
+<span id="L535"><a href="#L535"> 535</a>             cnts = [cuts.sum() for cuts in cnts]</span>
+<span id="L536"><a href="#L536"> 536</a> </span>
+<span id="L537"><a href="#L537"> 537</a>             # all to all communication across all ranks. After this step, each rank</span>
+<span id="L538"><a href="#L538"> 538</a>             # would have all the necessary GSs to render its own images.</span>
+<span id="L539"><a href="#L539"> 539</a>             collected_splits = all_to_all_int32(world_size, cnts, device=device)</span>
+<span id="L540"><a href="#L540"> 540</a>             (radii,) = all_to_all_tensor_list(</span>
+<span id="L541"><a href="#L541"> 541</a>                 world_size, [radii], cnts, output_splits=collected_splits</span>
+<span id="L542"><a href="#L542"> 542</a>             )</span>
+<span id="L543"><a href="#L543"> 543</a>             (means2d, depths, conics, opacities, colors) = all_to_all_tensor_list(</span>
+<span id="L544"><a href="#L544"> 544</a>                 world_size,</span>
+<span id="L545"><a href="#L545"> 545</a>                 [means2d, depths, conics, opacities, colors],</span>
+<span id="L546"><a href="#L546"> 546</a>                 cnts,</span>
+<span id="L547"><a href="#L547"> 547</a>                 output_splits=collected_splits,</span>
+<span id="L548"><a href="#L548"> 548</a>             )</span>
+<span id="L549"><a href="#L549"> 549</a> </span>
+<span id="L550"><a href="#L550"> 550</a>             # before sending the data, we should turn the camera_ids from global to local.</span>
+<span id="L551"><a href="#L551"> 551</a>             # i.e. the camera_ids produced by the projection stage are over all cameras world-wide,</span>
+<span id="L552"><a href="#L552"> 552</a>             # so we need to turn them into camera_ids that are local to each rank.</span>
+<span id="L553"><a href="#L553"> 553</a>             offsets = torch.tensor(</span>
+<span id="L554"><a href="#L554"> 554</a>                 [0] + C_world[:-1], device=camera_ids.device, dtype=camera_ids.dtype</span>
+<span id="L555"><a href="#L555"> 555</a>             )</span>
+<span id="L556"><a href="#L556"> 556</a>             offsets = torch.cumsum(offsets, dim=0)</span>
+<span id="L557"><a href="#L557"> 557</a>             offsets = offsets.repeat_interleave(torch.stack(cnts))</span>
+<span id="L558"><a href="#L558"> 558</a>             camera_ids = camera_ids - offsets</span>
+<span id="L559"><a href="#L559"> 559</a> </span>
+<span id="L560"><a href="#L560"> 560</a>             # and turn gaussian ids from local to global.</span>
+<span id="L561"><a href="#L561"> 561</a>             offsets = torch.tensor(</span>
+<span id="L562"><a href="#L562"> 562</a>                 [0] + N_world[:-1],</span>
+<span id="L563"><a href="#L563"> 563</a>                 device=gaussian_ids.device,</span>
+<span id="L564"><a href="#L564"> 564</a>                 dtype=gaussian_ids.dtype,</span>
+<span id="L565"><a href="#L565"> 565</a>             )</span>
+<span id="L566"><a href="#L566"> 566</a>             offsets = torch.cumsum(offsets, dim=0)</span>
+<span id="L567"><a href="#L567"> 567</a>             offsets = offsets.repeat_interleave(torch.stack(cnts))</span>
+<span id="L568"><a href="#L568"> 568</a>             gaussian_ids = gaussian_ids + offsets</span>
+<span id="L569"><a href="#L569"> 569</a> </span>
+<span id="L570"><a href="#L570"> 570</a>             # all to all communication across all ranks.</span>
+<span id="L571"><a href="#L571"> 571</a>             (camera_ids, gaussian_ids) = all_to_all_tensor_list(</span>
+<span id="L572"><a href="#L572"> 572</a>                 world_size,</span>
+<span id="L573"><a href="#L573"> 573</a>                 [camera_ids, gaussian_ids],</span>
+<span id="L574"><a href="#L574"> 574</a>                 cnts,</span>
+<span id="L575"><a href="#L575"> 575</a>                 output_splits=collected_splits,</span>
+<span id="L576"><a href="#L576"> 576</a>             )</span>
+<span id="L577"><a href="#L577"> 577</a> </span>
+<span id="L578"><a href="#L578"> 578</a>             # Silently change C from global #Cameras to local #Cameras.</span>
+<span id="L579"><a href="#L579"> 579</a>             C = C_world[world_rank]</span>
+<span id="L580"><a href="#L580"> 580</a> </span>
+<span id="L581"><a href="#L581"> 581</a>         else:</span>
+<span id="L582"><a href="#L582"> 582</a>             # Silently change C from global #Cameras to local #Cameras.</span>
+<span id="L583"><a href="#L583"> 583</a>             C = C_world[world_rank]</span>
+<span id="L584"><a href="#L584"> 584</a> </span>
+<span id="L585"><a href="#L585"> 585</a>             # all to all communication across all ranks. After this step, each rank</span>
+<span id="L586"><a href="#L586"> 586</a>             # would have all the necessary GSs to render its own images.</span>
+<span id="L587"><a href="#L587"> 587</a>             (radii,) = all_to_all_tensor_list(</span>
+<span id="L588"><a href="#L588"> 588</a>                 world_size,</span>
+<span id="L589"><a href="#L589"> 589</a>                 [radii.flatten(0, 1)],</span>
+<span id="L590"><a href="#L590"> 590</a>                 splits=[C_i * N for C_i in C_world],</span>
+<span id="L591"><a href="#L591"> 591</a>                 output_splits=[C * N_i for N_i in N_world],</span>
+<span id="L592"><a href="#L592"> 592</a>             )</span>
+<span id="L593"><a href="#L593"> 593</a>             radii = reshape_view(C, radii, N_world)</span>
+<span id="L594"><a href="#L594"> 594</a> </span>
+<span id="L595"><a href="#L595"> 595</a>             (means2d, depths, conics, opacities, colors) = all_to_all_tensor_list(</span>
+<span id="L596"><a href="#L596"> 596</a>                 world_size,</span>
+<span id="L597"><a href="#L597"> 597</a>                 [</span>
+<span id="L598"><a href="#L598"> 598</a>                     means2d.flatten(0, 1),</span>
+<span id="L599"><a href="#L599"> 599</a>                     depths.flatten(0, 1),</span>
+<span id="L600"><a href="#L600"> 600</a>                     conics.flatten(0, 1),</span>
+<span id="L601"><a href="#L601"> 601</a>                     opacities.flatten(0, 1),</span>
+<span id="L602"><a href="#L602"> 602</a>                     colors.flatten(0, 1),</span>
+<span id="L603"><a href="#L603"> 603</a>                 ],</span>
+<span id="L604"><a href="#L604"> 604</a>                 splits=[C_i * N for C_i in C_world],</span>
+<span id="L605"><a href="#L605"> 605</a>                 output_splits=[C * N_i for N_i in N_world],</span>
+<span id="L606"><a href="#L606"> 606</a>             )</span>
+<span id="L607"><a href="#L607"> 607</a>             means2d = reshape_view(C, means2d, N_world)</span>
+<span id="L608"><a href="#L608"> 608</a>             depths = reshape_view(C, depths, N_world)</span>
+<span id="L609"><a href="#L609"> 609</a>             conics = reshape_view(C, conics, N_world)</span>
+<span id="L610"><a href="#L610"> 610</a>             opacities = reshape_view(C, opacities, N_world)</span>
+<span id="L611"><a href="#L611"> 611</a>             colors = reshape_view(C, colors, N_world)</span>
+<span id="L612"><a href="#L612"> 612</a> </span>
+<span id="L613"><a href="#L613"> 613</a>     # Rasterize to pixels</span>
+<span id="L614"><a href="#L614"> 614</a>     if render_mode in [&quot;RGB+D&quot;, &quot;RGB+ED&quot;]:</span>
+<span id="L615"><a href="#L615"> 615</a>         colors = torch.cat((colors, depths[..., None]), dim=-1)</span>
+<span id="L616"><a href="#L616"> 616</a>         if backgrounds is not None:</span>
+<span id="L617"><a href="#L617"> 617</a>             backgrounds = torch.cat(</span>
+<span id="L618"><a href="#L618"> 618</a>                 [</span>
+<span id="L619"><a href="#L619"> 619</a>                     backgrounds,</span>
+<span id="L620"><a href="#L620"> 620</a>                     torch.zeros(batch_dims + (C, 1), device=backgrounds.device),</span>
+<span id="L621"><a href="#L621"> 621</a>                 ],</span>
+<span id="L622"><a href="#L622"> 622</a>                 dim=-1,</span>
+<span id="L623"><a href="#L623"> 623</a>             )</span>
+<span id="L624"><a href="#L624"> 624</a>     elif render_mode in [&quot;D&quot;, &quot;ED&quot;]:</span>
+<span id="L625"><a href="#L625"> 625</a>         colors = depths[..., None]</span>
+<span id="L626"><a href="#L626"> 626</a>         if backgrounds is not None:</span>
+<span id="L627"><a href="#L627"> 627</a>             backgrounds = torch.zeros(batch_dims + (C, 1), device=backgrounds.device)</span>
+<span id="L628"><a href="#L628"> 628</a>     else:  # RGB</span>
+<span id="L629"><a href="#L629"> 629</a>         pass</span>
+<span id="L630"><a href="#L630"> 630</a> </span>
+<span id="L631"><a href="#L631"> 631</a>     # Identify intersecting tiles</span>
+<span id="L632"><a href="#L632"> 632</a>     tile_width = math.ceil(width / float(tile_size))</span>
+<span id="L633"><a href="#L633"> 633</a>     tile_height = math.ceil(height / float(tile_size))</span>
+<span id="L634"><a href="#L634"> 634</a>     tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(</span>
+<span id="L635"><a href="#L635"> 635</a>         means2d,</span>
+<span id="L636"><a href="#L636"> 636</a>         radii,</span>
+<span id="L637"><a href="#L637"> 637</a>         depths,</span>
+<span id="L638"><a href="#L638"> 638</a>         tile_size,</span>
+<span id="L639"><a href="#L639"> 639</a>         tile_width,</span>
+<span id="L640"><a href="#L640"> 640</a>         tile_height,</span>
+<span id="L641"><a href="#L641"> 641</a>         segmented=segmented,</span>
+<span id="L642"><a href="#L642"> 642</a>         packed=packed,</span>
+<span id="L643"><a href="#L643"> 643</a>         n_images=I,</span>
+<span id="L644"><a href="#L644"> 644</a>         image_ids=image_ids,</span>
+<span id="L645"><a href="#L645"> 645</a>         gaussian_ids=gaussian_ids,</span>
+<span id="L646"><a href="#L646"> 646</a>     )</span>
+<span id="L647"><a href="#L647"> 647</a>     # print(&quot;rank&quot;, world_rank, &quot;Before isect_offset_encode&quot;)</span>
+<span id="L648"><a href="#L648"> 648</a>     isect_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)</span>
+<span id="L649"><a href="#L649"> 649</a>     isect_offsets = isect_offsets.reshape(batch_dims + (C, tile_height, tile_width))</span>
+<span id="L650"><a href="#L650"> 650</a> </span>
+<span id="L651"><a href="#L651"> 651</a>     meta.update(</span>
+<span id="L652"><a href="#L652"> 652</a>         {</span>
+<span id="L653"><a href="#L653"> 653</a>             &quot;tile_width&quot;: tile_width,</span>
+<span id="L654"><a href="#L654"> 654</a>             &quot;tile_height&quot;: tile_height,</span>
+<span id="L655"><a href="#L655"> 655</a>             &quot;tiles_per_gauss&quot;: tiles_per_gauss,</span>
+<span id="L656"><a href="#L656"> 656</a>             &quot;isect_ids&quot;: isect_ids,</span>
+<span id="L657"><a href="#L657"> 657</a>             &quot;flatten_ids&quot;: flatten_ids,</span>
+<span id="L658"><a href="#L658"> 658</a>             &quot;isect_offsets&quot;: isect_offsets,</span>
+<span id="L659"><a href="#L659"> 659</a>             &quot;width&quot;: width,</span>
+<span id="L660"><a href="#L660"> 660</a>             &quot;height&quot;: height,</span>
+<span id="L661"><a href="#L661"> 661</a>             &quot;tile_size&quot;: tile_size,</span>
+<span id="L662"><a href="#L662"> 662</a>             &quot;n_batches&quot;: B,</span>
+<span id="L663"><a href="#L663"> 663</a>             &quot;n_cameras&quot;: C,</span>
+<span id="L664"><a href="#L664"> 664</a>         }</span>
+<span id="L665"><a href="#L665"> 665</a>     )</span>
+<span id="L666"><a href="#L666"> 666</a> </span>
+<span id="L667"><a href="#L667"> 667</a>     # print(&quot;rank&quot;, world_rank, &quot;Before rasterize_to_pixels&quot;)</span>
+<span id="L668"><a href="#L668"> 668</a>     if colors.shape[-1] &gt; channel_chunk:</span>
+<span id="L669"><a href="#L669"> 669</a>         # slice into chunks</span>
+<span id="L670"><a href="#L670"> 670</a>         n_chunks = (colors.shape[-1] + channel_chunk - 1) // channel_chunk</span>
+<span id="L671"><a href="#L671"> 671</a>         render_colors, render_alphas = [], []</span>
+<span id="L672"><a href="#L672"> 672</a>         for i in range(n_chunks):</span>
+<span id="L673"><a href="#L673"> 673</a>             colors_chunk = colors[..., i * channel_chunk : (i + 1) * channel_chunk]</span>
+<span id="L674"><a href="#L674"> 674</a>             backgrounds_chunk = (</span>
+<span id="L675"><a href="#L675"> 675</a>                 backgrounds[..., i * channel_chunk : (i + 1) * channel_chunk]</span>
+<span id="L676"><a href="#L676"> 676</a>                 if backgrounds is not None</span>
+<span id="L677"><a href="#L677"> 677</a>                 else None</span>
+<span id="L678"><a href="#L678"> 678</a>             )</span>
+<span id="L679"><a href="#L679"> 679</a>             if with_eval3d:</span>
+<span id="L680"><a href="#L680"> 680</a>                 render_colors_, render_alphas_ = rasterize_to_pixels_eval3d(</span>
+<span id="L681"><a href="#L681"> 681</a>                     means,</span>
+<span id="L682"><a href="#L682"> 682</a>                     quats,</span>
+<span id="L683"><a href="#L683"> 683</a>                     scales,</span>
+<span id="L684"><a href="#L684"> 684</a>                     colors_chunk,</span>
+<span id="L685"><a href="#L685"> 685</a>                     opacities,</span>
+<span id="L686"><a href="#L686"> 686</a>                     viewmats,</span>
+<span id="L687"><a href="#L687"> 687</a>                     Ks,</span>
+<span id="L688"><a href="#L688"> 688</a>                     width,</span>
+<span id="L689"><a href="#L689"> 689</a>                     height,</span>
+<span id="L690"><a href="#L690"> 690</a>                     tile_size,</span>
+<span id="L691"><a href="#L691"> 691</a>                     isect_offsets,</span>
+<span id="L692"><a href="#L692"> 692</a>                     flatten_ids,</span>
+<span id="L693"><a href="#L693"> 693</a>                     backgrounds=backgrounds_chunk,</span>
+<span id="L694"><a href="#L694"> 694</a>                     camera_model=camera_model,</span>
+<span id="L695"><a href="#L695"> 695</a>                     radial_coeffs=radial_coeffs,</span>
+<span id="L696"><a href="#L696"> 696</a>                     tangential_coeffs=tangential_coeffs,</span>
+<span id="L697"><a href="#L697"> 697</a>                     thin_prism_coeffs=thin_prism_coeffs,</span>
+<span id="L698"><a href="#L698"> 698</a>                     ftheta_coeffs=ftheta_coeffs,</span>
+<span id="L699"><a href="#L699"> 699</a>                     rolling_shutter=rolling_shutter,</span>
+<span id="L700"><a href="#L700"> 700</a>                     viewmats_rs=viewmats_rs,</span>
+<span id="L701"><a href="#L701"> 701</a>                 )</span>
+<span id="L702"><a href="#L702"> 702</a>             else:</span>
+<span id="L703"><a href="#L703"> 703</a>                 render_colors_, render_alphas_ = rasterize_to_pixels(</span>
+<span id="L704"><a href="#L704"> 704</a>                     means2d,</span>
+<span id="L705"><a href="#L705"> 705</a>                     conics,</span>
+<span id="L706"><a href="#L706"> 706</a>                     colors_chunk,</span>
+<span id="L707"><a href="#L707"> 707</a>                     opacities,</span>
+<span id="L708"><a href="#L708"> 708</a>                     width,</span>
+<span id="L709"><a href="#L709"> 709</a>                     height,</span>
+<span id="L710"><a href="#L710"> 710</a>                     tile_size,</span>
+<span id="L711"><a href="#L711"> 711</a>                     isect_offsets,</span>
+<span id="L712"><a href="#L712"> 712</a>                     flatten_ids,</span>
+<span id="L713"><a href="#L713"> 713</a>                     backgrounds=backgrounds_chunk,</span>
+<span id="L714"><a href="#L714"> 714</a>                     packed=packed,</span>
+<span id="L715"><a href="#L715"> 715</a>                     absgrad=absgrad,</span>
+<span id="L716"><a href="#L716"> 716</a>                 )</span>
+<span id="L717"><a href="#L717"> 717</a>             render_colors.append(render_colors_)</span>
+<span id="L718"><a href="#L718"> 718</a>             render_alphas.append(render_alphas_)</span>
+<span id="L719"><a href="#L719"> 719</a>         render_colors = torch.cat(render_colors, dim=-1)</span>
+<span id="L720"><a href="#L720"> 720</a>         render_alphas = render_alphas[0]  # discard the rest</span>
+<span id="L721"><a href="#L721"> 721</a>     else:</span>
+<span id="L722"><a href="#L722"> 722</a>         if with_eval3d:</span>
+<span id="L723"><a href="#L723"> 723</a>             render_colors, render_alphas = rasterize_to_pixels_eval3d(</span>
+<span id="L724"><a href="#L724"> 724</a>                 means,</span>
+<span id="L725"><a href="#L725"> 725</a>                 quats,</span>
+<span id="L726"><a href="#L726"> 726</a>                 scales,</span>
+<span id="L727"><a href="#L727"> 727</a>                 colors,</span>
+<span id="L728"><a href="#L728"> 728</a>                 opacities,</span>
+<span id="L729"><a href="#L729"> 729</a>                 viewmats,</span>
+<span id="L730"><a href="#L730"> 730</a>                 Ks,</span>
+<span id="L731"><a href="#L731"> 731</a>                 width,</span>
+<span id="L732"><a href="#L732"> 732</a>                 height,</span>
+<span id="L733"><a href="#L733"> 733</a>                 tile_size,</span>
+<span id="L734"><a href="#L734"> 734</a>                 isect_offsets,</span>
+<span id="L735"><a href="#L735"> 735</a>                 flatten_ids,</span>
+<span id="L736"><a href="#L736"> 736</a>                 backgrounds=backgrounds,</span>
+<span id="L737"><a href="#L737"> 737</a>                 camera_model=camera_model,</span>
+<span id="L738"><a href="#L738"> 738</a>                 radial_coeffs=radial_coeffs,</span>
+<span id="L739"><a href="#L739"> 739</a>                 tangential_coeffs=tangential_coeffs,</span>
+<span id="L740"><a href="#L740"> 740</a>                 thin_prism_coeffs=thin_prism_coeffs,</span>
+<span id="L741"><a href="#L741"> 741</a>                 ftheta_coeffs=ftheta_coeffs,</span>
+<span id="L742"><a href="#L742"> 742</a>                 rolling_shutter=rolling_shutter,</span>
+<span id="L743"><a href="#L743"> 743</a>                 viewmats_rs=viewmats_rs,</span>
+<span id="L744"><a href="#L744"> 744</a>             )</span>
+<span id="L745"><a href="#L745"> 745</a>         else:</span>
+<span id="L746"><a href="#L746"> 746</a>             render_colors, render_alphas = rasterize_to_pixels(</span>
+<span id="L747"><a href="#L747"> 747</a>                 means2d,</span>
+<span id="L748"><a href="#L748"> 748</a>                 conics,</span>
+<span id="L749"><a href="#L749"> 749</a>                 colors,</span>
+<span id="L750"><a href="#L750"> 750</a>                 opacities,</span>
+<span id="L751"><a href="#L751"> 751</a>                 width,</span>
+<span id="L752"><a href="#L752"> 752</a>                 height,</span>
+<span id="L753"><a href="#L753"> 753</a>                 tile_size,</span>
+<span id="L754"><a href="#L754"> 754</a>                 isect_offsets,</span>
+<span id="L755"><a href="#L755"> 755</a>                 flatten_ids,</span>
+<span id="L756"><a href="#L756"> 756</a>                 backgrounds=backgrounds,</span>
+<span id="L757"><a href="#L757"> 757</a>                 packed=packed,</span>
+<span id="L758"><a href="#L758"> 758</a>                 absgrad=absgrad,</span>
+<span id="L759"><a href="#L759"> 759</a>             )</span>
+<span id="L760"><a href="#L760"> 760</a>     if render_mode in [&quot;ED&quot;, &quot;RGB+ED&quot;]:</span>
+<span id="L761"><a href="#L761"> 761</a>         # normalize the accumulated depth to get the expected depth</span>
+<span id="L762"><a href="#L762"> 762</a>         render_colors = torch.cat(</span>
+<span id="L763"><a href="#L763"> 763</a>             [</span>
+<span id="L764"><a href="#L764"> 764</a>                 render_colors[..., :-1],</span>
+<span id="L765"><a href="#L765"> 765</a>                 render_colors[..., -1:] / render_alphas.clamp(min=1e-10),</span>
+<span id="L766"><a href="#L766"> 766</a>             ],</span>
+<span id="L767"><a href="#L767"> 767</a>             dim=-1,</span>
+<span id="L768"><a href="#L768"> 768</a>         )</span>
+<span id="L769"><a href="#L769"> 769</a> </span>
+<span id="L770"><a href="#L770"> 770</a>     return render_colors, render_alphas, meta</span>
+<span id="L771"><a href="#L771"> 771</a> </span>
+<span id="L772"><a href="#L772"> 772</a> </span>
+<span id="L773"><a href="#L773"> 773</a> def _rasterization(</span>
+<span id="L774"><a href="#L774"> 774</a>     means: Tensor,  # [..., N, 3]</span>
+<span id="L775"><a href="#L775"> 775</a>     quats: Tensor,  # [..., N, 4]</span>
+<span id="L776"><a href="#L776"> 776</a>     scales: Tensor,  # [..., N, 3]</span>
+<span id="L777"><a href="#L777"> 777</a>     opacities: Tensor,  # [..., N]</span>
+<span id="L778"><a href="#L778"> 778</a>     colors: Tensor,  # [..., (C,) N, D] or [..., (C,) N, K, 3]</span>
+<span id="L779"><a href="#L779"> 779</a>     viewmats: Tensor,  # [..., C, 4, 4]</span>
+<span id="L780"><a href="#L780"> 780</a>     Ks: Tensor,  # [..., C, 3, 3]</span>
+<span id="L781"><a href="#L781"> 781</a>     width: int,</span>
+<span id="L782"><a href="#L782"> 782</a>     height: int,</span>
+<span id="L783"><a href="#L783"> 783</a>     near_plane: float = 0.01,</span>
+<span id="L784"><a href="#L784"> 784</a>     far_plane: float = 1e10,</span>
+<span id="L785"><a href="#L785"> 785</a>     eps2d: float = 0.3,</span>
+<span id="L786"><a href="#L786"> 786</a>     sh_degree: Optional[int] = None,</span>
+<span id="L787"><a href="#L787"> 787</a>     tile_size: int = 16,</span>
+<span id="L788"><a href="#L788"> 788</a>     backgrounds: Optional[Tensor] = None,</span>
+<span id="L789"><a href="#L789"> 789</a>     render_mode: Literal[&quot;RGB&quot;, &quot;D&quot;, &quot;ED&quot;, &quot;RGB+D&quot;, &quot;RGB+ED&quot;] = &quot;RGB&quot;,</span>
+<span id="L790"><a href="#L790"> 790</a>     rasterize_mode: Literal[&quot;classic&quot;, &quot;antialiased&quot;] = &quot;classic&quot;,</span>
+<span id="L791"><a href="#L791"> 791</a>     channel_chunk: int = 32,</span>
+<span id="L792"><a href="#L792"> 792</a>     batch_per_iter: int = 100,</span>
+<span id="L793"><a href="#L793"> 793</a> ) -&gt; Tuple[Tensor, Tensor, Dict]:</span>
+<span id="L794"><a href="#L794"> 794</a>     &quot;&quot;&quot;A version of rasterization() that utilies on PyTorch&#x27;s autograd.</span>
+<span id="L795"><a href="#L795"> 795</a> </span>
+<span id="L796"><a href="#L796"> 796</a>     .. note::</span>
+<span id="L797"><a href="#L797"> 797</a>         This function still relies on gsplat&#x27;s CUDA backend for some computation, but the</span>
+<span id="L798"><a href="#L798"> 798</a>         entire differentiable graph is on of PyTorch (and nerfacc) so could use Pytorch&#x27;s</span>
+<span id="L799"><a href="#L799"> 799</a>         autograd for backpropagation.</span>
+<span id="L800"><a href="#L800"> 800</a> </span>
+<span id="L801"><a href="#L801"> 801</a>     .. note::</span>
+<span id="L802"><a href="#L802"> 802</a>         This function relies on installing latest nerfacc, via:</span>
+<span id="L803"><a href="#L803"> 803</a>         pip install git+https://github.com/nerfstudio-project/nerfacc</span>
+<span id="L804"><a href="#L804"> 804</a> </span>
+<span id="L805"><a href="#L805"> 805</a>     .. note::</span>
+<span id="L806"><a href="#L806"> 806</a>         Compared to rasterization(), this function does not support some arguments such as</span>
+<span id="L807"><a href="#L807"> 807</a>         `packed`, `sparse_grad` and `absgrad`.</span>
+<span id="L808"><a href="#L808"> 808</a>     &quot;&quot;&quot;</span>
+<span id="L809"><a href="#L809"> 809</a>     from gsplat.cuda._torch_impl import (</span>
+<span id="L810"><a href="#L810"> 810</a>         _fully_fused_projection,</span>
+<span id="L811"><a href="#L811"> 811</a>         _quat_scale_to_covar_preci,</span>
+<span id="L812"><a href="#L812"> 812</a>         _rasterize_to_pixels,</span>
+<span id="L813"><a href="#L813"> 813</a>     )</span>
+<span id="L814"><a href="#L814"> 814</a> </span>
+<span id="L815"><a href="#L815"> 815</a>     batch_dims = means.shape[:-2]</span>
+<span id="L816"><a href="#L816"> 816</a>     num_batch_dims = len(batch_dims)</span>
+<span id="L817"><a href="#L817"> 817</a>     B = math.prod(batch_dims)</span>
+<span id="L818"><a href="#L818"> 818</a>     N = means.shape[-2]</span>
+<span id="L819"><a href="#L819"> 819</a>     C = viewmats.shape[-3]</span>
+<span id="L820"><a href="#L820"> 820</a>     I = B * C</span>
+<span id="L821"><a href="#L821"> 821</a>     device = means.device</span>
+<span id="L822"><a href="#L822"> 822</a>     assert means.shape == batch_dims + (N, 3), means.shape</span>
+<span id="L823"><a href="#L823"> 823</a>     assert quats.shape == batch_dims + (N, 4), quats.shape</span>
+<span id="L824"><a href="#L824"> 824</a>     assert scales.shape == batch_dims + (N, 3), scales.shape</span>
+<span id="L825"><a href="#L825"> 825</a>     assert opacities.shape == batch_dims + (N,), opacities.shape</span>
+<span id="L826"><a href="#L826"> 826</a>     assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape</span>
+<span id="L827"><a href="#L827"> 827</a>     assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape</span>
+<span id="L828"><a href="#L828"> 828</a>     assert render_mode in [&quot;RGB&quot;, &quot;D&quot;, &quot;ED&quot;, &quot;RGB+D&quot;, &quot;RGB+ED&quot;], render_mode</span>
+<span id="L829"><a href="#L829"> 829</a> </span>
+<span id="L830"><a href="#L830"> 830</a>     if sh_degree is None:</span>
+<span id="L831"><a href="#L831"> 831</a>         # treat colors as post-activation values, should be in shape [..., N, D] or [..., C, N, D]</span>
+<span id="L832"><a href="#L832"> 832</a>         assert (</span>
+<span id="L833"><a href="#L833"> 833</a>             colors.dim() == num_batch_dims + 2</span>
+<span id="L834"><a href="#L834"> 834</a>             and colors.shape[:-1] == batch_dims + (N,)</span>
+<span id="L835"><a href="#L835"> 835</a>         ) or (</span>
+<span id="L836"><a href="#L836"> 836</a>             colors.dim() == num_batch_dims + 3</span>
+<span id="L837"><a href="#L837"> 837</a>             and colors.shape[:-1] == batch_dims + (C, N)</span>
+<span id="L838"><a href="#L838"> 838</a>         ), colors.shape</span>
+<span id="L839"><a href="#L839"> 839</a>     else:</span>
+<span id="L840"><a href="#L840"> 840</a>         # treat colors as SH coefficients, should be in shape [..., N, K, 3] or [..., C, N, K, 3]</span>
+<span id="L841"><a href="#L841"> 841</a>         # Allowing for activating partial SH bands</span>
+<span id="L842"><a href="#L842"> 842</a>         assert (</span>
+<span id="L843"><a href="#L843"> 843</a>             colors.dim() == num_batch_dims + 3</span>
+<span id="L844"><a href="#L844"> 844</a>             and colors.shape[:-2] == batch_dims + (N,)</span>
+<span id="L845"><a href="#L845"> 845</a>             and colors.shape[-1] == 3</span>
+<span id="L846"><a href="#L846"> 846</a>         ) or (</span>
+<span id="L847"><a href="#L847"> 847</a>             colors.dim() == num_batch_dims + 4</span>
+<span id="L848"><a href="#L848"> 848</a>             and colors.shape[:-2] == batch_dims + (C, N)</span>
+<span id="L849"><a href="#L849"> 849</a>             and colors.shape[-1] == 3</span>
+<span id="L850"><a href="#L850"> 850</a>         ), colors.shape</span>
+<span id="L851"><a href="#L851"> 851</a>         assert (sh_degree + 1) ** 2 &lt;= colors.shape[-2], colors.shape</span>
+<span id="L852"><a href="#L852"> 852</a> </span>
+<span id="L853"><a href="#L853"> 853</a>     # Project Gaussians to 2D.</span>
+<span id="L854"><a href="#L854"> 854</a>     # The results are with shape [..., C, N, ...]. Only the elements with radii &gt; 0 are valid.</span>
+<span id="L855"><a href="#L855"> 855</a>     covars, _ = _quat_scale_to_covar_preci(quats, scales, True, False, triu=False)</span>
+<span id="L856"><a href="#L856"> 856</a>     radii, means2d, depths, conics, compensations = _fully_fused_projection(</span>
+<span id="L857"><a href="#L857"> 857</a>         means,</span>
+<span id="L858"><a href="#L858"> 858</a>         covars,</span>
+<span id="L859"><a href="#L859"> 859</a>         viewmats,</span>
+<span id="L860"><a href="#L860"> 860</a>         Ks,</span>
+<span id="L861"><a href="#L861"> 861</a>         width,</span>
+<span id="L862"><a href="#L862"> 862</a>         height,</span>
+<span id="L863"><a href="#L863"> 863</a>         eps2d=eps2d,</span>
+<span id="L864"><a href="#L864"> 864</a>         near_plane=near_plane,</span>
+<span id="L865"><a href="#L865"> 865</a>         far_plane=far_plane,</span>
+<span id="L866"><a href="#L866"> 866</a>         calc_compensations=(rasterize_mode == &quot;antialiased&quot;),</span>
+<span id="L867"><a href="#L867"> 867</a>     )</span>
+<span id="L868"><a href="#L868"> 868</a>     opacities = torch.broadcast_to(</span>
+<span id="L869"><a href="#L869"> 869</a>         opacities[..., None, :], batch_dims + (C, N)</span>
+<span id="L870"><a href="#L870"> 870</a>     )  # [..., C, N]</span>
+<span id="L871"><a href="#L871"> 871</a>     batch_ids, camera_ids, gaussian_ids = None, None, None</span>
+<span id="L872"><a href="#L872"> 872</a>     image_ids = None</span>
+<span id="L873"><a href="#L873"> 873</a> </span>
+<span id="L874"><a href="#L874"> 874</a>     if compensations is not None:</span>
+<span id="L875"><a href="#L875"> 875</a>         opacities = opacities * compensations</span>
+<span id="L876"><a href="#L876"> 876</a> </span>
+<span id="L877"><a href="#L877"> 877</a>     # Identify intersecting tiles</span>
+<span id="L878"><a href="#L878"> 878</a>     tile_width = math.ceil(width / float(tile_size))</span>
+<span id="L879"><a href="#L879"> 879</a>     tile_height = math.ceil(height / float(tile_size))</span>
+<span id="L880"><a href="#L880"> 880</a>     tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(</span>
+<span id="L881"><a href="#L881"> 881</a>         means2d,</span>
+<span id="L882"><a href="#L882"> 882</a>         radii,</span>
+<span id="L883"><a href="#L883"> 883</a>         depths,</span>
+<span id="L884"><a href="#L884"> 884</a>         tile_size,</span>
+<span id="L885"><a href="#L885"> 885</a>         tile_width,</span>
+<span id="L886"><a href="#L886"> 886</a>         tile_height,</span>
+<span id="L887"><a href="#L887"> 887</a>         packed=False,</span>
+<span id="L888"><a href="#L888"> 888</a>         n_images=I,</span>
+<span id="L889"><a href="#L889"> 889</a>         image_ids=image_ids,</span>
+<span id="L890"><a href="#L890"> 890</a>         gaussian_ids=gaussian_ids,</span>
+<span id="L891"><a href="#L891"> 891</a>     )</span>
+<span id="L892"><a href="#L892"> 892</a>     isect_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)</span>
+<span id="L893"><a href="#L893"> 893</a>     isect_offsets = isect_offsets.reshape(batch_dims + (C, tile_height, tile_width))</span>
+<span id="L894"><a href="#L894"> 894</a> </span>
+<span id="L895"><a href="#L895"> 895</a>     # Turn colors into [..., C, N, D] or [..., nnz, D] to pass into rasterize_to_pixels()</span>
+<span id="L896"><a href="#L896"> 896</a>     if sh_degree is None:</span>
+<span id="L897"><a href="#L897"> 897</a>         # Colors are post-activation values, with shape [..., N, D] or [..., C, N, D]</span>
+<span id="L898"><a href="#L898"> 898</a>         if colors.dim() == num_batch_dims + 2:</span>
+<span id="L899"><a href="#L899"> 899</a>             # Turn [..., N, D] into [..., C, N, D]</span>
+<span id="L900"><a href="#L900"> 900</a>             colors = torch.broadcast_to(</span>
+<span id="L901"><a href="#L901"> 901</a>                 colors[..., None, :, :], batch_dims + (C, N, -1)</span>
+<span id="L902"><a href="#L902"> 902</a>             )</span>
+<span id="L903"><a href="#L903"> 903</a>         else:</span>
+<span id="L904"><a href="#L904"> 904</a>             # colors is already [..., C, N, D]</span>
+<span id="L905"><a href="#L905"> 905</a>             pass</span>
+<span id="L906"><a href="#L906"> 906</a>     else:</span>
+<span id="L907"><a href="#L907"> 907</a>         # Colors are SH coefficients, with shape [..., N, K, 3] or [..., C, N, K, 3]</span>
+<span id="L908"><a href="#L908"> 908</a>         camtoworlds = torch.inverse(viewmats)  # [..., C, 4, 4]</span>
+<span id="L909"><a href="#L909"> 909</a>         dirs = means[..., None, :, :] - camtoworlds[..., None, :3, 3]  # [..., C, N, 3]</span>
+<span id="L910"><a href="#L910"> 910</a>         masks = (radii &gt; 0).all(dim=-1)  # [..., C, N]</span>
+<span id="L911"><a href="#L911"> 911</a>         if colors.dim() == num_batch_dims + 3:</span>
+<span id="L912"><a href="#L912"> 912</a>             # Turn [..., N, K, 3] into [..., C, N, K, 3]</span>
+<span id="L913"><a href="#L913"> 913</a>             shs = torch.broadcast_to(</span>
+<span id="L914"><a href="#L914"> 914</a>                 colors[..., None, :, :, :], batch_dims + (C, N, -1, 3)</span>
+<span id="L915"><a href="#L915"> 915</a>             )  # [..., C, N, K, 3]</span>
+<span id="L916"><a href="#L916"> 916</a>         else:</span>
+<span id="L917"><a href="#L917"> 917</a>             # colors is already [..., C, N, K, 3]</span>
+<span id="L918"><a href="#L918"> 918</a>             shs = colors</span>
+<span id="L919"><a href="#L919"> 919</a>         colors = spherical_harmonics(</span>
+<span id="L920"><a href="#L920"> 920</a>             sh_degree, dirs, shs, masks=masks</span>
+<span id="L921"><a href="#L921"> 921</a>         )  # [..., C, N, 3]</span>
+<span id="L922"><a href="#L922"> 922</a>         # make it apple-to-apple with Inria&#x27;s CUDA Backend.</span>
+<span id="L923"><a href="#L923"> 923</a>         colors = torch.clamp_min(colors + 0.5, 0.0)</span>
+<span id="L924"><a href="#L924"> 924</a> </span>
+<span id="L925"><a href="#L925"> 925</a>     # Rasterize to pixels</span>
+<span id="L926"><a href="#L926"> 926</a>     if render_mode in [&quot;RGB+D&quot;, &quot;RGB+ED&quot;]:</span>
+<span id="L927"><a href="#L927"> 927</a>         colors = torch.cat((colors, depths[..., None]), dim=-1)</span>
+<span id="L928"><a href="#L928"> 928</a>         if backgrounds is not None:</span>
+<span id="L929"><a href="#L929"> 929</a>             backgrounds = torch.cat(</span>
+<span id="L930"><a href="#L930"> 930</a>                 [</span>
+<span id="L931"><a href="#L931"> 931</a>                     backgrounds,</span>
+<span id="L932"><a href="#L932"> 932</a>                     torch.zeros(batch_dims + (C, 1), device=backgrounds.device),</span>
+<span id="L933"><a href="#L933"> 933</a>                 ],</span>
+<span id="L934"><a href="#L934"> 934</a>                 dim=-1,</span>
+<span id="L935"><a href="#L935"> 935</a>             )</span>
+<span id="L936"><a href="#L936"> 936</a>     elif render_mode in [&quot;D&quot;, &quot;ED&quot;]:</span>
+<span id="L937"><a href="#L937"> 937</a>         colors = depths[..., None]</span>
+<span id="L938"><a href="#L938"> 938</a>         if backgrounds is not None:</span>
+<span id="L939"><a href="#L939"> 939</a>             backgrounds = torch.zeros(batch_dims + (C, 1), device=backgrounds.device)</span>
+<span id="L940"><a href="#L940"> 940</a>     else:  # RGB</span>
+<span id="L941"><a href="#L941"> 941</a>         pass</span>
+<span id="L942"><a href="#L942"> 942</a>     if colors.shape[-1] &gt; channel_chunk:</span>
+<span id="L943"><a href="#L943"> 943</a>         # slice into chunks</span>
+<span id="L944"><a href="#L944"> 944</a>         n_chunks = (colors.shape[-1] + channel_chunk - 1) // channel_chunk</span>
+<span id="L945"><a href="#L945"> 945</a>         render_colors, render_alphas = [], []</span>
+<span id="L946"><a href="#L946"> 946</a>         for i in range(n_chunks):</span>
+<span id="L947"><a href="#L947"> 947</a>             colors_chunk = colors[..., i * channel_chunk : (i + 1) * channel_chunk]</span>
+<span id="L948"><a href="#L948"> 948</a>             backgrounds_chunk = (</span>
+<span id="L949"><a href="#L949"> 949</a>                 backgrounds[..., i * channel_chunk : (i + 1) * channel_chunk]</span>
+<span id="L950"><a href="#L950"> 950</a>                 if backgrounds is not None</span>
+<span id="L951"><a href="#L951"> 951</a>                 else None</span>
+<span id="L952"><a href="#L952"> 952</a>             )</span>
+<span id="L953"><a href="#L953"> 953</a>             render_colors_, render_alphas_ = _rasterize_to_pixels(</span>
+<span id="L954"><a href="#L954"> 954</a>                 means2d,</span>
+<span id="L955"><a href="#L955"> 955</a>                 conics,</span>
+<span id="L956"><a href="#L956"> 956</a>                 colors_chunk,</span>
+<span id="L957"><a href="#L957"> 957</a>                 opacities,</span>
+<span id="L958"><a href="#L958"> 958</a>                 width,</span>
+<span id="L959"><a href="#L959"> 959</a>                 height,</span>
+<span id="L960"><a href="#L960"> 960</a>                 tile_size,</span>
+<span id="L961"><a href="#L961"> 961</a>                 isect_offsets,</span>
+<span id="L962"><a href="#L962"> 962</a>                 flatten_ids,</span>
+<span id="L963"><a href="#L963"> 963</a>                 backgrounds=backgrounds_chunk,</span>
+<span id="L964"><a href="#L964"> 964</a>                 batch_per_iter=batch_per_iter,</span>
+<span id="L965"><a href="#L965"> 965</a>             )</span>
+<span id="L966"><a href="#L966"> 966</a>             render_colors.append(render_colors_)</span>
+<span id="L967"><a href="#L967"> 967</a>             render_alphas.append(render_alphas_)</span>
+<span id="L968"><a href="#L968"> 968</a>         render_colors = torch.cat(render_colors, dim=-1)</span>
+<span id="L969"><a href="#L969"> 969</a>         render_alphas = render_alphas[0]  # discard the rest</span>
+<span id="L970"><a href="#L970"> 970</a>     else:</span>
+<span id="L971"><a href="#L971"> 971</a>         render_colors, render_alphas = _rasterize_to_pixels(</span>
+<span id="L972"><a href="#L972"> 972</a>             means2d,</span>
+<span id="L973"><a href="#L973"> 973</a>             conics,</span>
+<span id="L974"><a href="#L974"> 974</a>             colors,</span>
+<span id="L975"><a href="#L975"> 975</a>             opacities,</span>
+<span id="L976"><a href="#L976"> 976</a>             width,</span>
+<span id="L977"><a href="#L977"> 977</a>             height,</span>
+<span id="L978"><a href="#L978"> 978</a>             tile_size,</span>
+<span id="L979"><a href="#L979"> 979</a>             isect_offsets,</span>
+<span id="L980"><a href="#L980"> 980</a>             flatten_ids,</span>
+<span id="L981"><a href="#L981"> 981</a>             backgrounds=backgrounds,</span>
+<span id="L982"><a href="#L982"> 982</a>             batch_per_iter=batch_per_iter,</span>
+<span id="L983"><a href="#L983"> 983</a>         )</span>
+<span id="L984"><a href="#L984"> 984</a>     if render_mode in [&quot;ED&quot;, &quot;RGB+ED&quot;]:</span>
+<span id="L985"><a href="#L985"> 985</a>         # normalize the accumulated depth to get the expected depth</span>
+<span id="L986"><a href="#L986"> 986</a>         render_colors = torch.cat(</span>
+<span id="L987"><a href="#L987"> 987</a>             [</span>
+<span id="L988"><a href="#L988"> 988</a>                 render_colors[..., :-1],</span>
+<span id="L989"><a href="#L989"> 989</a>                 render_colors[..., -1:] / render_alphas.clamp(min=1e-10),</span>
+<span id="L990"><a href="#L990"> 990</a>             ],</span>
+<span id="L991"><a href="#L991"> 991</a>             dim=-1,</span>
+<span id="L992"><a href="#L992"> 992</a>         )</span>
+<span id="L993"><a href="#L993"> 993</a> </span>
+<span id="L994"><a href="#L994"> 994</a>     meta = {</span>
+<span id="L995"><a href="#L995"> 995</a>         &quot;batch_ids&quot;: batch_ids,</span>
+<span id="L996"><a href="#L996"> 996</a>         &quot;camera_ids&quot;: camera_ids,</span>
+<span id="L997"><a href="#L997"> 997</a>         &quot;gaussian_ids&quot;: gaussian_ids,</span>
+<span id="L998"><a href="#L998"> 998</a>         &quot;radii&quot;: radii,</span>
+<span id="L999"><a href="#L999"> 999</a>         &quot;means2d&quot;: means2d,</span>
+<span id="L1000"><a href="#L1000">1000</a>         &quot;depths&quot;: depths,</span>
+<span id="L1001"><a href="#L1001">1001</a>         &quot;conics&quot;: conics,</span>
+<span id="L1002"><a href="#L1002">1002</a>         &quot;opacities&quot;: opacities,</span>
+<span id="L1003"><a href="#L1003">1003</a>         &quot;tile_width&quot;: tile_width,</span>
+<span id="L1004"><a href="#L1004">1004</a>         &quot;tile_height&quot;: tile_height,</span>
+<span id="L1005"><a href="#L1005">1005</a>         &quot;tiles_per_gauss&quot;: tiles_per_gauss,</span>
+<span id="L1006"><a href="#L1006">1006</a>         &quot;isect_ids&quot;: isect_ids,</span>
+<span id="L1007"><a href="#L1007">1007</a>         &quot;flatten_ids&quot;: flatten_ids,</span>
+<span id="L1008"><a href="#L1008">1008</a>         &quot;isect_offsets&quot;: isect_offsets,</span>
+<span id="L1009"><a href="#L1009">1009</a>         &quot;width&quot;: width,</span>
+<span id="L1010"><a href="#L1010">1010</a>         &quot;height&quot;: height,</span>
+<span id="L1011"><a href="#L1011">1011</a>         &quot;tile_size&quot;: tile_size,</span>
+<span id="L1012"><a href="#L1012">1012</a>         &quot;n_batches&quot;: B,</span>
+<span id="L1013"><a href="#L1013">1013</a>         &quot;n_cameras&quot;: C,</span>
+<span id="L1014"><a href="#L1014">1014</a>     }</span>
+<span id="L1015"><a href="#L1015">1015</a>     return render_colors, render_alphas, meta</span>
+<span id="L1016"><a href="#L1016">1016</a> </span>
+<span id="L1017"><a href="#L1017">1017</a> </span>
+<span id="L1018"><a href="#L1018">1018</a> # def rasterization_legacy_wrapper(</span>
+<span id="L1019"><a href="#L1019">1019</a> #     means: Tensor,  # [N, 3]</span>
+<span id="L1020"><a href="#L1020">1020</a> #     quats: Tensor,  # [N, 4]</span>
+<span id="L1021"><a href="#L1021">1021</a> #     scales: Tensor,  # [N, 3]</span>
+<span id="L1022"><a href="#L1022">1022</a> #     opacities: Tensor,  # [N]</span>
+<span id="L1023"><a href="#L1023">1023</a> #     colors: Tensor,  # [N, D] or [N, K, 3]</span>
+<span id="L1024"><a href="#L1024">1024</a> #     viewmats: Tensor,  # [C, 4, 4]</span>
+<span id="L1025"><a href="#L1025">1025</a> #     Ks: Tensor,  # [C, 3, 3]</span>
+<span id="L1026"><a href="#L1026">1026</a> #     width: int,</span>
+<span id="L1027"><a href="#L1027">1027</a> #     height: int,</span>
+<span id="L1028"><a href="#L1028">1028</a> #     near_plane: float = 0.01,</span>
+<span id="L1029"><a href="#L1029">1029</a> #     eps2d: float = 0.3,</span>
+<span id="L1030"><a href="#L1030">1030</a> #     sh_degree: Optional[int] = None,</span>
+<span id="L1031"><a href="#L1031">1031</a> #     tile_size: int = 16,</span>
+<span id="L1032"><a href="#L1032">1032</a> #     backgrounds: Optional[Tensor] = None,</span>
+<span id="L1033"><a href="#L1033">1033</a> #     **kwargs,</span>
+<span id="L1034"><a href="#L1034">1034</a> # ) -&gt; Tuple[Tensor, Tensor, Dict]:</span>
+<span id="L1035"><a href="#L1035">1035</a> #     &quot;&quot;&quot;Wrapper for old version gsplat.</span>
+<span id="L1036"><a href="#L1036">1036</a> </span>
+<span id="L1037"><a href="#L1037">1037</a> #     .. warning::</span>
+<span id="L1038"><a href="#L1038">1038</a> #         This function exists for comparison purpose only. So we skip collecting</span>
+<span id="L1039"><a href="#L1039">1039</a> #         the intermidiate variables, and only return an empty dict.</span>
+<span id="L1040"><a href="#L1040">1040</a> </span>
+<span id="L1041"><a href="#L1041">1041</a> #     &quot;&quot;&quot;</span>
+<span id="L1042"><a href="#L1042">1042</a> #     from gsplat.cuda_legacy._wrapper import (</span>
+<span id="L1043"><a href="#L1043">1043</a> #         project_gaussians,</span>
+<span id="L1044"><a href="#L1044">1044</a> #         rasterize_gaussians,</span>
+<span id="L1045"><a href="#L1045">1045</a> #         spherical_harmonics,</span>
+<span id="L1046"><a href="#L1046">1046</a> #     )</span>
+<span id="L1047"><a href="#L1047">1047</a> </span>
+<span id="L1048"><a href="#L1048">1048</a> #     assert eps2d == 0.3, &quot;This is hard-coded in CUDA to be 0.3&quot;</span>
+<span id="L1049"><a href="#L1049">1049</a> #     C = len(viewmats)</span>
+<span id="L1050"><a href="#L1050">1050</a> </span>
+<span id="L1051"><a href="#L1051">1051</a> #     render_colors, render_alphas = [], []</span>
+<span id="L1052"><a href="#L1052">1052</a> #     for cid in range(C):</span>
+<span id="L1053"><a href="#L1053">1053</a> #         fx, fy = Ks[cid, 0, 0], Ks[cid, 1, 1]</span>
+<span id="L1054"><a href="#L1054">1054</a> #         cx, cy = Ks[cid, 0, 2], Ks[cid, 1, 2]</span>
+<span id="L1055"><a href="#L1055">1055</a> #         viewmat = viewmats[cid]</span>
+<span id="L1056"><a href="#L1056">1056</a> </span>
+<span id="L1057"><a href="#L1057">1057</a> #         means2d, depths, radii, conics, _, num_tiles_hit, _ = project_gaussians(</span>
+<span id="L1058"><a href="#L1058">1058</a> #             means3d=means,</span>
+<span id="L1059"><a href="#L1059">1059</a> #             scales=scales,</span>
+<span id="L1060"><a href="#L1060">1060</a> #             glob_scale=1.0,</span>
+<span id="L1061"><a href="#L1061">1061</a> #             quats=quats,</span>
+<span id="L1062"><a href="#L1062">1062</a> #             viewmat=viewmat,</span>
+<span id="L1063"><a href="#L1063">1063</a> #             fx=fx,</span>
+<span id="L1064"><a href="#L1064">1064</a> #             fy=fy,</span>
+<span id="L1065"><a href="#L1065">1065</a> #             cx=cx,</span>
+<span id="L1066"><a href="#L1066">1066</a> #             cy=cy,</span>
+<span id="L1067"><a href="#L1067">1067</a> #             img_height=height,</span>
+<span id="L1068"><a href="#L1068">1068</a> #             img_width=width,</span>
+<span id="L1069"><a href="#L1069">1069</a> #             block_width=tile_size,</span>
+<span id="L1070"><a href="#L1070">1070</a> #             clip_thresh=near_plane,</span>
+<span id="L1071"><a href="#L1071">1071</a> #         )</span>
+<span id="L1072"><a href="#L1072">1072</a> </span>
+<span id="L1073"><a href="#L1073">1073</a> #         if colors.dim() == 3:</span>
+<span id="L1074"><a href="#L1074">1074</a> #             c2w = viewmat.inverse()</span>
+<span id="L1075"><a href="#L1075">1075</a> #             viewdirs = means - c2w[:3, 3]</span>
+<span id="L1076"><a href="#L1076">1076</a> #             # viewdirs = F.normalize(viewdirs, dim=-1).detach()</span>
+<span id="L1077"><a href="#L1077">1077</a> #             if sh_degree is None:</span>
+<span id="L1078"><a href="#L1078">1078</a> #                 sh_degree = int(math.sqrt(colors.shape[1]) - 1)</span>
+<span id="L1079"><a href="#L1079">1079</a> #             colors = spherical_harmonics(sh_degree, viewdirs, colors)  # [N, 3]</span>
+<span id="L1080"><a href="#L1080">1080</a> </span>
+<span id="L1081"><a href="#L1081">1081</a> #         background = (</span>
+<span id="L1082"><a href="#L1082">1082</a> #             backgrounds[cid]</span>
+<span id="L1083"><a href="#L1083">1083</a> #             if backgrounds is not None</span>
+<span id="L1084"><a href="#L1084">1084</a> #             else torch.zeros(colors.shape[-1], device=means.device)</span>
+<span id="L1085"><a href="#L1085">1085</a> #         )</span>
+<span id="L1086"><a href="#L1086">1086</a> </span>
+<span id="L1087"><a href="#L1087">1087</a> #         render_colors_, render_alphas_ = rasterize_gaussians(</span>
+<span id="L1088"><a href="#L1088">1088</a> #             xys=means2d,</span>
+<span id="L1089"><a href="#L1089">1089</a> #             depths=depths,</span>
+<span id="L1090"><a href="#L1090">1090</a> #             radii=radii,</span>
+<span id="L1091"><a href="#L1091">1091</a> #             conics=conics,</span>
+<span id="L1092"><a href="#L1092">1092</a> #             num_tiles_hit=num_tiles_hit,</span>
+<span id="L1093"><a href="#L1093">1093</a> #             colors=colors,</span>
+<span id="L1094"><a href="#L1094">1094</a> #             opacity=opacities[..., None],</span>
+<span id="L1095"><a href="#L1095">1095</a> #             img_height=height,</span>
+<span id="L1096"><a href="#L1096">1096</a> #             img_width=width,</span>
+<span id="L1097"><a href="#L1097">1097</a> #             block_width=tile_size,</span>
+<span id="L1098"><a href="#L1098">1098</a> #             background=background,</span>
+<span id="L1099"><a href="#L1099">1099</a> #             return_alpha=True,</span>
+<span id="L1100"><a href="#L1100">1100</a> #         )</span>
+<span id="L1101"><a href="#L1101">1101</a> #         render_colors.append(render_colors_)</span>
+<span id="L1102"><a href="#L1102">1102</a> #         render_alphas.append(render_alphas_[..., None])</span>
+<span id="L1103"><a href="#L1103">1103</a> #     render_colors = torch.stack(render_colors, dim=0)</span>
+<span id="L1104"><a href="#L1104">1104</a> #     render_alphas = torch.stack(render_alphas, dim=0)</span>
+<span id="L1105"><a href="#L1105">1105</a> #     return render_colors, render_alphas, {}</span>
+<span id="L1106"><a href="#L1106">1106</a> </span>
+<span id="L1107"><a href="#L1107">1107</a> </span>
+<span id="L1108"><a href="#L1108">1108</a> def rasterization_inria_wrapper(</span>
+<span id="L1109"><a href="#L1109">1109</a>     means: Tensor,  # [..., N, 3]</span>
+<span id="L1110"><a href="#L1110">1110</a>     quats: Tensor,  # [..., N, 4]</span>
+<span id="L1111"><a href="#L1111">1111</a>     scales: Tensor,  # [..., N, 3]</span>
+<span id="L1112"><a href="#L1112">1112</a>     opacities: Tensor,  # [..., N]</span>
+<span id="L1113"><a href="#L1113">1113</a>     colors: Tensor,  # [..., N, D] or [..., N, K, 3]</span>
+<span id="L1114"><a href="#L1114">1114</a>     viewmats: Tensor,  # [..., C, 4, 4]</span>
+<span id="L1115"><a href="#L1115">1115</a>     Ks: Tensor,  # [..., C, 3, 3]</span>
+<span id="L1116"><a href="#L1116">1116</a>     width: int,</span>
+<span id="L1117"><a href="#L1117">1117</a>     height: int,</span>
+<span id="L1118"><a href="#L1118">1118</a>     near_plane: float = 0.01,</span>
+<span id="L1119"><a href="#L1119">1119</a>     far_plane: float = 100.0,</span>
+<span id="L1120"><a href="#L1120">1120</a>     eps2d: float = 0.3,</span>
+<span id="L1121"><a href="#L1121">1121</a>     sh_degree: Optional[int] = None,</span>
+<span id="L1122"><a href="#L1122">1122</a>     backgrounds: Optional[Tensor] = None,</span>
+<span id="L1123"><a href="#L1123">1123</a>     **kwargs,</span>
+<span id="L1124"><a href="#L1124">1124</a> ) -&gt; Tuple[Tensor, Tensor, Dict]:</span>
+<span id="L1125"><a href="#L1125">1125</a>     &quot;&quot;&quot;Wrapper for Inria&#x27;s rasterization backend.</span>
+<span id="L1126"><a href="#L1126">1126</a> </span>
+<span id="L1127"><a href="#L1127">1127</a>     .. warning::</span>
+<span id="L1128"><a href="#L1128">1128</a>         This function exists for comparison purpose only. Only rendered image is</span>
+<span id="L1129"><a href="#L1129">1129</a>         returned.</span>
+<span id="L1130"><a href="#L1130">1130</a> </span>
+<span id="L1131"><a href="#L1131">1131</a>     .. warning::</span>
+<span id="L1132"><a href="#L1132">1132</a>         Inria&#x27;s CUDA backend has its own LICENSE, so this function should be used with</span>
+<span id="L1133"><a href="#L1133">1133</a>         the respect to the original LICENSE at:</span>
+<span id="L1134"><a href="#L1134">1134</a>         https://github.com/graphdeco-inria/diff-gaussian-rasterization</span>
+<span id="L1135"><a href="#L1135">1135</a> </span>
+<span id="L1136"><a href="#L1136">1136</a>     &quot;&quot;&quot;</span>
+<span id="L1137"><a href="#L1137">1137</a>     from diff_gaussian_rasterization import (</span>
+<span id="L1138"><a href="#L1138">1138</a>         GaussianRasterizationSettings,</span>
+<span id="L1139"><a href="#L1139">1139</a>         GaussianRasterizer,</span>
+<span id="L1140"><a href="#L1140">1140</a>     )</span>
+<span id="L1141"><a href="#L1141">1141</a> </span>
+<span id="L1142"><a href="#L1142">1142</a>     assert eps2d == 0.3, &quot;This is hard-coded in CUDA to be 0.3&quot;</span>
+<span id="L1143"><a href="#L1143">1143</a>     batch_dims = means.shape[:-2]</span>
+<span id="L1144"><a href="#L1144">1144</a>     num_batch_dims = len(batch_dims)</span>
+<span id="L1145"><a href="#L1145">1145</a>     N = means.shape[-2]</span>
+<span id="L1146"><a href="#L1146">1146</a>     B = math.prod(batch_dims)</span>
+<span id="L1147"><a href="#L1147">1147</a>     C = viewmats.shape[-3]</span>
+<span id="L1148"><a href="#L1148">1148</a>     I = B * C</span>
+<span id="L1149"><a href="#L1149">1149</a>     device = means.device</span>
+<span id="L1150"><a href="#L1150">1150</a>     channels = colors.shape[-1]</span>
+<span id="L1151"><a href="#L1151">1151</a> </span>
+<span id="L1152"><a href="#L1152">1152</a>     assert means.shape == batch_dims + (N, 3), means.shape</span>
+<span id="L1153"><a href="#L1153">1153</a>     assert quats.shape == batch_dims + (N, 4), quats.shape</span>
+<span id="L1154"><a href="#L1154">1154</a>     assert scales.shape == batch_dims + (N, 3), scales.shape</span>
+<span id="L1155"><a href="#L1155">1155</a>     assert opacities.shape == batch_dims + (N,), opacities.shape</span>
+<span id="L1156"><a href="#L1156">1156</a>     assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape</span>
+<span id="L1157"><a href="#L1157">1157</a>     assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape</span>
+<span id="L1158"><a href="#L1158">1158</a> </span>
+<span id="L1159"><a href="#L1159">1159</a>     if sh_degree is None:</span>
+<span id="L1160"><a href="#L1160">1160</a>         # treat colors as post-activation values, should be in shape [..., N, D] or [..., C, N, D]</span>
+<span id="L1161"><a href="#L1161">1161</a>         assert (</span>
+<span id="L1162"><a href="#L1162">1162</a>             colors.dim() == num_batch_dims + 2</span>
+<span id="L1163"><a href="#L1163">1163</a>             and colors.shape[:-1] == batch_dims + (N,)</span>
+<span id="L1164"><a href="#L1164">1164</a>         ) or (</span>
+<span id="L1165"><a href="#L1165">1165</a>             colors.dim() == num_batch_dims + 3</span>
+<span id="L1166"><a href="#L1166">1166</a>             and colors.shape[:-1] == batch_dims + (C, N)</span>
+<span id="L1167"><a href="#L1167">1167</a>         ), colors.shape</span>
+<span id="L1168"><a href="#L1168">1168</a>     else:</span>
+<span id="L1169"><a href="#L1169">1169</a>         # treat colors as SH coefficients, should be in shape [..., N, K, 3] or [..., C, N, K, 3]</span>
+<span id="L1170"><a href="#L1170">1170</a>         # Allowing for activating partial SH bands</span>
+<span id="L1171"><a href="#L1171">1171</a>         assert (</span>
+<span id="L1172"><a href="#L1172">1172</a>             colors.dim() == num_batch_dims + 3</span>
+<span id="L1173"><a href="#L1173">1173</a>             and colors.shape[:-2] == batch_dims + (N,)</span>
+<span id="L1174"><a href="#L1174">1174</a>             and colors.shape[-1] == 3</span>
+<span id="L1175"><a href="#L1175">1175</a>         ) or (</span>
+<span id="L1176"><a href="#L1176">1176</a>             colors.dim() == num_batch_dims + 4</span>
+<span id="L1177"><a href="#L1177">1177</a>             and colors.shape[:-2] == batch_dims + (C, N)</span>
+<span id="L1178"><a href="#L1178">1178</a>             and colors.shape[-1] == 3</span>
+<span id="L1179"><a href="#L1179">1179</a>         ), colors.shape</span>
+<span id="L1180"><a href="#L1180">1180</a>         assert (sh_degree + 1) ** 2 &lt;= colors.shape[-2], colors.shape</span>
+<span id="L1181"><a href="#L1181">1181</a> </span>
+<span id="L1182"><a href="#L1182">1182</a>     # flatten all batch dimensions</span>
+<span id="L1183"><a href="#L1183">1183</a>     means = means.reshape(B, N, 3)</span>
+<span id="L1184"><a href="#L1184">1184</a>     quats = quats.reshape(B, N, 4)</span>
+<span id="L1185"><a href="#L1185">1185</a>     scales = scales.reshape(B, N, 3)</span>
+<span id="L1186"><a href="#L1186">1186</a>     opacities = opacities.reshape(B, N)</span>
+<span id="L1187"><a href="#L1187">1187</a>     viewmats = viewmats.reshape(B, C, 4, 4)</span>
+<span id="L1188"><a href="#L1188">1188</a>     Ks = Ks.reshape(B, C, 3, 3)</span>
+<span id="L1189"><a href="#L1189">1189</a>     if colors.dim() == num_batch_dims + 2:</span>
+<span id="L1190"><a href="#L1190">1190</a>         colors = colors.reshape(B, N, -1)</span>
+<span id="L1191"><a href="#L1191">1191</a>     elif colors.dim() == num_batch_dims + 3:</span>
+<span id="L1192"><a href="#L1192">1192</a>         colors = colors.reshape(B, C, N, -1)</span>
+<span id="L1193"><a href="#L1193">1193</a> </span>
+<span id="L1194"><a href="#L1194">1194</a>     # rasterization from inria does not do normalization internally</span>
+<span id="L1195"><a href="#L1195">1195</a>     quats = F.normalize(quats, dim=-1)  # [N, 4]</span>
+<span id="L1196"><a href="#L1196">1196</a> </span>
+<span id="L1197"><a href="#L1197">1197</a>     render_colors = []</span>
+<span id="L1198"><a href="#L1198">1198</a>     for bid in range(B):</span>
+<span id="L1199"><a href="#L1199">1199</a>         for cid in range(C):</span>
+<span id="L1200"><a href="#L1200">1200</a>             FoVx = 2 * math.atan(width / (2 * Ks[bid, cid, 0, 0].item()))</span>
+<span id="L1201"><a href="#L1201">1201</a>             FoVy = 2 * math.atan(height / (2 * Ks[bid, cid, 1, 1].item()))</span>
+<span id="L1202"><a href="#L1202">1202</a>             tanfovx = math.tan(FoVx * 0.5)</span>
+<span id="L1203"><a href="#L1203">1203</a>             tanfovy = math.tan(FoVy * 0.5)</span>
+<span id="L1204"><a href="#L1204">1204</a> </span>
+<span id="L1205"><a href="#L1205">1205</a>             world_view_transform = viewmats[bid, cid].transpose(0, 1)</span>
+<span id="L1206"><a href="#L1206">1206</a>             projection_matrix = get_projection_matrix(</span>
+<span id="L1207"><a href="#L1207">1207</a>                 znear=near_plane, zfar=far_plane, fovX=FoVx, fovY=FoVy, device=device</span>
+<span id="L1208"><a href="#L1208">1208</a>             ).transpose(0, 1)</span>
+<span id="L1209"><a href="#L1209">1209</a>             full_proj_transform = (</span>
+<span id="L1210"><a href="#L1210">1210</a>                 world_view_transform.unsqueeze(0).bmm(projection_matrix.unsqueeze(0))</span>
+<span id="L1211"><a href="#L1211">1211</a>             ).squeeze(0)</span>
+<span id="L1212"><a href="#L1212">1212</a>             camera_center = world_view_transform.inverse()[3, :3]</span>
+<span id="L1213"><a href="#L1213">1213</a> </span>
+<span id="L1214"><a href="#L1214">1214</a>             background = (</span>
+<span id="L1215"><a href="#L1215">1215</a>                 backgrounds[bid, cid]</span>
+<span id="L1216"><a href="#L1216">1216</a>                 if backgrounds is not None</span>
+<span id="L1217"><a href="#L1217">1217</a>                 else torch.zeros(3, device=device)</span>
+<span id="L1218"><a href="#L1218">1218</a>             )</span>
+<span id="L1219"><a href="#L1219">1219</a> </span>
+<span id="L1220"><a href="#L1220">1220</a>             raster_settings = GaussianRasterizationSettings(</span>
+<span id="L1221"><a href="#L1221">1221</a>                 image_height=height,</span>
+<span id="L1222"><a href="#L1222">1222</a>                 image_width=width,</span>
+<span id="L1223"><a href="#L1223">1223</a>                 tanfovx=tanfovx,</span>
+<span id="L1224"><a href="#L1224">1224</a>                 tanfovy=tanfovy,</span>
+<span id="L1225"><a href="#L1225">1225</a>                 bg=background,</span>
+<span id="L1226"><a href="#L1226">1226</a>                 scale_modifier=1.0,</span>
+<span id="L1227"><a href="#L1227">1227</a>                 viewmatrix=world_view_transform,</span>
+<span id="L1228"><a href="#L1228">1228</a>                 projmatrix=full_proj_transform,</span>
+<span id="L1229"><a href="#L1229">1229</a>                 sh_degree=0 if sh_degree is None else sh_degree,</span>
+<span id="L1230"><a href="#L1230">1230</a>                 campos=camera_center,</span>
+<span id="L1231"><a href="#L1231">1231</a>                 prefiltered=False,</span>
+<span id="L1232"><a href="#L1232">1232</a>                 debug=False,</span>
+<span id="L1233"><a href="#L1233">1233</a>             )</span>
+<span id="L1234"><a href="#L1234">1234</a> </span>
+<span id="L1235"><a href="#L1235">1235</a>             rasterizer = GaussianRasterizer(raster_settings=raster_settings)</span>
+<span id="L1236"><a href="#L1236">1236</a> </span>
+<span id="L1237"><a href="#L1237">1237</a>             means2D = torch.zeros_like(means, requires_grad=True, device=device)</span>
+<span id="L1238"><a href="#L1238">1238</a> </span>
+<span id="L1239"><a href="#L1239">1239</a>             render_colors_ = []</span>
+<span id="L1240"><a href="#L1240">1240</a>             for i in range(0, channels, 3):</span>
+<span id="L1241"><a href="#L1241">1241</a>                 _colors = colors[bid, ..., i : i + 3]</span>
+<span id="L1242"><a href="#L1242">1242</a>                 if _colors.shape[-1] &lt; 3:</span>
+<span id="L1243"><a href="#L1243">1243</a>                     pad = torch.zeros(</span>
+<span id="L1244"><a href="#L1244">1244</a>                         _colors.shape[:-1], 3 - _colors.shape[-1], device=device</span>
+<span id="L1245"><a href="#L1245">1245</a>                     )</span>
+<span id="L1246"><a href="#L1246">1246</a>                     _colors = torch.cat([_colors, pad], dim=-1)</span>
+<span id="L1247"><a href="#L1247">1247</a>                 _render_colors_, radii = rasterizer(</span>
+<span id="L1248"><a href="#L1248">1248</a>                     means3D=means[bid],</span>
+<span id="L1249"><a href="#L1249">1249</a>                     means2D=means2D[bid],</span>
+<span id="L1250"><a href="#L1250">1250</a>                     shs=_colors if colors.dim() == 4 else None,</span>
+<span id="L1251"><a href="#L1251">1251</a>                     colors_precomp=_colors if colors.dim() == 3 else None,</span>
+<span id="L1252"><a href="#L1252">1252</a>                     opacities=opacities[..., None],</span>
+<span id="L1253"><a href="#L1253">1253</a>                     scales=scales[bid],</span>
+<span id="L1254"><a href="#L1254">1254</a>                     rotations=quats[bid],</span>
+<span id="L1255"><a href="#L1255">1255</a>                     cov3D_precomp=None,</span>
+<span id="L1256"><a href="#L1256">1256</a>                 )</span>
+<span id="L1257"><a href="#L1257">1257</a>                 if _colors.shape[-1] &lt; 3:</span>
+<span id="L1258"><a href="#L1258">1258</a>                     _render_colors_ = _render_colors_[..., : _colors.shape[-1]]</span>
+<span id="L1259"><a href="#L1259">1259</a>                 render_colors_.append(_render_colors_)</span>
+<span id="L1260"><a href="#L1260">1260</a>             render_colors_ = torch.cat(render_colors_, dim=-1)</span>
+<span id="L1261"><a href="#L1261">1261</a> </span>
+<span id="L1262"><a href="#L1262">1262</a>             render_colors_ = render_colors_.permute(1, 2, 0)  # [H, W, 3]</span>
+<span id="L1263"><a href="#L1263">1263</a>             render_colors.append(render_colors_)</span>
+<span id="L1264"><a href="#L1264">1264</a>     render_colors = torch.stack(render_colors, dim=0)</span>
+<span id="L1265"><a href="#L1265">1265</a>     render_colors = render_colors.reshape(batch_dims + (height, width, channels))</span>
+<span id="L1266"><a href="#L1266">1266</a>     return render_colors, None, {}</span>
+<span id="L1267"><a href="#L1267">1267</a> </span>
+<span id="L1268"><a href="#L1268">1268</a> </span>
+<span id="L1269"><a href="#L1269">1269</a> ###### 2DGS ######</span>
+<span id="L1270"><a href="#L1270">1270</a> def rasterization_2dgs(</span>
+<span id="L1271"><a href="#L1271">1271</a>     means: Tensor,  # [..., N, 3]</span>
+<span id="L1272"><a href="#L1272">1272</a>     quats: Tensor,  # [..., N, 4]</span>
+<span id="L1273"><a href="#L1273">1273</a>     scales: Tensor,  # [..., N, 3]</span>
+<span id="L1274"><a href="#L1274">1274</a>     opacities: Tensor,  # [..., N]</span>
+<span id="L1275"><a href="#L1275">1275</a>     colors: Tensor,  # [..., (C,) N, D] or [..., (C,) N, K, 3]</span>
+<span id="L1276"><a href="#L1276">1276</a>     viewmats: Tensor,  # [..., C, 4, 4]</span>
+<span id="L1277"><a href="#L1277">1277</a>     Ks: Tensor,  # [..., C, 3, 3]</span>
+<span id="L1278"><a href="#L1278">1278</a>     width: int,</span>
+<span id="L1279"><a href="#L1279">1279</a>     height: int,</span>
+<span id="L1280"><a href="#L1280">1280</a>     near_plane: float = 0.01,</span>
+<span id="L1281"><a href="#L1281">1281</a>     far_plane: float = 1e10,</span>
+<span id="L1282"><a href="#L1282">1282</a>     radius_clip: float = 0.0,</span>
+<span id="L1283"><a href="#L1283">1283</a>     eps2d: float = 0.3,</span>
+<span id="L1284"><a href="#L1284">1284</a>     sh_degree: Optional[int] = None,</span>
+<span id="L1285"><a href="#L1285">1285</a>     packed: bool = False,</span>
+<span id="L1286"><a href="#L1286">1286</a>     tile_size: int = 16,</span>
+<span id="L1287"><a href="#L1287">1287</a>     backgrounds: Optional[Tensor] = None,</span>
+<span id="L1288"><a href="#L1288">1288</a>     render_mode: Literal[&quot;RGB&quot;, &quot;D&quot;, &quot;ED&quot;, &quot;RGB+D&quot;, &quot;RGB+ED&quot;] = &quot;RGB&quot;,</span>
+<span id="L1289"><a href="#L1289">1289</a>     sparse_grad: bool = False,</span>
+<span id="L1290"><a href="#L1290">1290</a>     absgrad: bool = False,</span>
+<span id="L1291"><a href="#L1291">1291</a>     distloss: bool = False,</span>
+<span id="L1292"><a href="#L1292">1292</a>     depth_mode: Literal[&quot;expected&quot;, &quot;median&quot;] = &quot;expected&quot;,</span>
+<span id="L1293"><a href="#L1293">1293</a> ) -&gt; Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Dict]:</span>
+<span id="L1294"><a href="#L1294">1294</a>     &quot;&quot;&quot;Rasterize a set of 2D Gaussians (N) to a batch of image planes (C).</span>
+<span id="L1295"><a href="#L1295">1295</a> </span>
+<span id="L1296"><a href="#L1296">1296</a>     This function supports a handful of features, similar to the :func:`rasterization` function.</span>
+<span id="L1297"><a href="#L1297">1297</a> </span>
+<span id="L1298"><a href="#L1298">1298</a>     .. warning::</span>
+<span id="L1299"><a href="#L1299">1299</a>         This function is currently not differentiable w.r.t. the camera intrinsics `Ks`.</span>
+<span id="L1300"><a href="#L1300">1300</a> </span>
+<span id="L1301"><a href="#L1301">1301</a>     Args:</span>
+<span id="L1302"><a href="#L1302">1302</a>         means: The 3D centers of the Gaussians. [..., N, 3]</span>
+<span id="L1303"><a href="#L1303">1303</a>         quats: The quaternions of the Gaussians (wxyz convension). It&#x27;s not required to be normalized. [..., N, 4]</span>
+<span id="L1304"><a href="#L1304">1304</a>         scales: The scales of the Gaussians. [..., N, 3]</span>
+<span id="L1305"><a href="#L1305">1305</a>         opacities: The opacities of the Gaussians. [..., N]</span>
+<span id="L1306"><a href="#L1306">1306</a>         colors: The colors of the Gaussians. [..., (C,) N, D] or [..., (C,) N, K, 3] for SH coefficients.</span>
+<span id="L1307"><a href="#L1307">1307</a>         viewmats: The world-to-cam transformation of the cameras. [..., C, 4, 4]</span>
+<span id="L1308"><a href="#L1308">1308</a>         Ks: The camera intrinsics. [..., C, 3, 3]</span>
+<span id="L1309"><a href="#L1309">1309</a>         width: The width of the image.</span>
+<span id="L1310"><a href="#L1310">1310</a>         height: The height of the image.</span>
+<span id="L1311"><a href="#L1311">1311</a>         near_plane: The near plane for clipping. Default is 0.01.</span>
+<span id="L1312"><a href="#L1312">1312</a>         far_plane: The far plane for clipping. Default is 1e10.</span>
+<span id="L1313"><a href="#L1313">1313</a>         radius_clip: Gaussians with 2D radius smaller or equal than this value will be</span>
+<span id="L1314"><a href="#L1314">1314</a>             skipped. This is extremely helpful for speeding up large scale scenes.</span>
+<span id="L1315"><a href="#L1315">1315</a>             Default is 0.0.</span>
+<span id="L1316"><a href="#L1316">1316</a>         eps2d: An epsilon added to the egienvalues of projected 2D covariance matrices.</span>
+<span id="L1317"><a href="#L1317">1317</a>             This will prevents the projected GS to be too small. For example eps2d=0.3</span>
+<span id="L1318"><a href="#L1318">1318</a>             leads to minimal 3 pixel unit. Default is 0.3.</span>
+<span id="L1319"><a href="#L1319">1319</a>         sh_degree: The SH degree to use, which can be smaller than the total</span>
+<span id="L1320"><a href="#L1320">1320</a>             number of bands. If set, the `colors` should be [(C,) N, K, 3] SH coefficients,</span>
+<span id="L1321"><a href="#L1321">1321</a>             else the `colors` should [(C,) N, D] post-activation color values. Default is None.</span>
+<span id="L1322"><a href="#L1322">1322</a>         packed: Whether to use packed mode which is more memory efficient but might or</span>
+<span id="L1323"><a href="#L1323">1323</a>             might not be as fast. Default is True.</span>
+<span id="L1324"><a href="#L1324">1324</a>         tile_size: The size of the tiles for rasterization. Default is 16.</span>
+<span id="L1325"><a href="#L1325">1325</a>             (Note: other values are not tested)</span>
+<span id="L1326"><a href="#L1326">1326</a>         backgrounds: The background colors. [C, D]. Default is None.</span>
+<span id="L1327"><a href="#L1327">1327</a>         render_mode: The rendering mode. Supported modes are &quot;RGB&quot;, &quot;D&quot;, &quot;ED&quot;, &quot;RGB+D&quot;,</span>
+<span id="L1328"><a href="#L1328">1328</a>             and &quot;RGB+ED&quot;. &quot;RGB&quot; renders the colored image, &quot;D&quot; renders the accumulated depth, and</span>
+<span id="L1329"><a href="#L1329">1329</a>             &quot;ED&quot; renders the expected depth. Default is &quot;RGB&quot;.</span>
+<span id="L1330"><a href="#L1330">1330</a>         sparse_grad (Experimental): If true, the gradients for {means, quats, scales} will be stored in</span>
+<span id="L1331"><a href="#L1331">1331</a>             a COO sparse layout. This can be helpful for saving memory. Default is False.</span>
+<span id="L1332"><a href="#L1332">1332</a>         absgrad: If true, the absolute gradients of the projected 2D means</span>
+<span id="L1333"><a href="#L1333">1333</a>             will be computed during the backward pass, which could be accessed by</span>
+<span id="L1334"><a href="#L1334">1334</a>             `meta[&quot;means2d&quot;].absgrad`. Default is False.</span>
+<span id="L1335"><a href="#L1335">1335</a>         channel_chunk: The number of channels to render in one go. Default is 32.</span>
+<span id="L1336"><a href="#L1336">1336</a>             If the required rendering channels are larger than this value, the rendering</span>
+<span id="L1337"><a href="#L1337">1337</a>             will be done looply in chunks.</span>
+<span id="L1338"><a href="#L1338">1338</a>         distloss: If true, use distortion regularization to get better geometry detail.</span>
+<span id="L1339"><a href="#L1339">1339</a>         depth_mode: render depth mode. Choose from expected depth and median depth.</span>
+<span id="L1340"><a href="#L1340">1340</a> </span>
+<span id="L1341"><a href="#L1341">1341</a>     Returns:</span>
+<span id="L1342"><a href="#L1342">1342</a>         A tuple:</span>
+<span id="L1343"><a href="#L1343">1343</a> </span>
+<span id="L1344"><a href="#L1344">1344</a>         **render_colors**: The rendered colors. [..., C, height, width, X].</span>
+<span id="L1345"><a href="#L1345">1345</a>         X depends on the `render_mode` and input `colors`. If `render_mode` is &quot;RGB&quot;,</span>
+<span id="L1346"><a href="#L1346">1346</a>         X is D; if `render_mode` is &quot;D&quot; or &quot;ED&quot;, X is 1; if `render_mode` is &quot;RGB+D&quot; or</span>
+<span id="L1347"><a href="#L1347">1347</a>         &quot;RGB+ED&quot;, X is D+1.</span>
+<span id="L1348"><a href="#L1348">1348</a> </span>
+<span id="L1349"><a href="#L1349">1349</a>         **render_alphas**: The rendered alphas. [..., C, height, width, 1].</span>
+<span id="L1350"><a href="#L1350">1350</a> </span>
+<span id="L1351"><a href="#L1351">1351</a>         **render_normals**: The rendered normals. [..., C, height, width, 3].</span>
+<span id="L1352"><a href="#L1352">1352</a> </span>
+<span id="L1353"><a href="#L1353">1353</a>         **surf_normals**: surface normal from depth. [..., C, height, width, 3]</span>
+<span id="L1354"><a href="#L1354">1354</a> </span>
+<span id="L1355"><a href="#L1355">1355</a>         **render_distort**: The rendered distortions. [..., C, height, width, 1].</span>
+<span id="L1356"><a href="#L1356">1356</a>         L1 version, different from L2 version in 2DGS paper.</span>
+<span id="L1357"><a href="#L1357">1357</a> </span>
+<span id="L1358"><a href="#L1358">1358</a>         **render_median**: The rendered median depth. [..., C, height, width, 1].</span>
+<span id="L1359"><a href="#L1359">1359</a> </span>
+<span id="L1360"><a href="#L1360">1360</a>         **meta**: A dictionary of intermediate results of the rasterization.</span>
+<span id="L1361"><a href="#L1361">1361</a> </span>
+<span id="L1362"><a href="#L1362">1362</a>     Examples:</span>
+<span id="L1363"><a href="#L1363">1363</a> </span>
+<span id="L1364"><a href="#L1364">1364</a>     .. code-block:: python</span>
+<span id="L1365"><a href="#L1365">1365</a> </span>
+<span id="L1366"><a href="#L1366">1366</a>         &gt;&gt;&gt; # define Gaussians</span>
+<span id="L1367"><a href="#L1367">1367</a>         &gt;&gt;&gt; means = torch.randn((100, 3), device=device)</span>
+<span id="L1368"><a href="#L1368">1368</a>         &gt;&gt;&gt; quats = torch.randn((100, 4), device=device)</span>
+<span id="L1369"><a href="#L1369">1369</a>         &gt;&gt;&gt; scales = torch.rand((100, 3), device=device) * 0.1</span>
+<span id="L1370"><a href="#L1370">1370</a>         &gt;&gt;&gt; colors = torch.rand((100, 3), device=device)</span>
+<span id="L1371"><a href="#L1371">1371</a>         &gt;&gt;&gt; opacities = torch.rand((100,), device=device)</span>
+<span id="L1372"><a href="#L1372">1372</a>         &gt;&gt;&gt; # define cameras</span>
+<span id="L1373"><a href="#L1373">1373</a>         &gt;&gt;&gt; viewmats = torch.eye(4, device=device)[None, :, :]</span>
+<span id="L1374"><a href="#L1374">1374</a>         &gt;&gt;&gt; Ks = torch.tensor([</span>
+<span id="L1375"><a href="#L1375">1375</a>         &gt;&gt;&gt;    [300., 0., 150.], [0., 300., 100.], [0., 0., 1.]], device=device)[None, :, :]</span>
+<span id="L1376"><a href="#L1376">1376</a>         &gt;&gt;&gt; width, height = 300, 200</span>
+<span id="L1377"><a href="#L1377">1377</a>         &gt;&gt;&gt; # render</span>
+<span id="L1378"><a href="#L1378">1378</a>         &gt;&gt;&gt; colors, alphas, normals, surf_normals, distort, median_depth, meta = rasterization_2dgs(</span>
+<span id="L1379"><a href="#L1379">1379</a>         &gt;&gt;&gt;    means, quats, scales, opacities, colors, viewmats, Ks, width, height</span>
+<span id="L1380"><a href="#L1380">1380</a>         &gt;&gt;&gt; )</span>
+<span id="L1381"><a href="#L1381">1381</a>         &gt;&gt;&gt; print (colors.shape, alphas.shape)</span>
+<span id="L1382"><a href="#L1382">1382</a>         torch.Size([1, 200, 300, 3]) torch.Size([1, 200, 300, 1])</span>
+<span id="L1383"><a href="#L1383">1383</a>         &gt;&gt;&gt; print (normals.shape, surf_normals.shape)</span>
+<span id="L1384"><a href="#L1384">1384</a>         torch.Size([1, 200, 300, 3]) torch.Size([1, 200, 300, 3])</span>
+<span id="L1385"><a href="#L1385">1385</a>         &gt;&gt;&gt; print (distort.shape, median_depth.shape)</span>
+<span id="L1386"><a href="#L1386">1386</a>         torch.Size([1, 200, 300, 1]) torch.Size([1, 200, 300, 1])</span>
+<span id="L1387"><a href="#L1387">1387</a>         &gt;&gt;&gt; print (meta.keys())</span>
+<span id="L1388"><a href="#L1388">1388</a>         dict_keys([&#x27;camera_ids&#x27;, &#x27;gaussian_ids&#x27;, &#x27;radii&#x27;, &#x27;means2d&#x27;, &#x27;depths&#x27;, &#x27;ray_transforms&#x27;,</span>
+<span id="L1389"><a href="#L1389">1389</a>         &#x27;opacities&#x27;, &#x27;normals&#x27;, &#x27;tile_width&#x27;, &#x27;tile_height&#x27;, &#x27;tiles_per_gauss&#x27;, &#x27;isect_ids&#x27;,</span>
+<span id="L1390"><a href="#L1390">1390</a>         &#x27;flatten_ids&#x27;, &#x27;isect_offsets&#x27;, &#x27;width&#x27;, &#x27;height&#x27;, &#x27;tile_size&#x27;, &#x27;n_cameras&#x27;, &#x27;render_distort&#x27;,</span>
+<span id="L1391"><a href="#L1391">1391</a>         &#x27;gradient_2dgs&#x27;])</span>
+<span id="L1392"><a href="#L1392">1392</a> </span>
+<span id="L1393"><a href="#L1393">1393</a>     &quot;&quot;&quot;</span>
+<span id="L1394"><a href="#L1394">1394</a> </span>
+<span id="L1395"><a href="#L1395">1395</a>     batch_dims = means.shape[:-2]</span>
+<span id="L1396"><a href="#L1396">1396</a>     num_batch_dims = len(batch_dims)</span>
+<span id="L1397"><a href="#L1397">1397</a>     B = math.prod(batch_dims)</span>
+<span id="L1398"><a href="#L1398">1398</a>     N = means.shape[-2]</span>
+<span id="L1399"><a href="#L1399">1399</a>     C = viewmats.shape[-3]</span>
+<span id="L1400"><a href="#L1400">1400</a>     I = B * C</span>
+<span id="L1401"><a href="#L1401">1401</a>     device = means.device</span>
+<span id="L1402"><a href="#L1402">1402</a>     channels = colors.shape[-1]</span>
+<span id="L1403"><a href="#L1403">1403</a> </span>
+<span id="L1404"><a href="#L1404">1404</a>     assert means.shape == batch_dims + (N, 3), means.shape</span>
+<span id="L1405"><a href="#L1405">1405</a>     assert quats.shape == batch_dims + (N, 4), quats.shape</span>
+<span id="L1406"><a href="#L1406">1406</a>     assert scales.shape == batch_dims + (N, 3), scales.shape</span>
+<span id="L1407"><a href="#L1407">1407</a>     assert opacities.shape == batch_dims + (N,), opacities.shape</span>
+<span id="L1408"><a href="#L1408">1408</a>     assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape</span>
+<span id="L1409"><a href="#L1409">1409</a>     assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape</span>
+<span id="L1410"><a href="#L1410">1410</a>     assert render_mode in [&quot;RGB&quot;, &quot;D&quot;, &quot;ED&quot;, &quot;RGB+D&quot;, &quot;RGB+ED&quot;], render_mode</span>
+<span id="L1411"><a href="#L1411">1411</a>     if distloss:</span>
+<span id="L1412"><a href="#L1412">1412</a>         assert render_mode in [</span>
+<span id="L1413"><a href="#L1413">1413</a>             &quot;D&quot;,</span>
+<span id="L1414"><a href="#L1414">1414</a>             &quot;ED&quot;,</span>
+<span id="L1415"><a href="#L1415">1415</a>             &quot;RGB+D&quot;,</span>
+<span id="L1416"><a href="#L1416">1416</a>             &quot;RGB+ED&quot;,</span>
+<span id="L1417"><a href="#L1417">1417</a>         ], f&quot;distloss requires depth rendering, render_mode should be D, ED, RGB+D, RGB+ED, but got {render_mode}&quot;</span>
+<span id="L1418"><a href="#L1418">1418</a> </span>
+<span id="L1419"><a href="#L1419">1419</a>     if sh_degree is None:</span>
+<span id="L1420"><a href="#L1420">1420</a>         # treat colors as post-activation values, should be in shape [..., N, D] or [..., C, N, D]</span>
+<span id="L1421"><a href="#L1421">1421</a>         assert (</span>
+<span id="L1422"><a href="#L1422">1422</a>             colors.dim() == num_batch_dims + 2</span>
+<span id="L1423"><a href="#L1423">1423</a>             and colors.shape[:-1] == batch_dims + (N,)</span>
+<span id="L1424"><a href="#L1424">1424</a>         ) or (</span>
+<span id="L1425"><a href="#L1425">1425</a>             colors.dim() == num_batch_dims + 3</span>
+<span id="L1426"><a href="#L1426">1426</a>             and colors.shape[:-1] == batch_dims + (C, N)</span>
+<span id="L1427"><a href="#L1427">1427</a>         ), colors.shape</span>
+<span id="L1428"><a href="#L1428">1428</a>     else:</span>
+<span id="L1429"><a href="#L1429">1429</a>         # treat colors as SH coefficients, should be in shape [..., N, K, 3] or [..., C, N, K, 3]</span>
+<span id="L1430"><a href="#L1430">1430</a>         # Allowing for activating partial SH bands</span>
+<span id="L1431"><a href="#L1431">1431</a>         assert (</span>
+<span id="L1432"><a href="#L1432">1432</a>             colors.dim() == num_batch_dims + 3</span>
+<span id="L1433"><a href="#L1433">1433</a>             and colors.shape[:-2] == batch_dims + (N,)</span>
+<span id="L1434"><a href="#L1434">1434</a>             and colors.shape[-1] == 3</span>
+<span id="L1435"><a href="#L1435">1435</a>         ) or (</span>
+<span id="L1436"><a href="#L1436">1436</a>             colors.dim() == num_batch_dims + 4</span>
+<span id="L1437"><a href="#L1437">1437</a>             and colors.shape[:-2] == batch_dims + (C, N)</span>
+<span id="L1438"><a href="#L1438">1438</a>             and colors.shape[-1] == 3</span>
+<span id="L1439"><a href="#L1439">1439</a>         ), colors.shape</span>
+<span id="L1440"><a href="#L1440">1440</a>         assert (sh_degree + 1) ** 2 &lt;= colors.shape[-2], colors.shape</span>
+<span id="L1441"><a href="#L1441">1441</a> </span>
+<span id="L1442"><a href="#L1442">1442</a>     # Compute Ray-Splat intersection transformation.</span>
+<span id="L1443"><a href="#L1443">1443</a>     proj_results = fully_fused_projection_2dgs(</span>
+<span id="L1444"><a href="#L1444">1444</a>         means,</span>
+<span id="L1445"><a href="#L1445">1445</a>         quats,</span>
+<span id="L1446"><a href="#L1446">1446</a>         scales,</span>
+<span id="L1447"><a href="#L1447">1447</a>         viewmats,</span>
+<span id="L1448"><a href="#L1448">1448</a>         Ks,</span>
+<span id="L1449"><a href="#L1449">1449</a>         width,</span>
+<span id="L1450"><a href="#L1450">1450</a>         height,</span>
+<span id="L1451"><a href="#L1451">1451</a>         eps2d,</span>
+<span id="L1452"><a href="#L1452">1452</a>         near_plane,</span>
+<span id="L1453"><a href="#L1453">1453</a>         far_plane,</span>
+<span id="L1454"><a href="#L1454">1454</a>         radius_clip,</span>
+<span id="L1455"><a href="#L1455">1455</a>         packed,</span>
+<span id="L1456"><a href="#L1456">1456</a>         sparse_grad,</span>
+<span id="L1457"><a href="#L1457">1457</a>     )</span>
+<span id="L1458"><a href="#L1458">1458</a> </span>
+<span id="L1459"><a href="#L1459">1459</a>     if packed:</span>
+<span id="L1460"><a href="#L1460">1460</a>         (</span>
+<span id="L1461"><a href="#L1461">1461</a>             batch_ids,</span>
+<span id="L1462"><a href="#L1462">1462</a>             camera_ids,</span>
+<span id="L1463"><a href="#L1463">1463</a>             gaussian_ids,</span>
+<span id="L1464"><a href="#L1464">1464</a>             radii,</span>
+<span id="L1465"><a href="#L1465">1465</a>             means2d,</span>
+<span id="L1466"><a href="#L1466">1466</a>             depths,</span>
+<span id="L1467"><a href="#L1467">1467</a>             ray_transforms,</span>
+<span id="L1468"><a href="#L1468">1468</a>             normals,</span>
+<span id="L1469"><a href="#L1469">1469</a>         ) = proj_results</span>
+<span id="L1470"><a href="#L1470">1470</a>         opacities = opacities.view(B, N)[batch_ids, gaussian_ids]</span>
+<span id="L1471"><a href="#L1471">1471</a>         image_ids = batch_ids * C + camera_ids</span>
+<span id="L1472"><a href="#L1472">1472</a>     else:</span>
+<span id="L1473"><a href="#L1473">1473</a>         radii, means2d, depths, ray_transforms, normals = proj_results</span>
+<span id="L1474"><a href="#L1474">1474</a>         opacities = torch.broadcast_to(</span>
+<span id="L1475"><a href="#L1475">1475</a>             opacities[..., None, :], batch_dims + (C, N)</span>
+<span id="L1476"><a href="#L1476">1476</a>         )  # [..., C, N]</span>
+<span id="L1477"><a href="#L1477">1477</a>         camera_ids, gaussian_ids = None, None</span>
+<span id="L1478"><a href="#L1478">1478</a>         image_ids = None</span>
+<span id="L1479"><a href="#L1479">1479</a> </span>
+<span id="L1480"><a href="#L1480">1480</a>     densify = torch.zeros_like(</span>
+<span id="L1481"><a href="#L1481">1481</a>         means2d, dtype=means.dtype, requires_grad=True, device=&quot;cuda&quot;</span>
+<span id="L1482"><a href="#L1482">1482</a>     )</span>
+<span id="L1483"><a href="#L1483">1483</a>     # Identify intersecting tiles</span>
+<span id="L1484"><a href="#L1484">1484</a>     tile_width = math.ceil(width / float(tile_size))</span>
+<span id="L1485"><a href="#L1485">1485</a>     tile_height = math.ceil(height / float(tile_size))</span>
+<span id="L1486"><a href="#L1486">1486</a>     tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(</span>
+<span id="L1487"><a href="#L1487">1487</a>         means2d,</span>
+<span id="L1488"><a href="#L1488">1488</a>         radii,</span>
+<span id="L1489"><a href="#L1489">1489</a>         depths,</span>
+<span id="L1490"><a href="#L1490">1490</a>         tile_size,</span>
+<span id="L1491"><a href="#L1491">1491</a>         tile_width,</span>
+<span id="L1492"><a href="#L1492">1492</a>         tile_height,</span>
+<span id="L1493"><a href="#L1493">1493</a>         packed=packed,</span>
+<span id="L1494"><a href="#L1494">1494</a>         n_images=I,</span>
+<span id="L1495"><a href="#L1495">1495</a>         image_ids=image_ids,</span>
+<span id="L1496"><a href="#L1496">1496</a>         gaussian_ids=gaussian_ids,</span>
+<span id="L1497"><a href="#L1497">1497</a>     )</span>
+<span id="L1498"><a href="#L1498">1498</a>     isect_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)</span>
+<span id="L1499"><a href="#L1499">1499</a>     isect_offsets = isect_offsets.reshape(batch_dims + (C, tile_height, tile_width))</span>
+<span id="L1500"><a href="#L1500">1500</a> </span>
+<span id="L1501"><a href="#L1501">1501</a>     # TODO: SH also suport N-D.</span>
+<span id="L1502"><a href="#L1502">1502</a>     # Compute the per-view colors</span>
+<span id="L1503"><a href="#L1503">1503</a>     # if not (</span>
+<span id="L1504"><a href="#L1504">1504</a>     #     colors.dim() == num_batch_dims + 3 and sh_degree is None</span>
+<span id="L1505"><a href="#L1505">1505</a>     # ):  # silently support [..., C, N, D] color.</span>
+<span id="L1506"><a href="#L1506">1506</a>     #     colors = (</span>
+<span id="L1507"><a href="#L1507">1507</a>     #         colors.view(B, N, -1)[batch_ids, gaussian_ids]</span>
+<span id="L1508"><a href="#L1508">1508</a>     #         if packed</span>
+<span id="L1509"><a href="#L1509">1509</a>     #         else colors[..., None, :, :].expand((-1,) * num_batch_dims + (C, -1, -1))</span>
+<span id="L1510"><a href="#L1510">1510</a>     #     )  # [nnz, D] or [..., C, N, 3]</span>
+<span id="L1511"><a href="#L1511">1511</a>     # else:</span>
+<span id="L1512"><a href="#L1512">1512</a>     #     if packed:</span>
+<span id="L1513"><a href="#L1513">1513</a>     #         colors = colors.view(B, C, N, -1)[batch_ids, camera_ids, gaussian_ids, :]</span>
+<span id="L1514"><a href="#L1514">1514</a>     if sh_degree is not None:  # SH coefficients</span>
+<span id="L1515"><a href="#L1515">1515</a>         camtoworlds = torch.inverse(viewmats)</span>
+<span id="L1516"><a href="#L1516">1516</a>         if packed:</span>
+<span id="L1517"><a href="#L1517">1517</a>             dirs = means[..., gaussian_ids, :] - camtoworlds[..., camera_ids, :3, 3]</span>
+<span id="L1518"><a href="#L1518">1518</a>         else:</span>
+<span id="L1519"><a href="#L1519">1519</a>             dirs = means[..., None, :, :] - camtoworlds[..., None, :3, 3]</span>
+<span id="L1520"><a href="#L1520">1520</a> </span>
+<span id="L1521"><a href="#L1521">1521</a>         if colors.dim() == num_batch_dims + 3:</span>
+<span id="L1522"><a href="#L1522">1522</a>             # Turn [..., N, K, 3] into [..., C, N, K, 3]</span>
+<span id="L1523"><a href="#L1523">1523</a>             shs = torch.broadcast_to(</span>
+<span id="L1524"><a href="#L1524">1524</a>                 colors[..., None, :, :, :], batch_dims + (C, N, -1, 3)</span>
+<span id="L1525"><a href="#L1525">1525</a>             )  # [..., C, N, K, 3]</span>
+<span id="L1526"><a href="#L1526">1526</a>         else:</span>
+<span id="L1527"><a href="#L1527">1527</a>             # colors is already [..., C, N, K, 3]</span>
+<span id="L1528"><a href="#L1528">1528</a>             shs = colors</span>
+<span id="L1529"><a href="#L1529">1529</a>         colors = spherical_harmonics(</span>
+<span id="L1530"><a href="#L1530">1530</a>             sh_degree, dirs, shs, masks=(radii &gt; 0).all(dim=-1)</span>
+<span id="L1531"><a href="#L1531">1531</a>         )  # [nnz, D] or [..., C, N, 3]</span>
+<span id="L1532"><a href="#L1532">1532</a>         # make it apple-to-apple with Inria&#x27;s CUDA Backend.</span>
+<span id="L1533"><a href="#L1533">1533</a>         colors = torch.clamp_min(colors + 0.5, 0.0)</span>
+<span id="L1534"><a href="#L1534">1534</a> </span>
+<span id="L1535"><a href="#L1535">1535</a>     # Rasterize to pixels</span>
+<span id="L1536"><a href="#L1536">1536</a>     if render_mode in [&quot;RGB+D&quot;, &quot;RGB+ED&quot;]:</span>
+<span id="L1537"><a href="#L1537">1537</a>         colors = torch.cat((colors, depths[..., None]), dim=-1)</span>
+<span id="L1538"><a href="#L1538">1538</a> </span>
+<span id="L1539"><a href="#L1539">1539</a>         if backgrounds is not None:</span>
+<span id="L1540"><a href="#L1540">1540</a>             backgrounds = torch.cat(</span>
+<span id="L1541"><a href="#L1541">1541</a>                 (backgrounds, torch.zeros_like(backgrounds[..., :1])), dim=-1</span>
+<span id="L1542"><a href="#L1542">1542</a>             )</span>
+<span id="L1543"><a href="#L1543">1543</a>     elif render_mode in [&quot;D&quot;, &quot;ED&quot;]:</span>
+<span id="L1544"><a href="#L1544">1544</a>         colors = depths[..., None]</span>
+<span id="L1545"><a href="#L1545">1545</a>     else:  # RGB</span>
+<span id="L1546"><a href="#L1546">1546</a>         pass</span>
+<span id="L1547"><a href="#L1547">1547</a> </span>
+<span id="L1548"><a href="#L1548">1548</a>     (</span>
+<span id="L1549"><a href="#L1549">1549</a>         render_colors,</span>
+<span id="L1550"><a href="#L1550">1550</a>         render_alphas,</span>
+<span id="L1551"><a href="#L1551">1551</a>         render_normals,</span>
+<span id="L1552"><a href="#L1552">1552</a>         render_distort,</span>
+<span id="L1553"><a href="#L1553">1553</a>         render_median,</span>
+<span id="L1554"><a href="#L1554">1554</a>     ) = rasterize_to_pixels_2dgs(</span>
+<span id="L1555"><a href="#L1555">1555</a>         means2d,</span>
+<span id="L1556"><a href="#L1556">1556</a>         ray_transforms,</span>
+<span id="L1557"><a href="#L1557">1557</a>         colors,</span>
+<span id="L1558"><a href="#L1558">1558</a>         opacities,</span>
+<span id="L1559"><a href="#L1559">1559</a>         normals,</span>
+<span id="L1560"><a href="#L1560">1560</a>         densify,</span>
+<span id="L1561"><a href="#L1561">1561</a>         width,</span>
+<span id="L1562"><a href="#L1562">1562</a>         height,</span>
+<span id="L1563"><a href="#L1563">1563</a>         tile_size,</span>
+<span id="L1564"><a href="#L1564">1564</a>         isect_offsets,</span>
+<span id="L1565"><a href="#L1565">1565</a>         flatten_ids,</span>
+<span id="L1566"><a href="#L1566">1566</a>         backgrounds=backgrounds,</span>
+<span id="L1567"><a href="#L1567">1567</a>         packed=packed,</span>
+<span id="L1568"><a href="#L1568">1568</a>         absgrad=absgrad,</span>
+<span id="L1569"><a href="#L1569">1569</a>         distloss=distloss,</span>
+<span id="L1570"><a href="#L1570">1570</a>     )</span>
+<span id="L1571"><a href="#L1571">1571</a>     render_normals_from_depth = None</span>
+<span id="L1572"><a href="#L1572">1572</a>     if render_mode in [&quot;ED&quot;, &quot;RGB+ED&quot;]:</span>
+<span id="L1573"><a href="#L1573">1573</a>         # normalize the accumulated depth to get the expected depth</span>
+<span id="L1574"><a href="#L1574">1574</a>         render_colors = torch.cat(</span>
+<span id="L1575"><a href="#L1575">1575</a>             [</span>
+<span id="L1576"><a href="#L1576">1576</a>                 render_colors[..., :-1],</span>
+<span id="L1577"><a href="#L1577">1577</a>                 render_colors[..., -1:] / render_alphas.clamp(min=1e-10),</span>
+<span id="L1578"><a href="#L1578">1578</a>             ],</span>
+<span id="L1579"><a href="#L1579">1579</a>             dim=-1,</span>
+<span id="L1580"><a href="#L1580">1580</a>         )</span>
+<span id="L1581"><a href="#L1581">1581</a>     if render_mode in [&quot;RGB+ED&quot;, &quot;RGB+D&quot;]:</span>
+<span id="L1582"><a href="#L1582">1582</a>         # render_depths = render_colors[..., -1:]</span>
+<span id="L1583"><a href="#L1583">1583</a>         if depth_mode == &quot;expected&quot;:</span>
+<span id="L1584"><a href="#L1584">1584</a>             depth_for_normal = render_colors[..., -1:]</span>
+<span id="L1585"><a href="#L1585">1585</a>         elif depth_mode == &quot;median&quot;:</span>
+<span id="L1586"><a href="#L1586">1586</a>             depth_for_normal = render_median</span>
+<span id="L1587"><a href="#L1587">1587</a> </span>
+<span id="L1588"><a href="#L1588">1588</a>         render_normals_from_depth = depth_to_normal(</span>
+<span id="L1589"><a href="#L1589">1589</a>             depth_for_normal, torch.linalg.inv(viewmats), Ks</span>
+<span id="L1590"><a href="#L1590">1590</a>         ).squeeze(0)</span>
+<span id="L1591"><a href="#L1591">1591</a> </span>
+<span id="L1592"><a href="#L1592">1592</a>     meta = {</span>
+<span id="L1593"><a href="#L1593">1593</a>         &quot;camera_ids&quot;: camera_ids,</span>
+<span id="L1594"><a href="#L1594">1594</a>         &quot;gaussian_ids&quot;: gaussian_ids,</span>
+<span id="L1595"><a href="#L1595">1595</a>         &quot;radii&quot;: radii,</span>
+<span id="L1596"><a href="#L1596">1596</a>         &quot;means2d&quot;: means2d,</span>
+<span id="L1597"><a href="#L1597">1597</a>         &quot;depths&quot;: depths,</span>
+<span id="L1598"><a href="#L1598">1598</a>         &quot;ray_transforms&quot;: ray_transforms,</span>
+<span id="L1599"><a href="#L1599">1599</a>         &quot;opacities&quot;: opacities,</span>
+<span id="L1600"><a href="#L1600">1600</a>         &quot;normals&quot;: normals,</span>
+<span id="L1601"><a href="#L1601">1601</a>         &quot;tile_width&quot;: tile_width,</span>
+<span id="L1602"><a href="#L1602">1602</a>         &quot;tile_height&quot;: tile_height,</span>
+<span id="L1603"><a href="#L1603">1603</a>         &quot;tiles_per_gauss&quot;: tiles_per_gauss,</span>
+<span id="L1604"><a href="#L1604">1604</a>         &quot;isect_ids&quot;: isect_ids,</span>
+<span id="L1605"><a href="#L1605">1605</a>         &quot;flatten_ids&quot;: flatten_ids,</span>
+<span id="L1606"><a href="#L1606">1606</a>         &quot;isect_offsets&quot;: isect_offsets,</span>
+<span id="L1607"><a href="#L1607">1607</a>         &quot;width&quot;: width,</span>
+<span id="L1608"><a href="#L1608">1608</a>         &quot;height&quot;: height,</span>
+<span id="L1609"><a href="#L1609">1609</a>         &quot;tile_size&quot;: tile_size,</span>
+<span id="L1610"><a href="#L1610">1610</a>         &quot;n_cameras&quot;: C,</span>
+<span id="L1611"><a href="#L1611">1611</a>         &quot;render_distort&quot;: render_distort,</span>
+<span id="L1612"><a href="#L1612">1612</a>         &quot;gradient_2dgs&quot;: densify,  # This holds the gradient used for densification for 2dgs</span>
+<span id="L1613"><a href="#L1613">1613</a>     }</span>
+<span id="L1614"><a href="#L1614">1614</a> </span>
+<span id="L1615"><a href="#L1615">1615</a>     render_normals = torch.einsum(</span>
+<span id="L1616"><a href="#L1616">1616</a>         &quot;...ij,...hwj-&gt;...hwi&quot;, torch.linalg.inv(viewmats)[..., :3, :3], render_normals</span>
+<span id="L1617"><a href="#L1617">1617</a>     )</span>
+<span id="L1618"><a href="#L1618">1618</a> </span>
+<span id="L1619"><a href="#L1619">1619</a>     return (</span>
+<span id="L1620"><a href="#L1620">1620</a>         render_colors,</span>
+<span id="L1621"><a href="#L1621">1621</a>         render_alphas,</span>
+<span id="L1622"><a href="#L1622">1622</a>         render_normals,</span>
+<span id="L1623"><a href="#L1623">1623</a>         render_normals_from_depth,</span>
+<span id="L1624"><a href="#L1624">1624</a>         render_distort,</span>
+<span id="L1625"><a href="#L1625">1625</a>         render_median,</span>
+<span id="L1626"><a href="#L1626">1626</a>         meta,</span>
+<span id="L1627"><a href="#L1627">1627</a>     )</span>
+<span id="L1628"><a href="#L1628">1628</a> </span>
+<span id="L1629"><a href="#L1629">1629</a> </span>
+<span id="L1630"><a href="#L1630">1630</a> def rasterization_2dgs_inria_wrapper(</span>
+<span id="L1631"><a href="#L1631">1631</a>     means: Tensor,  # [N, 3]</span>
+<span id="L1632"><a href="#L1632">1632</a>     quats: Tensor,  # [N, 4]</span>
+<span id="L1633"><a href="#L1633">1633</a>     scales: Tensor,  # [N, 3]</span>
+<span id="L1634"><a href="#L1634">1634</a>     opacities: Tensor,  # [N]</span>
+<span id="L1635"><a href="#L1635">1635</a>     colors: Tensor,  # [N, D] or [N, K, 3]</span>
+<span id="L1636"><a href="#L1636">1636</a>     viewmats: Tensor,  # [C, 4, 4]</span>
+<span id="L1637"><a href="#L1637">1637</a>     Ks: Tensor,  # [C, 3, 3]</span>
+<span id="L1638"><a href="#L1638">1638</a>     width: int,</span>
+<span id="L1639"><a href="#L1639">1639</a>     height: int,</span>
+<span id="L1640"><a href="#L1640">1640</a>     near_plane: float = 0.01,</span>
+<span id="L1641"><a href="#L1641">1641</a>     far_plane: float = 100.0,</span>
+<span id="L1642"><a href="#L1642">1642</a>     eps2d: float = 0.3,</span>
+<span id="L1643"><a href="#L1643">1643</a>     sh_degree: Optional[int] = None,</span>
+<span id="L1644"><a href="#L1644">1644</a>     backgrounds: Optional[Tensor] = None,</span>
+<span id="L1645"><a href="#L1645">1645</a>     depth_ratio: int = 0,</span>
+<span id="L1646"><a href="#L1646">1646</a>     **kwargs,</span>
+<span id="L1647"><a href="#L1647">1647</a> ) -&gt; Tuple[Tuple, Dict]:</span>
+<span id="L1648"><a href="#L1648">1648</a>     &quot;&quot;&quot;Wrapper for 2DGS&#x27;s rasterization backend which is based on Inria&#x27;s backend.</span>
+<span id="L1649"><a href="#L1649">1649</a> </span>
+<span id="L1650"><a href="#L1650">1650</a>     Install the 2DGS rasterization backend from</span>
+<span id="L1651"><a href="#L1651">1651</a>         https://github.com/hbb1/diff-surfel-rasterization</span>
+<span id="L1652"><a href="#L1652">1652</a> </span>
+<span id="L1653"><a href="#L1653">1653</a>     Credit to Jeffrey Hu https://github.com/jefequien</span>
+<span id="L1654"><a href="#L1654">1654</a> </span>
+<span id="L1655"><a href="#L1655">1655</a>     &quot;&quot;&quot;</span>
+<span id="L1656"><a href="#L1656">1656</a>     from diff_surfel_rasterization import (</span>
+<span id="L1657"><a href="#L1657">1657</a>         GaussianRasterizationSettings,</span>
+<span id="L1658"><a href="#L1658">1658</a>         GaussianRasterizer,</span>
+<span id="L1659"><a href="#L1659">1659</a>     )</span>
+<span id="L1660"><a href="#L1660">1660</a> </span>
+<span id="L1661"><a href="#L1661">1661</a>     assert eps2d == 0.3, &quot;This is hard-coded in CUDA to be 0.3&quot;</span>
+<span id="L1662"><a href="#L1662">1662</a>     C = len(viewmats)</span>
+<span id="L1663"><a href="#L1663">1663</a>     device = means.device</span>
+<span id="L1664"><a href="#L1664">1664</a>     channels = colors.shape[-1]</span>
+<span id="L1665"><a href="#L1665">1665</a> </span>
+<span id="L1666"><a href="#L1666">1666</a>     # rasterization from inria does not do normalization internally</span>
+<span id="L1667"><a href="#L1667">1667</a>     quats = F.normalize(quats, dim=-1)  # [N, 4]</span>
+<span id="L1668"><a href="#L1668">1668</a>     scales = scales[:, :2]  # [N, 2]</span>
+<span id="L1669"><a href="#L1669">1669</a> </span>
+<span id="L1670"><a href="#L1670">1670</a>     render_colors = []</span>
+<span id="L1671"><a href="#L1671">1671</a>     for cid in range(C):</span>
+<span id="L1672"><a href="#L1672">1672</a>         FoVx = 2 * math.atan(width / (2 * Ks[cid, 0, 0].item()))</span>
+<span id="L1673"><a href="#L1673">1673</a>         FoVy = 2 * math.atan(height / (2 * Ks[cid, 1, 1].item()))</span>
+<span id="L1674"><a href="#L1674">1674</a>         tanfovx = math.tan(FoVx * 0.5)</span>
+<span id="L1675"><a href="#L1675">1675</a>         tanfovy = math.tan(FoVy * 0.5)</span>
+<span id="L1676"><a href="#L1676">1676</a> </span>
+<span id="L1677"><a href="#L1677">1677</a>         world_view_transform = viewmats[cid].transpose(0, 1)</span>
+<span id="L1678"><a href="#L1678">1678</a>         projection_matrix = get_projection_matrix(</span>
+<span id="L1679"><a href="#L1679">1679</a>             znear=near_plane, zfar=far_plane, fovX=FoVx, fovY=FoVy, device=device</span>
+<span id="L1680"><a href="#L1680">1680</a>         ).transpose(0, 1)</span>
+<span id="L1681"><a href="#L1681">1681</a>         full_proj_transform = (</span>
+<span id="L1682"><a href="#L1682">1682</a>             world_view_transform.unsqueeze(0).bmm(projection_matrix.unsqueeze(0))</span>
+<span id="L1683"><a href="#L1683">1683</a>         ).squeeze(0)</span>
+<span id="L1684"><a href="#L1684">1684</a>         camera_center = world_view_transform.inverse()[3, :3]</span>
+<span id="L1685"><a href="#L1685">1685</a> </span>
+<span id="L1686"><a href="#L1686">1686</a>         background = (</span>
+<span id="L1687"><a href="#L1687">1687</a>             backgrounds[cid]</span>
+<span id="L1688"><a href="#L1688">1688</a>             if backgrounds is not None</span>
+<span id="L1689"><a href="#L1689">1689</a>             else torch.zeros(3, device=device)</span>
+<span id="L1690"><a href="#L1690">1690</a>         )</span>
+<span id="L1691"><a href="#L1691">1691</a> </span>
+<span id="L1692"><a href="#L1692">1692</a>         raster_settings = GaussianRasterizationSettings(</span>
+<span id="L1693"><a href="#L1693">1693</a>             image_height=height,</span>
+<span id="L1694"><a href="#L1694">1694</a>             image_width=width,</span>
+<span id="L1695"><a href="#L1695">1695</a>             tanfovx=tanfovx,</span>
+<span id="L1696"><a href="#L1696">1696</a>             tanfovy=tanfovy,</span>
+<span id="L1697"><a href="#L1697">1697</a>             bg=background,</span>
+<span id="L1698"><a href="#L1698">1698</a>             scale_modifier=1.0,</span>
+<span id="L1699"><a href="#L1699">1699</a>             viewmatrix=world_view_transform,</span>
+<span id="L1700"><a href="#L1700">1700</a>             projmatrix=full_proj_transform,</span>
+<span id="L1701"><a href="#L1701">1701</a>             sh_degree=0 if sh_degree is None else sh_degree,</span>
+<span id="L1702"><a href="#L1702">1702</a>             campos=camera_center,</span>
+<span id="L1703"><a href="#L1703">1703</a>             prefiltered=False,</span>
+<span id="L1704"><a href="#L1704">1704</a>             debug=False,</span>
+<span id="L1705"><a href="#L1705">1705</a>         )</span>
+<span id="L1706"><a href="#L1706">1706</a> </span>
+<span id="L1707"><a href="#L1707">1707</a>         rasterizer = GaussianRasterizer(raster_settings=raster_settings)</span>
+<span id="L1708"><a href="#L1708">1708</a> </span>
+<span id="L1709"><a href="#L1709">1709</a>         means2D = torch.zeros_like(means, requires_grad=True, device=device)</span>
+<span id="L1710"><a href="#L1710">1710</a> </span>
+<span id="L1711"><a href="#L1711">1711</a>         render_colors_ = []</span>
+<span id="L1712"><a href="#L1712">1712</a>         for i in range(0, channels, 3):</span>
+<span id="L1713"><a href="#L1713">1713</a>             _colors = colors[..., i : i + 3]</span>
+<span id="L1714"><a href="#L1714">1714</a>             if _colors.shape[-1] &lt; 3:</span>
+<span id="L1715"><a href="#L1715">1715</a>                 pad = torch.zeros(</span>
+<span id="L1716"><a href="#L1716">1716</a>                     _colors.shape[0], 3 - _colors.shape[-1], device=device</span>
+<span id="L1717"><a href="#L1717">1717</a>                 )</span>
+<span id="L1718"><a href="#L1718">1718</a>                 _colors = torch.cat([_colors, pad], dim=-1)</span>
+<span id="L1719"><a href="#L1719">1719</a>             _render_colors_, radii, allmap = rasterizer(</span>
+<span id="L1720"><a href="#L1720">1720</a>                 means3D=means,</span>
+<span id="L1721"><a href="#L1721">1721</a>                 means2D=means2D,</span>
+<span id="L1722"><a href="#L1722">1722</a>                 shs=_colors if colors.dim() == 3 else None,</span>
+<span id="L1723"><a href="#L1723">1723</a>                 colors_precomp=_colors if colors.dim() == 2 else None,</span>
+<span id="L1724"><a href="#L1724">1724</a>                 opacities=opacities[:, None],</span>
+<span id="L1725"><a href="#L1725">1725</a>                 scales=scales,</span>
+<span id="L1726"><a href="#L1726">1726</a>                 rotations=quats,</span>
+<span id="L1727"><a href="#L1727">1727</a>                 cov3D_precomp=None,</span>
+<span id="L1728"><a href="#L1728">1728</a>             )</span>
+<span id="L1729"><a href="#L1729">1729</a>             if _colors.shape[-1] &lt; 3:</span>
+<span id="L1730"><a href="#L1730">1730</a>                 _render_colors_ = _render_colors_[:, :, : _colors.shape[-1]]</span>
+<span id="L1731"><a href="#L1731">1731</a>             render_colors_.append(_render_colors_)</span>
+<span id="L1732"><a href="#L1732">1732</a>         render_colors_ = torch.cat(render_colors_, dim=-1)</span>
+<span id="L1733"><a href="#L1733">1733</a> </span>
+<span id="L1734"><a href="#L1734">1734</a>         render_colors_ = render_colors_.permute(1, 2, 0)  # [H, W, 3]</span>
+<span id="L1735"><a href="#L1735">1735</a>         render_colors.append(render_colors_)</span>
+<span id="L1736"><a href="#L1736">1736</a>     render_colors = torch.stack(render_colors, dim=0)</span>
+<span id="L1737"><a href="#L1737">1737</a> </span>
+<span id="L1738"><a href="#L1738">1738</a>     # additional maps</span>
+<span id="L1739"><a href="#L1739">1739</a>     allmap = allmap.permute(1, 2, 0).unsqueeze(0)  # [1, H, W, C]</span>
+<span id="L1740"><a href="#L1740">1740</a>     render_depth_expected = allmap[..., 0:1]</span>
+<span id="L1741"><a href="#L1741">1741</a>     render_alphas = allmap[..., 1:2]</span>
+<span id="L1742"><a href="#L1742">1742</a>     render_normal = allmap[..., 2:5]</span>
+<span id="L1743"><a href="#L1743">1743</a>     render_depth_median = allmap[..., 5:6]</span>
+<span id="L1744"><a href="#L1744">1744</a>     render_dist = allmap[..., 6:7]</span>
+<span id="L1745"><a href="#L1745">1745</a> </span>
+<span id="L1746"><a href="#L1746">1746</a>     render_normal = render_normal @ (world_view_transform[:3, :3].T)</span>
+<span id="L1747"><a href="#L1747">1747</a>     render_depth_expected = render_depth_expected / render_alphas</span>
+<span id="L1748"><a href="#L1748">1748</a>     render_depth_expected = torch.nan_to_num(render_depth_expected, 0, 0)</span>
+<span id="L1749"><a href="#L1749">1749</a>     render_depth_median = torch.nan_to_num(render_depth_median, 0, 0)</span>
+<span id="L1750"><a href="#L1750">1750</a> </span>
+<span id="L1751"><a href="#L1751">1751</a>     # render_depth is either median or expected by setting depth_ratio to 1 or 0</span>
+<span id="L1752"><a href="#L1752">1752</a>     # for bounded scene, use median depth, i.e., depth_ratio = 1;</span>
+<span id="L1753"><a href="#L1753">1753</a>     # for unbounded scene, use expected depth, i.e., depth_ratio = 0, to reduce disk aliasing.</span>
+<span id="L1754"><a href="#L1754">1754</a>     render_depth = (</span>
+<span id="L1755"><a href="#L1755">1755</a>         render_depth_expected * (1 - depth_ratio) + (depth_ratio) * render_depth_median</span>
+<span id="L1756"><a href="#L1756">1756</a>     )</span>
+<span id="L1757"><a href="#L1757">1757</a> </span>
+<span id="L1758"><a href="#L1758">1758</a>     normals_surf = depth_to_normal(render_depth, torch.linalg.inv(viewmats), Ks)</span>
+<span id="L1759"><a href="#L1759">1759</a>     normals_surf = normals_surf * (render_alphas).detach()</span>
+<span id="L1760"><a href="#L1760">1760</a> </span>
+<span id="L1761"><a href="#L1761">1761</a>     render_colors = torch.cat([render_colors, render_depth], dim=-1)</span>
+<span id="L1762"><a href="#L1762">1762</a> </span>
+<span id="L1763"><a href="#L1763">1763</a>     meta = {</span>
+<span id="L1764"><a href="#L1764">1764</a>         &quot;normals_rend&quot;: render_normal,</span>
+<span id="L1765"><a href="#L1765">1765</a>         &quot;normals_surf&quot;: normals_surf,</span>
+<span id="L1766"><a href="#L1766">1766</a>         &quot;render_distloss&quot;: render_dist,</span>
+<span id="L1767"><a href="#L1767">1767</a>         &quot;means2d&quot;: means2D,</span>
+<span id="L1768"><a href="#L1768">1768</a>         &quot;width&quot;: width,</span>
+<span id="L1769"><a href="#L1769">1769</a>         &quot;height&quot;: height,</span>
+<span id="L1770"><a href="#L1770">1770</a>         &quot;radii&quot;: radii.unsqueeze(0),</span>
+<span id="L1771"><a href="#L1771">1771</a>         &quot;n_cameras&quot;: C,</span>
+<span id="L1772"><a href="#L1772">1772</a>         &quot;gaussian_ids&quot;: None,</span>
+<span id="L1773"><a href="#L1773">1773</a>     }</span>
+<span id="L1774"><a href="#L1774">1774</a>     return (render_colors, render_alphas), meta</span></pre></html>

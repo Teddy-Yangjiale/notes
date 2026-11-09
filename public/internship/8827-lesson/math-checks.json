@@ -1,0 +1,57 @@
+{
+  "scope": "CPU algebra checks, not CUDA gradient validation or reconstruction accuracy",
+  "passed": 10,
+  "checks": [
+    {
+      "name": "road A intersects z=0",
+      "passed": true,
+      "max_absolute_error": 2.4874425186283133e-08
+    },
+    {
+      "name": "B world-camera projection round trip",
+      "passed": true,
+      "max_absolute_error": 3.410605131648481e-13
+    },
+    {
+      "name": "B camera point",
+      "passed": true,
+      "max_absolute_error": 7.105427357601002e-14
+    },
+    {
+      "name": "B SH initialization restores RGB",
+      "passed": true,
+      "max_absolute_error": 0.0
+    },
+    {
+      "name": "perspective Jacobian finite difference",
+      "passed": true,
+      "max_absolute_error": 3.087225947107086e-09
+    },
+    {
+      "name": "color and opacity-logit chain rule",
+      "passed": true,
+      "max_absolute_error": 5.351136200815176e-12
+    },
+    {
+      "name": "expected-depth weight derivative",
+      "passed": true,
+      "max_absolute_error": 9.286171831490719e-10
+    },
+    {
+      "name": "inverse-depth derivative",
+      "passed": true,
+      "max_absolute_error": 6.483953998714931e-13
+    },
+    {
+      "name": "teaching SGD step lowers its toy loss",
+      "passed": true,
+      "before": 0.2,
+      "after": 0.1707501416610001
+    },
+    {
+      "name": "saved depth K agrees with axis-specific scaling",
+      "passed": true,
+      "max_absolute_error": 2.2121484391846025e-05
+    }
+  ]
+}

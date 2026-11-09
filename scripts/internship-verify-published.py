@@ -59,7 +59,7 @@ for url,r in resources.items():
     local_path=root/'dist'/unquote(urlsplit(url).path.removeprefix('/notes/'))
     if '/internship/' in url and local_path.is_file():
         actual_bytes,expected_bytes=r['data'],local_path.read_bytes()
-        if local_path.suffix in {'.html','.json','.js','.css','.md'}:
+        if local_path.suffix in {'.html','.json','.js','.css','.md','.py','.txt'}:
             actual_bytes=actual_bytes.replace(b'\r\n',b'\n')
             expected_bytes=expected_bytes.replace(b'\r\n',b'\n')
         if hashlib.sha256(actual_bytes).digest()!=hashlib.sha256(expected_bytes).digest():
@@ -67,7 +67,7 @@ for url,r in resources.items():
     if urlsplit(url).path.lower().endswith(('.png','.jpg','.jpeg','.webp')):
         try:Image.open(io.BytesIO(r['data'])).verify();image_count+=1
         except Exception as e:errors.append({'url':url,'error':'image decoding failed: '+str(e)})
-    if '/internship/code/' in url:
+    if '/internship/code/' in url or '/8827-lesson/code/' in url:
         code_count+=1
         if not BeautifulSoup(r['data'],'html.parser').select('pre span[id]'):
             errors.append({'url':url,'error':'missing source lines'})
